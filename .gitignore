@@ -11,3 +11,4 @@ extension/bridge-config.js
 dist/
 .vercel/
 .DS_Store
+.vercel
