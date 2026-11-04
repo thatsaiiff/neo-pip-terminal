@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Neo PIP Symbol Bridge",
+  "version": "0.1.1",
+  "description": "Sends a likely selected Kotak Neo trading symbol to the local Neo PIP ticket.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://*.kotaksecurities.com/*",
+    "https://*.kotakneo.com/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.kotaksecurities.com/*", "https://*.kotakneo.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Neo PIP Symbol Bridge" }
+}
