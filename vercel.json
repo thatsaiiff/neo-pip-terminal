@@ -1,7 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "mkdir -p dist/static && cp app/static/index.html dist/index.html && cp app/static/styles.css app/static/app.js dist/static/",
-  "outputDirectory": "dist",
+  "builds": [
+    { "src": "app/static/index.html", "use": "@vercel/static" },
+    { "src": "app/static/styles.css", "use": "@vercel/static" },
+    { "src": "app/static/app.js", "use": "@vercel/static" }
+  ],
+  "rewrites": [
+    { "source": "/", "destination": "/app/static/index.html" },
+    { "source": "/static/:path*", "destination": "/app/static/:path*" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
