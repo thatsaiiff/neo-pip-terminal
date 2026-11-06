@@ -10,7 +10,6 @@
     authenticated: false,
     kotakEgressIp: null,
     kotakSessionIp: null,
-    expectedWhitelistIps: [],
     currentSymbol: 'NIFTY',
     exchangeSegment: 'nse_fo',
     selectedInstrument: null,
@@ -49,7 +48,7 @@
   async function demoApi(path, options = {}) {
     const method = options.method || 'GET';
     if (path === '/api/health') return { ok: true, service: 'neo-pip-cloud-demo', lan_access_enabled: false };
-    if (path === '/api/status') return { live_trading_enabled: false, broker_authenticated: false, mode: 'simulation', selected_symbol: null, extension_bridge_configured: false, expected_whitelisted_ips: [] };
+    if (path === '/api/status') return { live_trading_enabled: false, broker_authenticated: false, mode: 'simulation', selected_symbol: null, extension_bridge_configured: false };
     if (path.startsWith('/api/orders') && method === 'GET') return state.demoOrders;
     if (path === '/api/orders' && method === 'POST') {
       const body = JSON.parse(options.body || '{}');
@@ -112,9 +111,8 @@
     }
     $('connect-btn').title = state.authenticated ? 'Disconnect Kotak Neo' : 'Connect Kotak Neo';
     $('connect-btn').setAttribute('aria-label', state.authenticated ? 'Disconnect Kotak Neo' : 'Connect Kotak Neo');
-    const ipMismatch = state.expectedWhitelistIps.length && state.kotakEgressIp && !state.expectedWhitelistIps.includes(state.kotakEgressIp);
     $('connection-footer').textContent = state.authenticated
-      ? `${ipMismatch ? 'API IP MISMATCH' : 'Kotak API active'}${state.kotakEgressIp ? ` · ${state.kotakEgressIp}` : ''}`
+      ? `Kotak API active${state.kotakEgressIp ? ` · ${state.kotakEgressIp}` : ''}`
       : (state.liveTradingEnabled
         ? (state.kotakEgressIp ? `API session needs login · last IP ${state.kotakEgressIp}` : 'Live gate enabled · not authenticated')
         : 'Local simulation mode');
@@ -449,7 +447,6 @@
       state.authenticated = !!data.broker_authenticated;
       state.kotakEgressIp = data.kotak_egress_ip || null;
       state.kotakSessionIp = data.kotak_session_ip || null;
-      state.expectedWhitelistIps = data.expected_whitelisted_ips || [];
       state.mode = data.mode || 'simulation';
       updateModeUI();
       if (data.selected_symbol && data.selected_symbol.updated_at && data.selected_symbol.updated_at !== state.remoteSymbolTimestamp) {

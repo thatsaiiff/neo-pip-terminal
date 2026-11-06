@@ -30,16 +30,6 @@ LAN_ACCESS_ENABLED = os.getenv("LAN_ACCESS_ENABLED", "false").strip().lower() ==
 LAN_ACCESS_TOKEN = os.getenv("LAN_ACCESS_TOKEN", "").strip()
 NEO_ENVIRONMENT = os.getenv("NEO_ENVIRONMENT", "prod")
 NEO_FORCE_IPV4 = os.getenv("NEO_FORCE_IPV4", "true").strip().lower() == "true"
-_whitelisted_ips = os.getenv("NEO_WHITELISTED_IPS", os.getenv("NEO_WHITELISTED_IP", "")).strip()
-try:
-    NEO_WHITELISTED_IPS = tuple(dict.fromkeys(
-        ipaddress.ip_address(value.strip()).compressed
-        for value in _whitelisted_ips.split(",") if value.strip()
-    ))
-except ValueError as exc:
-    raise RuntimeError("NEO_WHITELISTED_IPS must contain valid IP addresses separated by commas") from exc
-if len(NEO_WHITELISTED_IPS) > 2:
-    raise RuntimeError("Kotak supports at most two whitelisted IP addresses")
 
 neo_client: Any | None = None
 neo_authenticated = False
@@ -288,9 +278,6 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
                 raise HTTPException(status_code=503, detail="Kotak could not verify the current API egress IP. No order was sent; reconnect and check the network before retrying.")
             neo_egress_ip = current_ip
             normalized_current_ip = ipaddress.ip_address(current_ip).compressed
-            if NEO_WHITELISTED_IPS and normalized_current_ip not in NEO_WHITELISTED_IPS:
-                neo_authenticated = False
-                raise HTTPException(status_code=409, detail=f"Kotak sees {current_ip}, which is not in NEO_WHITELISTED_IPS ({', '.join(NEO_WHITELISTED_IPS)}). No order was sent. Restore the ISP-provided static IP or update the whitelist, then reconnect.")
             if neo_session_ip and normalized_current_ip != ipaddress.ip_address(neo_session_ip).compressed:
                 neo_authenticated = False
                 raise HTTPException(status_code=409, detail=f"Your public IP changed after this Kotak session was created (login {neo_session_ip}, current {current_ip}). No order was sent. Restore the static IP, then reconnect.")
@@ -419,7 +406,6 @@ def status():
         "broker_authenticated": neo_authenticated,
         "kotak_egress_ip": neo_egress_ip,
         "kotak_session_ip": neo_session_ip,
-        "expected_whitelisted_ips": list(NEO_WHITELISTED_IPS),
         "broker_configured": bool(os.getenv("NEO_CONSUMER_KEY") and os.getenv("NEO_MOBILE_NUMBER") and os.getenv("NEO_UCC")),
         "selected_symbol": selected_symbol,
         "extension_bridge_configured": bool(BRIDGE_TOKEN and not BRIDGE_TOKEN.startswith("replace-with-")),
@@ -685,7 +671,7 @@ def auth_login(payload: LoginPayload):
         neo_egress_ip = _kotak_session_ip(client)
         neo_session_ip = neo_egress_ip
     audit("broker_login_success", {"environment": NEO_ENVIRONMENT})
-    ip_message = f" Kotak sees API IP {neo_egress_ip}; expected whitelist IPs are {', '.join(NEO_WHITELISTED_IPS) if NEO_WHITELISTED_IPS else 'not configured'}." if neo_egress_ip else " Kotak could not report the API egress IP; verify your IP whitelist and network."
+    ip_message = f" Kotak sees API IP {neo_egress_ip}; order requests must use this same IP for this session." if neo_egress_ip else " Kotak could not report the API egress IP; verify your network and reconnect before placing orders."
     return {"ok": True, "broker_authenticated": True, "mode": current_mode(), "kotak_egress_ip": neo_egress_ip, "message": "Kotak Neo API session authenticated." + ip_message}
 
 
