@@ -190,10 +190,17 @@
         <div class="chart-toggle-row">
           <button id="tv-chart-toggle" class="chain-toggle chart-toggle-btn" type="button" aria-expanded="false">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-            <span>Live TV Advanced Chart</span>
+            <span>Live 5s Candle Chart</span>
             <span class="toggle-arrow">▾</span>
           </button>
-          <button id="tv-chart-popout" class="chart-popout-btn" type="button" title="Open chart in new browser window">
+          <div class="chart-tf-chips">
+            <button type="button" class="chart-tf-btn active" data-tf="5s" title="5-second scalper candles">5s</button>
+            <button type="button" class="chart-tf-btn" data-tf="15s" title="15-second fast candles">15s</button>
+            <button type="button" class="chart-tf-btn" data-tf="1m" title="1-minute candles">1m</button>
+            <button type="button" class="chart-tf-btn" data-tf="5m" title="5-minute candles">5m</button>
+            <button type="button" class="chart-tf-btn" data-tf="15m" title="15-minute candles">15m</button>
+          </div>
+          <button id="tv-chart-popout" class="chart-popout-btn" type="button" title="Open chart in separate window">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             <span>Pop out</span>
           </button>
@@ -201,15 +208,23 @@
 
         <div id="tv-chart-panel" class="tv-chart-panel hidden">
           <div class="tv-chart-header">
-            <span id="tv-chart-symbol-label">NSE:NIFTY</span>
-            <span class="tv-chart-hint">1m / 5m / 15m Candles · Indicators · Volume</span>
+            <div class="tv-chart-title-wrap">
+              <span id="tv-chart-symbol-label">NSE:NIFTY</span>
+              <span id="tv-chart-tf-badge" class="chart-tf-badge">5s SCALPER</span>
+            </div>
+            <div id="tv-chart-legend" class="tv-chart-legend">
+              <span class="leg-item">O: <b id="leg-o">—</b></span>
+              <span class="leg-item">H: <b id="leg-h">—</b></span>
+              <span class="leg-item">L: <b id="leg-l">—</b></span>
+              <span class="leg-item">C: <b id="leg-c">—</b></span>
+              <span class="leg-item">Vol: <b id="leg-v">—</b></span>
+            </div>
           </div>
-          <iframe id="tv-chart-frame"
-            src="https://s.tradingview.com/widgetembed/?symbol=NSE%3ANIFTY&interval=5&theme=light&style=1&timezone=Asia%2FKolkata&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&save_image=0&locale=in"
-            loading="lazy"
-            allowtransparency="true"
-            scrolling="no">
-          </iframe>
+          <div id="tv-chart-canvas-wrap" class="tv-chart-canvas-wrap"></div>
+          <div class="tv-chart-footer">
+            <span class="footer-source">⚡ Upstox Feed · Real-time Tick Aggregation</span>
+            <span id="tv-chart-status" class="footer-status">Ready</span>
+          </div>
         </div>
 
         <div class="instrument-meta">
@@ -550,6 +565,7 @@
     </div>
   </div>
 
+  <script src="/static/lightweight-charts.js"></script>
   <script src="/static/app.js?v=20261107-1" defer></script>
 </body>
 </html>

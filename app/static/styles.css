@@ -1821,25 +1821,104 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   flex-direction: column;
 }
 
+.chart-tf-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+}
+
+.chart-tf-btn {
+  font: 600 9px var(--font-mono);
+  padding: 3px 7px;
+  border-radius: 3px;
+  color: var(--ink-secondary);
+  background: transparent;
+  cursor: pointer;
+  border: none;
+  transition: all 0.12s ease;
+}
+
+.chart-tf-btn:hover {
+  color: var(--ink-primary);
+  background: var(--bg-surface-hover);
+}
+
+.chart-tf-btn.active {
+  background: #2563eb;
+  color: #fff !important;
+  font-weight: 700;
+}
+
 .tv-chart-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 10px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
   background: var(--bg-surface-subtle);
   border-bottom: 1px solid var(--border-light);
   font: 600 10px var(--font-mono);
 }
 
-.tv-chart-hint {
-  font-size: 8.5px;
+.tv-chart-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-tf-badge {
+  font: 700 8.5px var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  letter-spacing: 0.04em;
+}
+
+.tv-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 9px var(--font-mono);
   color: var(--ink-muted);
 }
 
-#tv-chart-frame {
+.tv-chart-legend .leg-item b {
+  color: var(--ink-primary);
+  font-weight: 600;
+}
+
+.tv-chart-canvas-wrap {
   width: 100%;
-  height: 360px;
-  border: none;
+  height: 340px;
+  position: relative;
+  background: #ffffff;
+}
+
+.tv-chart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--bg-surface-subtle);
+  border-top: 1px solid var(--border-light);
+  font: 8.5px var(--font-mono);
+  color: var(--ink-muted);
+}
+
+.footer-source {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.footer-status {
+  color: var(--ink-muted);
 }
 
 /* Scalper Mode Strip & Active Theme */

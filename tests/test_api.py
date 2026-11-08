@@ -444,5 +444,22 @@ def test_exit_all_positions_endpoint(client):
     assert "closed_positions" in data
 
 
+def test_chart_candles_endpoint(client):
+    res = client.get("/api/chart/candles?symbol=NIFTY&interval=5s")
+    assert res.status_code == 200
+    data = res.json()
+    assert "candles" in data
+    assert data["symbol"] == "NIFTY"
+    assert data["interval"] == "5s"
+    if data["ok"] and data["candles"]:
+        c = data["candles"][0]
+        assert "time" in c
+        assert "open" in c
+        assert "high" in c
+        assert "low" in c
+        assert "close" in c
+
+
+
 
 

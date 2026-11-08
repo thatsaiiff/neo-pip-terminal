@@ -224,6 +224,12 @@
       state.demoSltpRules = [];
       return { ok: true, cancelled_orders: 0, closed_positions: 1, errors: [], message: 'Exit All simulated: 0 orders cancelled, 1 position closed.' };
     }
+    if (path.startsWith('/api/chart/candles')) {
+      const urlParams = new URLSearchParams(path.split('?')[1] || '');
+      const sym = urlParams.get('symbol') || 'NIFTY';
+      const tf = urlParams.get('interval') || '5s';
+      return { ok: true, symbol: sym, interval: tf, date: '2026-11-06', candles: [] };
+    }
     if (path === '/api/instruments/search') return { instruments: [] };
     if (path === '/api/options/expiries') return { expiries: [], nearest_expiry: null };
     if (path === '/api/options/chain') return { rows: [], underlying: '', expiry: null, lot_size: 1 };
@@ -402,6 +408,7 @@
       $('live-price').textContent = `₹${Number(quote.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · LTP`;
       updateQuantity();
       calculateAndPrefillSltp(false);
+      updateLiveChartTick(quote.ltp);
 
       if (instrument.trading_symbol) {
         api('/api/sltp/check', {
@@ -734,6 +741,164 @@
     }
   }
 
+  // --- Lightweight Charts (Upstox-Powered 5s Scalper Chart Engine) ---
+  let tvChart = null;
+  let tvCandleSeries = null;
+  let tvVolumeSeries = null;
+  let currentChartInterval = '5s';
+  let active5sCandle = null;
+  let chartLastCandleTime = null;
+
+  function initLightweightChart() {
+    const container = $('tv-chart-canvas-wrap');
+    if (!container || !window.LightweightCharts) return;
+    if (tvChart) return;
+
+    tvChart = window.LightweightCharts.createChart(container, {
+      width: container.clientWidth || 360,
+      height: 340,
+      layout: {
+        background: { type: 'solid', color: '#ffffff' },
+        textColor: '#334155',
+        fontFamily: "'DM Mono', monospace, -apple-system, sans-serif",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: '#f8fafc' },
+        horzLines: { color: '#f8fafc' },
+      },
+      crosshair: {
+        mode: window.LightweightCharts.CrosshairMode.Normal,
+      },
+      rightPriceScale: {
+        borderColor: '#e2e8f0',
+        scaleMargins: { top: 0.1, bottom: 0.22 },
+      },
+      timeScale: {
+        borderColor: '#e2e8f0',
+        timeVisible: true,
+        secondsVisible: true,
+      },
+    });
+
+    tvCandleSeries = tvChart.addCandlestickSeries({
+      upColor: '#16a34a',
+      downColor: '#dc2626',
+      borderVisible: false,
+      wickUpColor: '#16a34a',
+      wickDownColor: '#dc2626',
+    });
+
+    tvVolumeSeries = tvChart.addHistogramSeries({
+      color: '#cbd5e1',
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
+    tvChart.subscribeCrosshairMove(param => {
+      if (!param || !param.time || !param.seriesData) return;
+      const c = param.seriesData.get(tvCandleSeries);
+      const v = param.seriesData.get(tvVolumeSeries);
+      if (c) {
+        if ($('leg-o')) $('leg-o').textContent = Number(c.open).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-h')) $('leg-h').textContent = Number(c.high).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-l')) $('leg-l').textContent = Number(c.low).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-c')) $('leg-c').textContent = Number(c.close).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+      }
+      if (v && $('leg-v')) {
+        $('leg-v').textContent = Number(v.value).toLocaleString('en-IN');
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (tvChart && container) {
+        tvChart.applyOptions({ width: container.clientWidth });
+      }
+    });
+  }
+
+  async function loadChartCandles(symbol, interval) {
+    initLightweightChart();
+    if (!tvChart || !tvCandleSeries) return;
+
+    const sym = symbol || state.currentSymbol || 'NIFTY';
+    const tf = interval || currentChartInterval || '5s';
+    currentChartInterval = tf;
+
+    const statusEl = $('tv-chart-status');
+    if (statusEl) statusEl.textContent = `Fetching ${tf} candles…`;
+
+    try {
+      const data = await api(`/api/chart/candles?symbol=${encodeURIComponent(sym)}&interval=${encodeURIComponent(tf)}`);
+      if (!data.candles || !data.candles.length) {
+        if (statusEl) statusEl.textContent = 'No candle data available';
+        return;
+      }
+
+      const candles = data.candles.map(c => ({
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      }));
+
+      const volumes = data.candles.map(c => ({
+        time: c.time,
+        value: c.volume || 100,
+        color: c.close >= c.open ? 'rgba(22, 163, 74, 0.25)' : 'rgba(220, 38, 38, 0.25)',
+      }));
+
+      tvCandleSeries.setData(candles);
+      if (tvVolumeSeries) tvVolumeSeries.setData(volumes);
+
+      tvChart.timeScale().fitContent();
+
+      const last = candles[candles.length - 1];
+      if (last) {
+        chartLastCandleTime = last.time;
+        active5sCandle = { ...last };
+        if ($('leg-o')) $('leg-o').textContent = Number(last.open).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-h')) $('leg-h').textContent = Number(last.high).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-l')) $('leg-l').textContent = Number(last.low).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+        if ($('leg-c')) $('leg-c').textContent = Number(last.close).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+      }
+
+      if (statusEl) statusEl.textContent = `${data.date || 'Live'} · ${data.candles.length} ${tf} bars`;
+    } catch (err) {
+      if (statusEl) statusEl.textContent = cleanErrorMessage(err.message);
+    }
+  }
+
+  function updateLiveChartTick(ltp) {
+    if (!tvCandleSeries || !ltp || ltp <= 0) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const intervalSec = currentChartInterval === '15s' ? 15 : (currentChartInterval === '1m' ? 60 : (currentChartInterval === '5m' ? 300 : (currentChartInterval === '15m' ? 900 : 5)));
+    const bucketTime = Math.floor(nowSec / intervalSec) * intervalSec;
+
+    if (!active5sCandle || bucketTime > active5sCandle.time) {
+      active5sCandle = {
+        time: bucketTime,
+        open: ltp,
+        high: ltp,
+        low: ltp,
+        close: ltp,
+      };
+    } else {
+      active5sCandle.high = Math.max(active5sCandle.high, ltp);
+      active5sCandle.low = Math.min(active5sCandle.low, ltp);
+      active5sCandle.close = ltp;
+    }
+
+    try {
+      tvCandleSeries.update(active5sCandle);
+      if ($('leg-c')) $('leg-c').textContent = Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+      if ($('leg-h')) $('leg-h').textContent = Number(active5sCandle.high).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+      if ($('leg-l')) $('leg-l').textContent = Number(active5sCandle.low).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    } catch (_) {}
+  }
+
   function updateTradingViewSymbol(symbol) {
     const sym = String(symbol || 'NIFTY').toUpperCase().trim();
     let tvSymbol = 'NSE:NIFTY';
@@ -754,13 +919,9 @@
     const label = $('tv-chart-symbol-label');
     if (label) label.textContent = tvSymbol;
 
-    const frame = $('tv-chart-frame');
-    if (frame) {
-      const newSrc = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=5&theme=light&style=1&timezone=Asia%2FKolkata&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&save_image=0&locale=in`;
-      if (frame.getAttribute('data-current-src') !== newSrc) {
-        frame.setAttribute('data-current-src', newSrc);
-        frame.src = newSrc;
-      }
+    const panel = $('tv-chart-panel');
+    if (panel && !panel.classList.contains('hidden')) {
+      loadChartCandles(sym, currentChartInterval);
     }
   }
 
@@ -1657,8 +1818,33 @@
       $('tv-chart-toggle').setAttribute('aria-expanded', String(open));
       const arrow = $('tv-chart-toggle').querySelector('.toggle-arrow');
       if (arrow) arrow.textContent = open ? '▴' : '▾';
+      if (open) {
+        initLightweightChart();
+        setTimeout(() => {
+          loadChartCandles(state.currentSymbol, currentChartInterval);
+        }, 50);
+      }
     });
   }
+
+  document.querySelectorAll('.chart-tf-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.chart-tf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tf = btn.dataset.tf || '5s';
+      currentChartInterval = tf;
+      const badge = $('tv-chart-tf-badge');
+      if (badge) badge.textContent = `${tf.toUpperCase()} ${tf.includes('s') ? 'SCALPER' : 'CANDLES'}`;
+      
+      const panel = $('tv-chart-panel');
+      if (panel && panel.classList.contains('hidden')) {
+        $('tv-chart-toggle')?.click();
+      } else {
+        loadChartCandles(state.currentSymbol, tf);
+      }
+    });
+  });
 
   if ($('tv-chart-popout')) {
     $('tv-chart-popout').addEventListener('click', (e) => {

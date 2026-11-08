@@ -3,7 +3,8 @@
   "builds": [
     { "src": "app/static/index.html", "use": "@vercel/static" },
     { "src": "app/static/styles.css", "use": "@vercel/static" },
-    { "src": "app/static/app.js", "use": "@vercel/static" }
+    { "src": "app/static/app.js", "use": "@vercel/static" },
+    { "src": "app/static/lightweight-charts.js", "use": "@vercel/static" }
   ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://neo-pip-backend-production.up.railway.app/api/:path*" },

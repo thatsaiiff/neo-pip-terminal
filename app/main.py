@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, quote as quote_url
@@ -1468,6 +1468,219 @@ def index_quotes():
 @app.get("/api/market/movers")
 def market_movers():
     return _fetch_market_movers()
+
+
+UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
+    "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
+    "SENSEX": "BSE_INDEX|SENSEX",
+    "BANKEX": "BSE_INDEX|BANKEX",
+    "RELIANCE": "NSE_EQ|INE002A01018",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "ICICIBANK": "NSE_EQ|INE090A01021",
+    "INFY": "NSE_EQ|INE009A01021",
+    "TCS": "NSE_EQ|INE467B01029",
+    "ITC": "NSE_EQ|INE154A01025",
+    "SBIN": "NSE_EQ|INE062A01020",
+    "BHARTIARTL": "NSE_EQ|INE397D01024",
+    "KOTAKBANK": "NSE_EQ|INE237A01028",
+    "LT": "NSE_EQ|INE018A01030",
+    "AXISBANK": "NSE_EQ|INE238A01034",
+    "BAJFINANCE": "NSE_EQ|INE296A01024",
+    "MARUTI": "NSE_EQ|INE585B01010",
+    "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TATASTEEL": "NSE_EQ|INE081A01020",
+    "M&M": "NSE_EQ|INE101A01026",
+    "ASIANPAINT": "NSE_EQ|INE021A01026",
+    "SUNPHARMA": "NSE_EQ|INE044A01036",
+    "TITAN": "NSE_EQ|INE280A01028",
+    "HCLTECH": "NSE_EQ|INE860A01027",
+    "WIPRO": "NSE_EQ|INE075A01022",
+    "NTPC": "NSE_EQ|INE733E01010",
+    "POWERGRID": "NSE_EQ|INE752E01010",
+    "COALINDIA": "NSE_EQ|INE522F01014",
+    "ADANIENT": "NSE_EQ|INE423A01024",
+    "ADANIPORTS": "NSE_EQ|INE742F01042",
+}
+
+
+def _resolve_upstox_instrument(symbol: str) -> str:
+    sym = (symbol or "NIFTY").strip().upper()
+    if sym in UPSTOX_INSTRUMENT_MAP:
+        return UPSTOX_INSTRUMENT_MAP[sym]
+    if sym.startswith("BANKNIFTY"):
+        return UPSTOX_INSTRUMENT_MAP["BANKNIFTY"]
+    if sym.startswith("FINNIFTY"):
+        return UPSTOX_INSTRUMENT_MAP["FINNIFTY"]
+    if sym.startswith("MIDCPNIFTY"):
+        return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"]
+    if sym.startswith("NIFTY"):
+        return UPSTOX_INSTRUMENT_MAP["NIFTY"]
+    if sym.startswith("SENSEX"):
+        return UPSTOX_INSTRUMENT_MAP["SENSEX"]
+    if sym.startswith("BANKEX"):
+        return UPSTOX_INSTRUMENT_MAP["BANKEX"]
+    m = re.match(r"^([A-Z&_-]+?)(\d{2}[A-Z]{3}|\d{2}[0-9]{2})", sym)
+    if m and m.group(1) in UPSTOX_INSTRUMENT_MAP:
+        return UPSTOX_INSTRUMENT_MAP[m.group(1)]
+    return UPSTOX_INSTRUMENT_MAP["NIFTY"]
+
+
+def _expand_1m_to_subminute(candles_1m: list[list[Any]], interval_sec: int = 5) -> list[dict[str, Any]]:
+    bars_per_minute = max(1, 60 // interval_sec)
+    result: list[dict[str, Any]] = []
+    for c in candles_1m:
+        try:
+            iso_str, o, h, l, cl, vol = c[0], float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])
+            t0 = int(datetime.fromisoformat(iso_str).timestamp())
+        except Exception:
+            continue
+        if h == l or bars_per_minute == 1:
+            for i in range(bars_per_minute):
+                result.append({
+                    "time": t0 + i * interval_sec,
+                    "open": o, "high": h, "low": l, "close": cl,
+                    "volume": int(vol / bars_per_minute),
+                })
+            continue
+
+        is_bullish = cl >= o
+        if is_bullish:
+            target_pts = [
+                o,
+                o - (o - l) * 0.4,
+                l,
+                l + (h - l) * 0.25,
+                l + (h - l) * 0.5,
+                l + (h - l) * 0.75,
+                h,
+                h - (h - cl) * 0.3,
+                cl,
+            ]
+        else:
+            target_pts = [
+                o,
+                o + (h - o) * 0.4,
+                h,
+                h - (h - l) * 0.25,
+                h - (h - l) * 0.5,
+                h - (h - l) * 0.75,
+                l,
+                l + (cl - l) * 0.3,
+                cl,
+            ]
+
+        step_pts = []
+        for step in range(bars_per_minute + 1):
+            idx = (step * (len(target_pts) - 1)) / bars_per_minute
+            i_low = int(idx)
+            i_high = min(i_low + 1, len(target_pts) - 1)
+            weight = idx - i_low
+            val = target_pts[i_low] * (1.0 - weight) + target_pts[i_high] * weight
+            step_pts.append(val)
+
+        cur_p = o
+        for i in range(bars_per_minute):
+            nxt_p = step_pts[i + 1]
+            b_open = cur_p
+            b_close = nxt_p
+            spread = abs(b_close - b_open)
+            b_high = min(h, max(b_open, b_close) + spread * 0.08)
+            b_low = max(l, min(b_open, b_close) - spread * 0.08)
+            result.append({
+                "time": t0 + i * interval_sec,
+                "open": round(b_open, 2),
+                "high": round(b_high, 2),
+                "low": round(b_low, 2),
+                "close": round(b_close, 2),
+                "volume": int(vol / bars_per_minute),
+            })
+            cur_p = b_close
+    return result
+
+
+def _aggregate_1m_to_higher(candles_1m: list[list[Any]], interval_minutes: int) -> list[dict[str, Any]]:
+    bucket_sec = interval_minutes * 60
+    buckets: dict[int, dict[str, Any]] = {}
+    for c in candles_1m:
+        try:
+            iso_str, o, h, l, cl, vol = c[0], float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])
+            t = int(datetime.fromisoformat(iso_str).timestamp())
+        except Exception:
+            continue
+        b_time = (t // bucket_sec) * bucket_sec
+        if b_time not in buckets:
+            buckets[b_time] = {
+                "time": b_time, "open": o, "high": h, "low": l, "close": cl, "volume": int(vol)
+            }
+        else:
+            b = buckets[b_time]
+            b["high"] = max(b["high"], h)
+            b["low"] = min(b["low"], l)
+            b["close"] = cl
+            b["volume"] += int(vol)
+    return sorted(buckets.values(), key=lambda x: x["time"])
+
+
+@app.get("/api/chart/candles")
+def chart_candles(symbol: str = "NIFTY", interval: str = "5s", date: str | None = None):
+    inst_key = _resolve_upstox_instrument(symbol)
+    candles_1m = []
+    selected_date = date
+
+    if selected_date:
+        dates_to_try = [selected_date]
+    else:
+        d = datetime.now()
+        dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+    for try_date in dates_to_try:
+        url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                resp = client.get(url, headers={"User-Agent": "NeoPIP/1.0"})
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    raw = payload.get("data", {}).get("candles", [])
+                    if raw:
+                        raw.reverse()
+                        candles_1m = raw
+                        selected_date = try_date
+                        break
+        except Exception:
+            continue
+
+    if not candles_1m:
+        return {"ok": False, "symbol": symbol, "interval": interval, "date": selected_date, "candles": []}
+
+    interval_clean = interval.lower().strip()
+    if interval_clean == "5s":
+        res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=5)
+    elif interval_clean == "15s":
+        res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=15)
+    elif interval_clean in {"1m", "1min"}:
+        res_candles = [{
+            "time": int(datetime.fromisoformat(c[0]).timestamp()),
+            "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]),
+            "volume": int(float(c[5]))
+        } for c in candles_1m]
+    elif interval_clean in {"5m", "5min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=5)
+    elif interval_clean in {"15m", "15min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=15)
+    else:
+        res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=5)
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "instrument_key": inst_key,
+        "interval": interval,
+        "date": selected_date,
+        "candles": res_candles,
+    }
 
 
 def _calculate_estimated_charges(all_positions: list[dict[str, Any]], client: Any = None) -> dict[str, Any]:
