@@ -275,14 +275,62 @@ def test_positions_calculates_closed_trade_pnl(client, monkeypatch):
     assert d_closed["closed_count"] == 1
     assert len(d_closed["positions"]) == 1
     assert d_closed["positions"][0]["position_pnl"] == -2906.0
+    assert "charges" in d_closed
+    assert d_closed["charges"]["govt_charges"] == 23.04
+    assert d_closed["total_net_pnl"] == -2929.04
 
     # Check open tab - today's P&L is still -2906.0
     res_open = client.get("/api/positions?tab=open")
     assert res_open.status_code == 200
     d_open = res_open.json()
     assert d_open["total_today_pnl"] == -2906.0
+    assert d_open["total_net_pnl"] == -2929.04
     assert d_open["open_count"] == 0
     assert d_open["closed_count"] == 1
+
+
+def test_estimated_charges_with_outside_orders(client, monkeypatch):
+    class MockNeoWithOrders:
+        def positions(self):
+            return {
+                "data": [
+                    {
+                        "trdSym": "NIFTY 24500 CE",
+                        "exSeg": "nse_fo",
+                        "prod": "NRML",
+                        "buyAmt": "10000",
+                        "sellAmt": "10000",
+                        "flBuyQty": "50",
+                        "flSellQty": "50",
+                        "multiplier": "1",
+                    }
+                ]
+            }
+
+        def order_report(self):
+            return {
+                "data": [
+                    {"nOrdNo": "OUTSIDE-1", "ordSt": "complete"},
+                    {"nOrdNo": "OUTSIDE-2", "ordSt": "traded"},
+                    {"nOrdNo": "OUTSIDE-3", "ordSt": "rejected"},
+                ]
+            }
+
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", MockNeoWithOrders())
+
+    res = client.get("/api/positions")
+    assert res.status_code == 200
+    data = res.json()
+    # Turnover = 20000 -> Govt charges = 20000 / 742 = 26.95
+    # 2 completed orders outside Neo PIP -> Brokerage = 2 * 10 = 20.0
+    # Total charges = 26.95 + 20.0 = 46.95
+    assert data["charges"]["govt_charges"] == 26.95
+    assert data["charges"]["outside_completed_orders"] == 2
+    assert data["charges"]["outside_brokerage"] == 20.0
+    assert data["charges"]["total_charges"] == 46.95
+    assert data["total_today_pnl"] == 0.0
+    assert data["total_net_pnl"] == -46.95
 
 
 def test_index_quotes_endpoint(client):

@@ -927,7 +927,9 @@
     if (cloudDemoMode) {
       $('positions-note').textContent = 'Live positions and current P&L require the local Kotak backend.';
       if ($('today-pnl')) $('today-pnl').textContent = '—';
+      if ($('total-net-pnl')) $('total-net-pnl').textContent = '—';
       if ($('header-pnl-value')) $('header-pnl-value').textContent = '—';
+      if ($('header-net-pnl-value')) $('header-net-pnl-value').textContent = '—';
       $('total-mtm').textContent = '—';
       $('total-position-pnl').textContent = '—';
       $('positions-list').replaceChildren();
@@ -937,10 +939,12 @@
       const data = await api(`/api/positions?tab=${state.positionsTab}&closed=${state.positionsTab === 'closed'}`);
 
       const todayVal = Number(data.total_today_pnl ?? data.total_position_pnl);
+      const netVal = Number(data.total_net_pnl ?? data.total_today_pnl ?? data.total_position_pnl);
       const mtmVal = Number(data.total_unrealized_pnl ?? data.total_mtm);
       const posVal = Number(data.total_realized_pnl ?? data.total_position_pnl);
 
       const todayEl = $('today-pnl');
+      const netEl = $('total-net-pnl');
       const mtmEl = $('total-mtm');
       const posEl = $('total-position-pnl');
 
@@ -949,10 +953,35 @@
         todayEl.className = `pnl-primary-value ${Number.isFinite(todayVal) ? (todayVal > 0 ? 'pnl-positive' : (todayVal < 0 ? 'pnl-negative' : '')) : ''}`;
       }
 
+      if (netEl) {
+        netEl.textContent = money(netVal, true);
+        netEl.className = `pnl-primary-value ${Number.isFinite(netVal) ? (netVal > 0 ? 'pnl-positive' : (netVal < 0 ? 'pnl-negative' : '')) : ''}`;
+      }
+
       const headerPnlEl = $('header-pnl-value');
       if (headerPnlEl && Number.isFinite(todayVal)) {
         headerPnlEl.textContent = money(todayVal, true);
         headerPnlEl.className = `header-pnl-value ${todayVal > 0 ? 'positive' : (todayVal < 0 ? 'negative' : '')}`;
+      }
+
+      const headerNetPnlEl = $('header-net-pnl-value');
+      if (headerNetPnlEl && Number.isFinite(netVal)) {
+        headerNetPnlEl.textContent = money(netVal, true);
+        headerNetPnlEl.className = `header-pnl-value ${netVal > 0 ? 'positive' : (netVal < 0 ? 'negative' : '')}`;
+      }
+
+      if (data.charges) {
+        const c = data.charges;
+        if ($('charges-card')) $('charges-card').classList.remove('hidden');
+        if ($('charge-govt')) $('charge-govt').textContent = money(c.govt_charges);
+        if ($('charge-brokerage')) $('charge-brokerage').textContent = money(c.outside_brokerage);
+        if ($('charge-outside-orders')) $('charge-outside-orders').textContent = c.outside_completed_orders;
+        if ($('charge-total')) $('charge-total').textContent = money(c.total_charges);
+
+        const netCard = $('header-net-pnl');
+        if (netCard) {
+          netCard.title = `Net P&L: ${money(netVal, true)} | Gross: ${money(todayVal, true)} | Govt Charges: ${money(c.govt_charges)} | Outside Brokerage: ${money(c.outside_brokerage)} (Total Charges: ${money(c.total_charges)}) · Click for breakdown`;
+        }
       }
 
       if (mtmEl) {
@@ -1413,11 +1442,23 @@
   if ($('orders-filter-completed')) $('orders-filter-completed').addEventListener('click', () => setOrdersFilter('completed'));
   if ($('orders-filter-failed')) $('orders-filter-failed').addEventListener('click', () => setOrdersFilter('failed'));
 
-  // Header P&L Click Handler (direct jump to Positions)
+  // Header P&L Click Handlers (direct jump to Positions)
   if ($('header-pnl')) {
     $('header-pnl').addEventListener('click', () => {
       setActivityTab('positions');
       loadPositions();
+    });
+  }
+
+  if ($('header-net-pnl')) {
+    $('header-net-pnl').addEventListener('click', () => {
+      setActivityTab('positions');
+      loadPositions();
+      const netVal = $('header-net-pnl-value')?.textContent || '—';
+      const grossVal = $('header-pnl-value')?.textContent || '—';
+      const govt = $('charge-govt')?.textContent || '₹0.00';
+      const brokk = $('charge-brokerage')?.textContent || '₹0.00';
+      toast(`Net P&L: ${netVal} (Gross ${grossVal} - Govt charges ${govt} - Outside brokerage ${brokk})`, 'info', 4500);
     });
   }
 
@@ -1431,10 +1472,18 @@
     try {
       const data = await api('/api/positions?tab=open');
       const todayVal = Number(data.total_today_pnl ?? data.total_position_pnl);
+      const netVal = Number(data.total_net_pnl ?? data.total_today_pnl ?? data.total_position_pnl);
+
       const headerPnlEl = $('header-pnl-value');
       if (headerPnlEl && Number.isFinite(todayVal)) {
         headerPnlEl.textContent = money(todayVal, true);
         headerPnlEl.className = `header-pnl-value ${todayVal > 0 ? 'positive' : (todayVal < 0 ? 'negative' : '')}`;
+      }
+
+      const headerNetPnlEl = $('header-net-pnl-value');
+      if (headerNetPnlEl && Number.isFinite(netVal)) {
+        headerNetPnlEl.textContent = money(netVal, true);
+        headerNetPnlEl.className = `header-pnl-value ${netVal > 0 ? 'positive' : (netVal < 0 ? 'negative' : '')}`;
       }
     } catch (_) {}
   }

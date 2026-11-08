@@ -22,9 +22,16 @@
         </div>
       </div>
 
-      <div id="header-pnl" class="header-pnl" title="Today's Realized + MTM P&amp;L (Click to view Positions)">
-        <span class="header-pnl-label">TODAY'S P&amp;L</span>
-        <span id="header-pnl-value" class="header-pnl-value">—</span>
+      <div class="header-pnl-container">
+        <div id="header-pnl" class="header-pnl" title="Today's Realized + MTM P&amp;L (Gross) · Click to view Positions">
+          <span class="header-pnl-label">TODAY'S P&amp;L</span>
+          <span id="header-pnl-value" class="header-pnl-value">—</span>
+        </div>
+
+        <div id="header-net-pnl" class="header-pnl header-net-pnl" title="Net P&amp;L after estimated charges · Click for charges breakdown">
+          <span class="header-pnl-label">NET P&amp;L <small class="net-pnl-tag">AFTER CHARGES</small></span>
+          <span id="header-net-pnl-value" class="header-pnl-value">—</span>
+        </div>
       </div>
 
       <div class="top-actions">
@@ -350,8 +357,12 @@
         <div id="positions-panel" class="hidden" role="tabpanel">
           <div class="pnl-summary">
             <div class="pnl-card pnl-card-primary">
-              <span class="pnl-label-highlight">TODAY'S P&amp;L</span>
+              <span class="pnl-label-highlight">TODAY'S P&amp;L (GROSS)</span>
               <strong id="today-pnl" class="pnl-primary-value">—</strong>
+            </div>
+            <div class="pnl-card pnl-card-net">
+              <span class="pnl-label-highlight">NET P&amp;L (AFTER CHARGES)</span>
+              <strong id="total-net-pnl" class="pnl-primary-value">—</strong>
             </div>
             <div class="pnl-card">
               <span>UNREALIZED (MTM)</span>
@@ -360,6 +371,14 @@
             <div class="pnl-card">
               <span id="position-pnl-label">REALIZED P&amp;L</span>
               <strong id="total-position-pnl">—</strong>
+            </div>
+          </div>
+          <div id="charges-card" class="charges-card hidden">
+            <span class="charges-title">ESTIMATED CHARGES BREAKDOWN</span>
+            <div class="charges-detail">
+              <span>Govt taxes &amp; fees (turnover / 742): <strong id="charge-govt">₹0.00</strong></span>
+              <span>Brokerage (₹10/order outside Neo PIP): <strong id="charge-brokerage">₹0.00</strong> (<span id="charge-outside-orders">0</span> outside orders)</span>
+              <span>Total estimated charges: <strong id="charge-total">₹0.00</strong></span>
             </div>
           </div>
           <div id="positions-note" class="positions-note">Connect Kotak Neo to load live positions.</div>

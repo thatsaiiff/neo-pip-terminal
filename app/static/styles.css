@@ -158,26 +158,42 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--ink-muted);
 }
 
-/* Header Today's P&L display */
+/* Header P&L boxes display */
+.header-pnl-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  margin-left: 12px;
+}
+
 .header-pnl {
   display: inline-flex;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
-  padding: 4px 12px;
+  padding: 4px 11px;
   background: var(--bg-surface-subtle);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   cursor: pointer;
   user-select: none;
   transition: all 0.15s ease;
-  margin-right: auto;
-  margin-left: 12px;
 }
 
 .header-pnl:hover {
   background: var(--bg-surface-hover);
   border-color: var(--ink-muted);
+}
+
+.header-net-pnl {
+  border-color: rgba(59, 130, 246, 0.28);
+  background: rgba(59, 130, 246, 0.02);
+}
+
+.header-net-pnl:hover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
 }
 
 .header-pnl-label {
@@ -186,6 +202,18 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--ink-muted);
   text-transform: uppercase;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.net-pnl-tag {
+  font: 600 7px var(--font-mono);
+  padding: 0 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink-secondary);
+  letter-spacing: 0.04em;
 }
 
 .header-pnl-value {
@@ -205,13 +233,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--red-ink);
 }
 
-@media (max-width: 600px) {
-  .header-pnl {
-    padding: 3px 8px;
+@media (max-width: 768px) {
+  .header-pnl-container {
+    gap: 5px;
     margin-left: 6px;
+  }
+  .header-pnl {
+    padding: 3px 7px;
   }
   .header-pnl-label {
     font-size: 7.5px;
+  }
+  .net-pnl-tag {
+    display: none;
   }
   .header-pnl-value {
     font-size: 11px;
@@ -1547,9 +1581,15 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 /* Positions & P&L Panel */
 .pnl-summary {
   display: grid;
-  grid-template-columns: 1.15fr 0.95fr 0.95fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-bottom: 8px;
+}
+
+@media (max-width: 680px) {
+  .pnl-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .pnl-card {
@@ -1566,6 +1606,42 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   background: var(--bg-surface) !important;
   border-color: var(--border-medium) !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.pnl-card-net {
+  background: rgba(59, 130, 246, 0.03) !important;
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
+
+.charges-card {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: var(--bg-surface-subtle);
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-sm);
+  font: 10px var(--font-mono);
+  color: var(--ink-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.charges-title {
+  font-weight: 700;
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.charges-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.charges-detail span strong {
+  color: var(--ink-primary);
 }
 
 .pnl-card-primary .pnl-label-highlight {

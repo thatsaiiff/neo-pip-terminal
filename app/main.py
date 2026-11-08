@@ -1166,6 +1166,77 @@ def market_movers():
     return _fetch_market_movers()
 
 
+def _calculate_estimated_charges(all_positions: list[dict[str, Any]], client: Any = None) -> dict[str, Any]:
+    """
+    Calculate estimated trading charges according to rule:
+    - Govt charges (approx including everything): ((buy_avg + sell_avg) * qty_traded) / 742
+    - Brokerage: Rs. 10 per completed order placed outside Neo PIP, Rs. 0 for orders placed via Neo PIP
+    """
+    total_turnover = 0.0
+    for pos in all_positions:
+        buy_qty = float(pos.get("buy_qty") or 0.0)
+        sell_qty = float(pos.get("sell_qty") or 0.0)
+        avg_buy = float(pos.get("avg_buy_price") or 0.0)
+        avg_sell = float(pos.get("avg_sell_price") or 0.0)
+
+        matched_qty = min(buy_qty, sell_qty)
+        if matched_qty > 0:
+            turnover = (avg_buy + avg_sell) * matched_qty
+            if buy_qty > matched_qty:
+                turnover += avg_buy * (buy_qty - matched_qty)
+            elif sell_qty > matched_qty:
+                turnover += avg_sell * (sell_qty - matched_qty)
+        elif buy_qty > 0:
+            turnover = avg_buy * buy_qty
+        elif sell_qty > 0:
+            turnover = avg_sell * sell_qty
+        else:
+            turnover = 0.0
+
+        total_turnover += turnover
+
+    govt_charges = round(total_turnover / 742.0, 2) if total_turnover > 0 else 0.0
+
+    outside_completed_count = 0
+    total_completed_count = 0
+    if client is not None and hasattr(client, "order_report"):
+        try:
+            report = client.order_report()
+            if isinstance(report, dict) and not _kotak_response_error(report):
+                internal_order_ids: set[str] = set()
+                try:
+                    with db() as conn:
+                        rows = conn.execute(
+                            "SELECT broker_order_id FROM orders WHERE broker_order_id IS NOT NULL"
+                        ).fetchall()
+                        internal_order_ids = {str(r[0]).strip() for r in rows if r[0]}
+                except Exception:
+                    internal_order_ids = set()
+
+                for item in _rows_from_sdk_result(report):
+                    raw_st = str(item.get("ordSt") or item.get("status") or item.get("stat") or "").strip().lower()
+                    if raw_st in {"complete", "completed", "traded", "filled"}:
+                        total_completed_count += 1
+                        ord_id = str(item.get("nOrdNo") or item.get("order_id") or "").strip()
+                        if ord_id and ord_id not in internal_order_ids:
+                            outside_completed_count += 1
+        except Exception:
+            pass
+
+    outside_brokerage = round(outside_completed_count * 10.0, 2)
+    total_charges = round(govt_charges + outside_brokerage, 2)
+
+    return {
+        "govt_charges": govt_charges,
+        "total_turnover": round(total_turnover, 2),
+        "outside_completed_orders": outside_completed_count,
+        "total_completed_orders": total_completed_count,
+        "outside_brokerage": outside_brokerage,
+        "total_charges": total_charges,
+        "formula": "((buy_avg + sell_avg) * qty_traded) / 742 + (outside_orders * 10)",
+    }
+
+
 @app.get("/api/positions")
 def positions(closed: bool = False, tab: str | None = None):
     client = _require_neo_session()
@@ -1284,6 +1355,9 @@ def positions(closed: bool = False, tab: str | None = None):
     else:
         visible = open_positions
 
+    charges_info = _calculate_estimated_charges(all_positions, client=client)
+    total_net_val = round(total_today - charges_info["total_charges"], 2)
+
     # Ensure backwards compatibility with tests and UI
     total_mtm_val = round(total_unrealized, 2) if all_positions else 0
     total_pos_pnl_val = total_today if all_positions else 0
@@ -1292,6 +1366,8 @@ def positions(closed: bool = False, tab: str | None = None):
         "positions": visible,
         "all_positions": all_positions,
         "total_today_pnl": total_today,
+        "total_net_pnl": total_net_val,
+        "charges": charges_info,
         "total_realized_pnl": round(total_realized, 2),
         "total_unrealized_pnl": round(total_unrealized, 2),
         "total_mtm": total_mtm_val,
