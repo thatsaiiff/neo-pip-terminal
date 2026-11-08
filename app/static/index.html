@@ -3,100 +3,408 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f4f0">
-  <meta name="description" content="A compact, local-first Kotak Neo trading ticket.">
+  <meta name="theme-color" content="#181916">
+  <meta name="description" content="A compact, local-first Kotak Neo trading ticket and execution terminal.">
   <title>Neo PIP — Trading Ticket</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css?v=20261107-1">
 </head>
 <body>
   <div id="app-shell">
     <header class="topbar">
-      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-      <div class="brand-copy"><div class="brand-name">NEO / PIP</div><div class="brand-sub">TRADING TICKET</div></div>
+      <div class="brand-group">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div class="brand-copy">
+          <div class="brand-name">NEO / PIP</div>
+          <div class="brand-sub">TRADING TICKET</div>
+        </div>
+      </div>
+
       <div class="top-actions">
-        <span id="mode-pill" class="mode-pill simulation"><i></i><span>SIMULATION</span></span>
-        <button id="connect-btn" class="icon-button" title="Connect Kotak Neo" aria-label="Connect Kotak Neo"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.64 5.64l2.83 2.83m7.06 7.06 2.83 2.83m0-12.72-2.83 2.83m-7.06 7.06-2.83 2.83"/></svg></button>
-        <button id="pip-btn" class="pip-button" title="Open picture-in-picture window"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg><span>Pop out</span></button>
+        <span id="ip-pill" class="ip-pill hidden" title="Broker API egress IP">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span id="ip-text">—</span>
+        </span>
+        <span id="mode-pill" class="mode-pill simulation">
+          <i class="mode-dot"></i><span class="mode-text">SIMULATION</span>
+        </span>
+        <button id="connect-btn" class="icon-button" title="Connect Kotak Neo" aria-label="Connect Kotak Neo">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+          </svg>
+        </button>
+        <button id="pip-btn" class="pip-button" title="Open floating Picture-in-Picture window">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <rect x="12" y="11" width="7" height="6" rx="1"/>
+          </svg>
+          <span>Pop out</span>
+        </button>
       </div>
     </header>
 
-    <div id="cloud-demo-banner" class="cloud-demo-banner hidden" role="status">Cloud preview · Simulation only. Broker sign-in, live prices, option-chain data and live order placement are disabled.</div>
+    <nav class="index-strip" aria-label="Live index prices">
+      <button type="button" class="index-tile" id="index-tile-nifty" data-symbol="NIFTY" data-segment="nse_fo" title="Click to trade NIFTY">
+        <div class="index-tile-top">
+          <span class="index-name">NIFTY</span>
+          <span class="index-tag">NSE</span>
+        </div>
+        <div class="index-tile-values">
+          <strong id="index-nifty">—</strong>
+          <small id="index-nifty-change" class="index-change">Waiting for Kotak</small>
+        </div>
+      </button>
+
+      <button type="button" class="index-tile" id="index-tile-banknifty" data-symbol="BANKNIFTY" data-segment="nse_fo" title="Click to trade BANK NIFTY">
+        <div class="index-tile-top">
+          <span class="index-name">BANK NIFTY</span>
+          <span class="index-tag">NSE</span>
+        </div>
+        <div class="index-tile-values">
+          <strong id="index-banknifty">—</strong>
+          <small id="index-banknifty-change" class="index-change">Waiting for Kotak</small>
+        </div>
+      </button>
+
+      <button type="button" class="index-tile" id="index-tile-sensex" data-symbol="SENSEX" data-segment="bse_fo" title="Click to trade SENSEX">
+        <div class="index-tile-top">
+          <span class="index-name">SENSEX</span>
+          <span class="index-tag">BSE</span>
+        </div>
+        <div class="index-tile-values">
+          <strong id="index-sensex">—</strong>
+          <small id="index-sensex-change" class="index-change">Waiting for Kotak</small>
+        </div>
+      </button>
+    </nav>
+
+    <div id="cloud-demo-banner" class="cloud-demo-banner hidden" role="status">
+      <span class="demo-icon">☁</span>
+      <span>Cloud preview · Simulation mode only. Broker sign-in, live prices, and live orders require running locally.</span>
+    </div>
 
     <main class="main-content">
+      <!-- COLUMN 1: Active Instrument -->
       <section class="instrument-card">
-        <div class="section-row"><span class="eyebrow">ACTIVE INSTRUMENT</span><span id="source-indicator" class="source-indicator"><i></i> Manual</span></div>
-        <div class="symbol-row">
-          <div class="symbol-input-wrap"><input id="symbol-input" type="text" value="NIFTY" spellcheck="false" autocomplete="off" aria-label="Trading symbol" maxlength="64"><button id="apply-symbol" class="apply-symbol" aria-label="Apply symbol" title="Use entered symbol">↵</button></div>
-          <span id="exchange-chip" class="exchange-chip">NSE F&amp;O</span>
+        <div class="card-header">
+          <div class="section-row">
+            <span class="eyebrow">ACTIVE INSTRUMENT</span>
+            <span id="source-indicator" class="source-indicator"><i class="source-dot"></i> Manual</span>
+          </div>
+          <div class="symbol-row">
+            <div class="symbol-input-wrap">
+              <input id="symbol-input" type="text" value="NIFTY" spellcheck="false" autocomplete="off" aria-label="Trading symbol" maxlength="64">
+              <button id="apply-symbol" class="apply-symbol" aria-label="Apply symbol" title="Apply entered symbol">↵</button>
+            </div>
+            <span id="exchange-chip" class="exchange-chip">NSE F&amp;O</span>
+          </div>
         </div>
-        <div class="instrument-search"><input id="instrument-search" type="search" placeholder="Search Kotak instruments" aria-label="Search Kotak instruments"><button id="search-instruments" type="button">Search</button></div>
-        <div id="instrument-results" class="instrument-results hidden" role="listbox" aria-label="Instrument search results"></div>
-        <button id="option-chain-toggle" class="chain-toggle" type="button" aria-expanded="false">Open option chain</button>
+
+        <div class="instrument-search-wrap">
+          <div class="instrument-search">
+            <svg class="search-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="instrument-search" type="search" placeholder="Search scrip, strike (e.g. RELIANCE, 24500 CE)" aria-label="Search Kotak instruments">
+            <button id="search-instruments" type="button">Search</button>
+          </div>
+          <div id="instrument-results" class="instrument-results hidden" role="listbox" aria-label="Instrument search results"></div>
+        </div>
+
+        <button id="option-chain-toggle" class="chain-toggle" type="button" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          <span>Open option chain</span>
+          <span class="toggle-arrow">▾</span>
+        </button>
+
         <div id="option-chain-panel" class="option-chain-panel hidden">
-          <div class="chain-controls"><select id="chain-underlying" aria-label="Option chain underlying"><option value="NIFTY">NIFTY</option><option value="BANKNIFTY">BANK NIFTY</option><option value="SENSEX">SENSEX</option></select><select id="chain-expiry" aria-label="Option expiry"></select><button id="chain-refresh" type="button" aria-label="Refresh option chain">↻</button></div>
+          <div class="chain-controls">
+            <select id="chain-underlying" aria-label="Option chain underlying">
+              <option value="NIFTY">NIFTY</option>
+              <option value="BANKNIFTY">BANK NIFTY</option>
+              <option value="SENSEX">SENSEX</option>
+            </select>
+            <select id="chain-expiry" aria-label="Option expiry"></select>
+            <button id="chain-refresh" type="button" aria-label="Refresh option chain" title="Refresh option chain">↻</button>
+          </div>
           <div id="chain-status" class="chain-status">Connect Kotak Neo in this app to load option-chain data.</div>
-          <div class="chain-table-wrap"><table class="chain-table"><thead><tr><th>CALL OI</th><th>CALL LTP</th><th>STRIKE</th><th>PUT LTP</th><th>PUT OI</th></tr></thead><tbody id="chain-rows"></tbody></table></div>
+          <div class="chain-table-wrap">
+            <table class="chain-table">
+              <thead>
+                <tr>
+                  <th>CALL OI</th>
+                  <th>CALL LTP</th>
+                  <th class="th-strike">STRIKE</th>
+                  <th>PUT LTP</th>
+                  <th>PUT OI</th>
+                </tr>
+              </thead>
+              <tbody id="chain-rows"></tbody>
+            </table>
+          </div>
         </div>
-        <div class="instrument-meta"><span id="symbol-subtitle">Waiting for broker symbol</span><span id="live-price" class="price-unavailable"><span class="dot-pulse"></span> Price unavailable</span></div>
-        <div class="bridge-note" id="bridge-note">Open your Kotak Neo trading tab and select a symbol. The companion extension can sync it here.</div>
+
+        <div class="instrument-meta">
+          <span id="symbol-subtitle">Waiting for broker symbol</span>
+          <span id="live-price" class="price-unavailable"><span class="dot-pulse"></span> Price unavailable</span>
+        </div>
+
+        <div class="bridge-note" id="bridge-note">
+          Open your Kotak Neo trading tab and select a symbol. The companion extension will automatically sync it here.
+        </div>
       </section>
 
+      <!-- COLUMN 2: Order Ticket -->
       <section class="order-card">
-        <div class="section-head"><div><div class="eyebrow">ORDER TICKET</div><h1>Place an order<span class="title-dot">.</span></h1></div><span id="order-count" class="order-count">0 ORDERS</span></div>
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">ORDER TICKET</div>
+            <h1>Place an order<span class="title-dot">.</span></h1>
+          </div>
+          <span id="order-count" class="order-count">0 ORDERS</span>
+        </div>
+
         <div class="side-toggle" role="group" aria-label="Order side">
-          <button id="buy-btn" class="side-button buy active" data-side="BUY"><span>BUY</span><small>Long / Add</small><b>↗</b></button>
-          <button id="sell-btn" class="side-button sell" data-side="SELL"><span>SELL</span><small>Exit / Short</small><b>↘</b></button>
+          <button id="buy-btn" class="side-button buy active" data-side="BUY" type="button">
+            <div class="side-button-content">
+              <span class="side-title">BUY</span>
+              <small class="side-desc">Long / Add</small>
+            </div>
+            <b class="side-glyph">↗</b>
+          </button>
+          <button id="sell-btn" class="side-button sell" data-side="SELL" type="button">
+            <div class="side-button-content">
+              <span class="side-title">SELL</span>
+              <small class="side-desc">Exit / Short</small>
+            </div>
+            <b class="side-glyph">↘</b>
+          </button>
         </div>
+
         <div class="form-grid">
-          <label class="field field-wide"><span>Exchange segment</span><select id="exchange-select"><option value="nse_fo">NSE Futures &amp; Options</option><option value="bse_fo">BSE Futures &amp; Options</option><option value="nse_cm">NSE Cash</option><option value="bse_cm">BSE Cash</option><option value="mcx_fo">MCX Futures</option></select></label>
-          <label class="field"><span>Product</span><select id="product-select"><option value="MIS">MIS · Intraday</option><option value="NRML">NRML · Carry forward</option><option value="CNC">CNC · Delivery</option><option value="MTF">MTF</option></select></label>
-          <label class="field"><span>Order type</span><select id="type-select"><option value="MKT">Market</option><option value="L">Limit</option><option value="SL">Stop-loss limit</option><option value="SL-M">Stop-loss market</option></select></label>
-          <label class="field"><span>Lots</span><div class="stepper"><button id="lots-minus" aria-label="Decrease lots">−</button><input id="lots-input" type="number" min="1" max="1000" value="1" inputmode="numeric"><button id="lots-plus" aria-label="Increase lots">+</button></div></label>
-          <label class="field"><span>Units per lot <em>verify</em></span><input id="lot-size-input" type="number" min="1" max="100000" value="1" inputmode="numeric"></label>
-          <label id="price-field" class="field hidden"><span>Limit price (₹)</span><input id="price-input" type="number" min="0.05" step="0.05" placeholder="Enter price"></label>
-          <label id="trigger-field" class="field hidden"><span>Trigger price (₹)</span><input id="trigger-input" type="number" min="0.05" step="0.05" placeholder="Enter trigger"></label>
+          <label class="field field-wide">
+            <span>Exchange segment</span>
+            <select id="exchange-select">
+              <option value="nse_fo">NSE Futures &amp; Options</option>
+              <option value="bse_fo">BSE Futures &amp; Options</option>
+              <option value="nse_cm">NSE Cash</option>
+              <option value="bse_cm">BSE Cash</option>
+              <option value="mcx_fo">MCX Futures</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Product</span>
+            <select id="product-select">
+              <option value="MIS">MIS · Intraday</option>
+              <option value="NRML">NRML · Carry forward</option>
+              <option value="CNC">CNC · Delivery</option>
+              <option value="MTF">MTF</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Order type</span>
+            <select id="type-select">
+              <option value="MKT">Market</option>
+              <option value="L">Limit</option>
+              <option value="SL">Stop-loss limit</option>
+              <option value="SL-M">Stop-loss market</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Validity</span>
+            <select id="validity-select">
+              <option value="DAY" selected>DAY · Normal</option>
+              <option value="IOC">IOC · Immediate</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Lots</span>
+            <div class="stepper">
+              <button id="lots-minus" type="button" aria-label="Decrease lots">−</button>
+              <input id="lots-input" type="number" min="1" max="1000" value="1" inputmode="numeric">
+              <button id="lots-plus" type="button" aria-label="Increase lots">+</button>
+            </div>
+          </label>
+
+          <label class="field">
+            <span>Units per lot <em>verify</em></span>
+            <input id="lot-size-input" type="number" min="1" max="100000" value="1" inputmode="numeric">
+          </label>
+
+          <label id="price-field" class="field hidden">
+            <span>Limit price (₹)</span>
+            <input id="price-input" type="number" min="0.05" step="0.05" placeholder="Enter price">
+          </label>
+
+          <label id="trigger-field" class="field hidden">
+            <span>Trigger price (₹)</span>
+            <input id="trigger-input" type="number" min="0.05" step="0.05" placeholder="Enter trigger">
+          </label>
         </div>
-        <div class="quantity-summary"><div><span>ORDER QUANTITY</span><strong id="quantity-value">1 <small>units</small></strong></div><div class="summary-divider"></div><div><span>EST. VALUE</span><strong id="estimate-value">—</strong><small class="estimate-caption">Price unavailable</small></div></div>
-        <div class="risk-note"><span class="risk-icon">!</span><p>Confirm the exact symbol, lot size, product and quantity before placing any live order. Market orders may fill at a different price.</p></div>
-        <div class="action-row"><button id="place-buy" class="primary-order buy-order">Review BUY <span>↗</span></button><button id="place-sell" class="primary-order sell-order">Review SELL <span>↘</span></button></div>
-        <div class="under-actions"><span><kbd>⌘</kbd> + <kbd>Enter</kbd> review selected side</span><span>Nothing is sent before confirmation</span></div>
+
+        <div class="quantity-summary">
+          <div class="summary-col">
+            <span class="summary-label">ORDER QUANTITY</span>
+            <strong id="quantity-value" class="summary-val">1 <small>units</small></strong>
+          </div>
+          <div class="summary-divider"></div>
+          <div class="summary-col">
+            <span class="summary-label">EST. VALUE</span>
+            <strong id="estimate-value" class="summary-val">—</strong>
+            <small class="estimate-caption">Price unavailable</small>
+          </div>
+        </div>
+
+        <div class="risk-note">
+          <span class="risk-icon">!</span>
+          <p>Confirm the exact symbol, lot size, product and quantity before placing any live order. Market orders may fill at a different price.</p>
+        </div>
+
+        <div class="action-row">
+          <button id="place-buy" class="primary-order buy-order" type="button">Review BUY <span>↗</span></button>
+          <button id="place-sell" class="primary-order sell-order" type="button">Review SELL <span>↘</span></button>
+        </div>
+
+        <div class="under-actions">
+          <span><kbd>⌘</kbd> + <kbd>Enter</kbd> review selected side</span>
+          <span>Nothing is sent before explicit confirmation</span>
+        </div>
       </section>
 
+      <!-- COLUMN 3: Activity & Account -->
       <section class="recent-card">
-        <div class="recent-head"><div><div class="eyebrow">ACTIVITY</div><h2>Recent orders</h2></div><button id="refresh-orders" class="text-button">Refresh ↻</button></div>
-        <div id="orders-list" class="orders-list"><div class="empty-state"><span class="empty-glyph">↗</span><div><strong>Nothing here yet</strong><p>Orders and simulation events will appear here.</p></div></div></div>
+        <div class="recent-head">
+          <div>
+            <div class="eyebrow">ACCOUNT</div>
+            <h2 id="activity-title">Orders</h2>
+          </div>
+          <button id="refresh-orders" class="text-button" type="button" title="Refresh data">Refresh ↻</button>
+        </div>
+
+        <div class="activity-tabs" role="tablist">
+          <button id="orders-tab" class="activity-tab active" role="tab" aria-selected="true" type="button">Order book</button>
+          <button id="positions-tab" class="activity-tab" role="tab" aria-selected="false" type="button">Positions &amp; P&amp;L</button>
+          <button id="audit-tab" class="activity-tab" role="tab" aria-selected="false" type="button">Audit log</button>
+        </div>
+
+        <!-- Orders Panel -->
+        <div id="orders-panel" role="tabpanel">
+          <div id="orders-list" class="orders-list">
+            <div class="empty-state">
+              <span class="empty-glyph">↗</span>
+              <div>
+                <strong>Nothing here yet</strong>
+                <p>Orders and simulation events will appear here.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Positions & P&L Panel -->
+        <div id="positions-panel" class="hidden" role="tabpanel">
+          <div class="pnl-summary">
+            <div class="pnl-card">
+              <span>MTM P&amp;L</span>
+              <strong id="total-mtm">—</strong>
+            </div>
+            <div class="pnl-card">
+              <span id="position-pnl-label">POSITION P&amp;L</span>
+              <strong id="total-position-pnl">—</strong>
+            </div>
+          </div>
+          <div id="positions-note" class="positions-note">Connect Kotak Neo to load live positions.</div>
+          <div class="position-tabs">
+            <button id="open-positions-tab" class="position-tab active" type="button">Open</button>
+            <button id="closed-positions-tab" class="position-tab" type="button">Closed</button>
+          </div>
+          <div id="positions-list" class="positions-list"></div>
+        </div>
+
+        <!-- Audit Log Panel -->
+        <div id="audit-panel" class="hidden" role="tabpanel">
+          <div id="audit-list" class="audit-list">
+            <div class="empty-state">
+              <span class="empty-glyph">📋</span>
+              <div>
+                <strong>No audit events yet</strong>
+                <p>Security and order audit logs will appear here.</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
-      <footer class="footer"><span>NEO PIP <span class="footer-separator">/</span> LOCAL FIRST</span><span id="connection-footer">Backend connecting…</span></footer>
+
+      <footer class="footer">
+        <span>NEO PIP <span class="footer-separator">/</span> LOCAL FIRST</span>
+        <span id="connection-footer">Backend connecting…</span>
+      </footer>
     </main>
   </div>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <!-- Toast Notification -->
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <div class="toast-indicator"></div>
+    <div class="toast-body">
+      <span id="toast-message"></span>
+    </div>
+  </div>
 
+  <!-- Review Modal -->
   <div id="review-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="review-title">
     <div class="modal-card">
-      <div class="modal-top"><span class="modal-label">ORDER REVIEW</span><button id="close-review" class="close-button" aria-label="Close review">×</button></div>
+      <div class="modal-top">
+        <span class="modal-label">ORDER REVIEW</span>
+        <button id="close-review" class="close-button" aria-label="Close review" type="button">×</button>
+      </div>
       <h2 id="review-title">Ready to review<span class="title-dot">.</span></h2>
       <p class="modal-description">Check the exact order details. No order is sent until you confirm below.</p>
       <div id="review-mode-warning" class="review-warning"></div>
       <div id="review-details" class="review-details"></div>
-      <label class="confirm-check"><input id="confirm-check" type="checkbox"><span>I have verified the symbol, lot size, and order details.</span></label>
-      <div class="modal-actions"><button id="cancel-review" class="secondary-button">Cancel</button><button id="confirm-order" class="confirm-order-button" disabled>Confirm order</button></div>
+      <label class="confirm-check">
+        <input id="confirm-check" type="checkbox">
+        <span>I have verified the symbol, lot size, quantity and order details.</span>
+      </label>
+      <div class="modal-actions">
+        <button id="cancel-review" class="secondary-button" type="button">Cancel</button>
+        <button id="confirm-order" class="confirm-order-button" disabled type="button">Confirm order</button>
+      </div>
       <p class="modal-footnote">For live orders, broker acceptance is not the same as execution. Check the Kotak Neo order book.</p>
     </div>
   </div>
 
+  <!-- Connect Broker Modal -->
   <div id="connect-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="connect-title">
     <div class="modal-card connect-card">
-      <div class="modal-top"><span class="modal-label">BROKER SESSION</span><button id="close-connect" class="close-button" aria-label="Close connect dialog">×</button></div>
+      <div class="modal-top">
+        <span class="modal-label">BROKER SESSION</span>
+        <button id="close-connect" class="close-button" aria-label="Close connect dialog" type="button">×</button>
+      </div>
       <h2 id="connect-title">Connect Kotak Neo<span class="title-dot">.</span></h2>
-      <p class="modal-description">Credentials are read from your local <code>.env</code>. Your TOTP and MPIN are sent only to this local backend and are not saved.</p>
-      <div class="connect-callout"><strong>Live trading gate</strong><p>Requires <code>LIVE_TRADING_ENABLED=true</code> and valid API details in <code>.env</code>. Simulation is the default.</p></div>
-      <label class="field"><span>Authenticator TOTP</span><input id="totp-input" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code"></label>
-      <label class="field"><span>Trading MPIN</span><input id="mpin-input" type="password" inputmode="numeric" maxlength="8" placeholder="Your MPIN" autocomplete="off"></label>
-      <div class="modal-actions"><button id="cancel-connect" class="secondary-button">Cancel</button><button id="submit-connect" class="confirm-order-button">Authenticate</button></div>
+      <p class="modal-description">Credentials are read from your local <code>.env</code>. Your TOTP and MPIN are sent only to this local backend and are never saved to disk.</p>
+      <div class="connect-callout">
+        <strong>Live trading gate</strong>
+        <p>Requires <code>LIVE_TRADING_ENABLED=true</code> and valid API details in <code>.env</code>. Simulation is active otherwise.</p>
+      </div>
+      <label class="field">
+        <span>Authenticator TOTP</span>
+        <input id="totp-input" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit code from auth app" autocomplete="one-time-code">
+      </label>
+      <label class="field">
+        <span>Trading MPIN</span>
+        <input id="mpin-input" type="password" inputmode="numeric" maxlength="8" placeholder="Your Kotak trading MPIN" autocomplete="off">
+      </label>
+      <div class="modal-actions">
+        <button id="cancel-connect" class="secondary-button" type="button">Cancel</button>
+        <button id="submit-connect" class="confirm-order-button" type="button">Authenticate</button>
+      </div>
       <p class="modal-footnote">Never paste your consumer key, MPIN or TOTP into chat or screenshots.</p>
     </div>
   </div>
-  <script src="/static/app.js" defer></script>
+
+  <script src="/static/app.js?v=20261107-1" defer></script>
 </body>
 </html>

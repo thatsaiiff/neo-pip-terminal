@@ -210,3 +210,35 @@ def test_extension_origin_can_only_use_symbol_bridge(client):
 def test_untrusted_local_origin_is_rejected(client):
     response = client.get("/api/status", headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 403
+
+
+def test_order_with_ioc_validity(client):
+    order = sample_order(validity="IOC")
+    response = client.post("/api/orders", json=order)
+    assert response.status_code == 200
+    with main.db() as conn:
+        row = conn.execute("SELECT request_json FROM orders ORDER BY id DESC LIMIT 1").fetchone()
+    import json
+    parsed = json.loads(row["request_json"])
+    assert parsed["validity"] == "IOC"
+
+
+def test_positions_returns_empty_list_on_no_data(client, monkeypatch):
+    class MockNeo:
+        def positions(self):
+            return {"stat": "Not_Ok", "stCode": 5203, "errMsg": "No Data", "desc": "data not found"}
+
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", MockNeo())
+    response = client.get("/api/positions")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["positions"] == []
+    assert data["total_mtm"] == 0
+    assert data["total_position_pnl"] == 0
+
+
+def test_audit_events_list(client):
+    response = client.get("/api/audit")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)

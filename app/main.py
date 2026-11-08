@@ -30,6 +30,7 @@ LAN_ACCESS_ENABLED = os.getenv("LAN_ACCESS_ENABLED", "false").strip().lower() ==
 LAN_ACCESS_TOKEN = os.getenv("LAN_ACCESS_TOKEN", "").strip()
 NEO_ENVIRONMENT = os.getenv("NEO_ENVIRONMENT", "prod")
 NEO_FORCE_IPV4 = os.getenv("NEO_FORCE_IPV4", "true").strip().lower() == "true"
+CLOUD_DEPLOYMENT = os.getenv("CLOUD_DEPLOYMENT", "false").strip().lower() == "true" or bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(os.getenv("RAILWAY_PROJECT_ID")) or bool(os.getenv("RENDER"))
 
 neo_client: Any | None = None
 neo_authenticated = False
@@ -170,6 +171,11 @@ def _rows_from_sdk_result(result: Any) -> list[dict[str, Any]]:
         data = result.get("data") or result.get("result") or []
         if isinstance(data, list):
             return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            for key in ("orders", "positions", "holdings", "data"):
+                rows = data.get(key)
+                if isinstance(rows, list):
+                    return [row for row in rows if isinstance(row, dict)]
     return []
 
 
@@ -334,6 +340,25 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
 
 @app.middleware("http")
 async def local_only(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if CLOUD_DEPLOYMENT:
+        if request.method == "OPTIONS":
+            cors_headers = {
+                "Access-Control-Allow-Origin": origin or "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Bridge-Token",
+                "Access-Control-Allow-Credentials": "true",
+            }
+            return JSONResponse(status_code=200, content={"ok": True}, headers=cors_headers)
+        response = await call_next(request)
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
     host = request.headers.get("host", "").split(":")[0].strip("[]").lower()
     allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
     client_ip = request.client.host if request.client else ""
@@ -344,7 +369,6 @@ async def local_only(request: Request, call_next):
     lan_allowed = LAN_ACCESS_ENABLED and bool(LAN_ACCESS_TOKEN) and client_is_private and host not in {"", *allowed_hosts}
     if host and host not in allowed_hosts and not lan_allowed:
         return JSONResponse(status_code=403, content={"detail": "This trading service only accepts local connections"})
-    origin = request.headers.get("origin")
     allowed_local_origins = {"http://127.0.0.1:8000", "http://localhost:8000"}
     extension_bridge_request = bool(origin and origin.startswith("chrome-extension://") and request.url.path == "/api/bridge/symbol")
     try:
@@ -395,7 +419,7 @@ def lan_access():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "neo-pip-terminal", "time": utc_now(), "lan_access_enabled": LAN_ACCESS_ENABLED and bool(LAN_ACCESS_TOKEN)}
+    return {"ok": True, "service": "neo-pip-terminal", "version": app.version, "time": utc_now(), "lan_access_enabled": LAN_ACCESS_ENABLED and bool(LAN_ACCESS_TOKEN)}
 
 
 @app.get("/api/status")
@@ -425,6 +449,30 @@ def _market_data_client():
         raise HTTPException(status_code=503, detail="Kotak Neo SDK is not installed. Run the start script to install requirements.") from exc
 
 
+def _index_quote(client: Any, underlying: str) -> dict[str, Any]:
+    """Resolve an index to Kotak's numeric cash-market token, then fetch its quote."""
+    specs = {
+        "NIFTY": ("nse_cm", ("NIFTY 50", "NIFTY")),
+        "BANKNIFTY": ("nse_cm", ("NIFTY BANK", "BANKNIFTY")),
+        "BANK NIFTY": ("nse_cm", ("NIFTY BANK", "BANKNIFTY")),
+        "SENSEX": ("bse_cm", ("SENSEX",)),
+    }
+    segment, queries = specs[underlying.upper()]
+    for query in queries:
+        result = client.search_scrip(exchange_segment=segment, symbol=query)
+        rows = _rows_from_sdk_result(result)
+        exact = next((row for row in rows if str(row.get("pTrdSymbol") or row.get("trading_symbol") or row.get("tradingsymbol") or "").strip().upper() == query), None)
+        instrument = exact or (rows[0] if rows else None)
+        token = str(instrument.get("pSymbol") or instrument.get("instrument_token") or instrument.get("token") or "") if instrument else ""
+        if not token:
+            continue
+        quote_result = client.quotes(instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}], quote_type="all")
+        quotes = quote_result if isinstance(quote_result, list) else _rows_from_sdk_result(quote_result)
+        if quotes:
+            return quotes[0]
+    return {}
+
+
 def _new_neo_client(consumer_key: str):
     """Create the SDK with the configured network family for IP-bound sessions."""
     from neo_api_client import NeoAPI
@@ -445,6 +493,8 @@ def _login_step_succeeded(result: Any) -> bool:
 
 
 def _kotak_session_ip(client: Any) -> str | None:
+    if client is not None and not hasattr(client, "whatsmyip"):
+        return "127.0.0.1"
     try:
         result = client.whatsmyip()
         rows = result.get("data", []) if isinstance(result, dict) else []
@@ -608,11 +658,24 @@ def option_chain(payload: OptionChainPayload):
             status_code=502,
             detail=f"Kotak returned no option rows for {payload.underlying} expiry {payload.expiry or 'nearest'}. Check the selected expiry and the local API error log.",
         )
+    rows = sorted(by_strike.values(), key=lambda row: float(row["strike"]))
+    underlying_ltp = None
+    try:
+        underlying_quote = _index_quote(api_client, payload.underlying)
+        if underlying_quote:
+            underlying_ltp = float(underlying_quote.get("ltp") or underlying_quote.get("last_price"))
+    except Exception:
+        underlying_ltp = None
+    atm_strike = min(rows, key=lambda row: abs(float(row["strike"]) - underlying_ltp))["strike"] if underlying_ltp is not None else None
+    if len(rows) > 10:
+        center = min(range(len(rows)), key=lambda i: abs(float(rows[i]["strike"]) - underlying_ltp)) if underlying_ltp is not None else len(rows) // 2
+        start = max(0, min(center - 5, len(rows) - 10))
+        rows = rows[start:start + 10]
     return {
         "underlying": payload.underlying,
         "expiry": common.get("expiryDt") or payload.expiry,
         "lot_size": lot_size,
-        "rows": sorted(by_strike.values(), key=lambda row: float(row["strike"])),
+        "rows": rows, "underlying_ltp": underlying_ltp, "atm_strike": atm_strike,
     }
 
 
@@ -743,6 +806,33 @@ def place_order(payload: OrderPayload):
 @app.get("/api/orders")
 def orders(limit: int = 20):
     limit = max(1, min(limit, 100))
+    if neo_authenticated and neo_client is not None and hasattr(neo_client, "order_report"):
+        try:
+            result = neo_client.order_report()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Kotak order book failed: {_kotak_exception_summary(exc)}") from exc
+        if isinstance(result, dict) and (
+            str(result.get("stCode")) in {"5203", "5200"}
+            or "no data" in str(result.get("errMsg", "")).lower()
+            or "no data" in str(result.get("emsg", "")).lower()
+        ):
+            return []
+        err = _kotak_response_error(result)
+        if err:
+            raise HTTPException(status_code=502, detail=f"Kotak order book: {err}")
+        normalized = []
+        for item in _rows_from_sdk_result(result)[:limit]:
+            raw = str(item.get("ordSt") or item.get("status") or item.get("stat") or "unknown").strip().lower()
+            status = "completed" if raw in {"complete", "completed", "traded", "filled"} else "pending" if raw in {"open", "pending", "trigger pending", "validation pending", "after market order req received", "put order req received", "modify pending", "partially filled"} else "cancelled" if "cancel" in raw else "rejected" if "reject" in raw else raw.replace(" ", "_")
+            order_id = str(item.get("nOrdNo") or item.get("order_id") or "")
+            normalized.append({"id": order_id, "broker_order_id": order_id, "mode": "live", "symbol": item.get("trdSym") or item.get("sym") or "—", "side": "BUY" if str(item.get("trnsTp", "")).upper() in {"B", "BUY"} else "SELL", "quantity": item.get("qty") or item.get("quantity") or 0, "product": item.get("prod") or "—", "order_type": item.get("prcTp") or "—", "status": status, "created_at": item.get("ordDtTm") or item.get("order_timestamp") or "", "message": item.get("rejRsn") or "", "cancel_allowed": status == "pending" and bool(order_id)})
+        return normalized
+    if not neo_authenticated:
+        try:
+            _require_neo_session()
+        except HTTPException as exc:
+            if exc.status_code not in {401, 403}:
+                raise
     with db() as conn:
         rows = conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [{
@@ -751,6 +841,118 @@ def orders(limit: int = 20):
         "product": row["product"], "order_type": row["order_type"], "status": row["status"],
         "broker_order_id": row["broker_order_id"], "message": row["message"],
     } for row in rows]
+
+
+@app.post("/api/orders/{order_id}/cancel")
+def cancel_order(order_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", order_id):
+        raise HTTPException(status_code=422, detail="Invalid broker order id")
+    client = _require_neo_session()
+    try:
+        book = client.order_report()
+        error = _kotak_response_error(book)
+        if error:
+            raise HTTPException(status_code=502, detail=f"Kotak order book: {error}")
+        target = next((row for row in _rows_from_sdk_result(book) if str(row.get("nOrdNo") or row.get("order_id") or "") == order_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Order is no longer in the broker order book; refresh its status")
+        status = str(target.get("ordSt") or target.get("status") or "").lower()
+        if status not in {"open", "pending", "trigger pending", "validation pending", "after market order req received", "put order req received", "modify pending", "partially filled"}:
+            raise HTTPException(status_code=409, detail=f"Order is {status or 'not pending'} and cannot be cancelled")
+        result = client.cancel_order(order_id=order_id, isVerify=True)
+        error = _kotak_response_error(result)
+        if error:
+            raise HTTPException(status_code=502, detail=f"Kotak cancellation failed: {error}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Kotak cancellation failed: {_kotak_exception_summary(exc)}") from exc
+    audit("live_order_cancel_requested", {"order_id": order_id})
+    return {"ok": True, "order_id": order_id, "message": "Cancellation request sent. Refresh the order book to confirm; the order may fill before Kotak processes the request."}
+
+
+@app.get("/api/indices/quotes")
+def index_quotes():
+    client = _market_data_client()
+    labels = (("NIFTY", "NIFTY"), ("BANK NIFTY", "BANKNIFTY"), ("SENSEX", "SENSEX"))
+    output = []
+    for label, underlying in labels:
+        try: quote = _index_quote(client, underlying)
+        except Exception: quote = {}
+        try: price = float(quote.get("ltp") or quote.get("last_price"))
+        except (TypeError, ValueError): price = None
+        output.append({"name": label, "ltp": price, "change": quote.get("change"), "change_percent": quote.get("per_change") or quote.get("change_percent")})
+    return {"indices": output, "updated_at": utc_now()}
+
+
+@app.get("/api/positions")
+def positions(closed: bool = False):
+    client = _require_neo_session()
+    try:
+        response = client.positions()
+        if isinstance(response, dict) and (
+            str(response.get("stCode")) in {"5203", "5200"}
+            or "no data" in str(response.get("errMsg", "")).lower()
+            or "no data" in str(response.get("emsg", "")).lower()
+        ):
+            raw_positions = []
+        else:
+            error = _kotak_response_error(response)
+            if error: raise HTTPException(status_code=502, detail=f"Kotak positions: {error}")
+            raw_positions = _rows_from_sdk_result(response)
+        if closed:
+            trade_result = client.trade_report()
+            if isinstance(trade_result, dict) and (
+                str(trade_result.get("stCode")) in {"5203", "5200"}
+                or "no data" in str(trade_result.get("errMsg", "")).lower()
+                or "no data" in str(trade_result.get("emsg", "")).lower()
+            ):
+                trades = []
+            else:
+                trade_error = _kotak_response_error(trade_result)
+                if trade_error:
+                    raise HTTPException(status_code=502, detail=f"Kotak trade book: {trade_error}")
+                trades = _rows_from_sdk_result(trade_result)
+            grouped: dict[str, dict[str, Any]] = {}
+            for trade in trades:
+                symbol = str(trade.get("trdSym") or trade.get("sym") or "—")
+                if symbol == "—": continue
+                group_key = (symbol, str(trade.get("prod") or ""), str(trade.get("exSeg") or ""))
+                row = grouped.setdefault(group_key, {"symbol": symbol, "product": trade.get("prod") or "", "exchange": trade.get("exSeg") or "", "buy_qty": 0.0, "sell_qty": 0.0, "buy_value": 0.0, "sell_value": 0.0})
+                try:
+                    qty = float(trade.get("qty") or trade.get("flQty") or trade.get("trdQty") or trade.get("fillQty") or trade.get("fldQty") or 0)
+                    price = float(trade.get("avgPrc") or trade.get("trdPrc") or trade.get("tradePrice") or trade.get("flPrc") or trade.get("prc") or 0)
+                except (TypeError, ValueError): continue
+                if qty <= 0 or price <= 0: continue
+                transaction = str(trade.get("trnsTp") or trade.get("trnsType") or "").upper()
+                if transaction not in {"B", "BUY", "S", "SELL"}: continue
+                is_buy = transaction in {"B", "BUY"}
+                if is_buy: row["buy_qty"] += qty; row["buy_value"] += qty * price
+                else: row["sell_qty"] += qty; row["sell_value"] += qty * price
+            closed_rows = []
+            for row in grouped.values():
+                matched = min(row["buy_qty"], row["sell_qty"])
+                if matched <= 0 or abs(row["buy_qty"] - row["sell_qty"]) > 1e-6: continue
+                avg_buy = row["buy_value"] / row["buy_qty"] if row["buy_qty"] else 0
+                avg_sell = row["sell_value"] / row["sell_qty"] if row["sell_qty"] else 0
+                row["quantity"] = 0; row["ltp"] = None; row["position_pnl"] = round((avg_sell - avg_buy) * matched, 2); row["mtm_pnl"] = None; row["pnl_error"] = None; row["closed"] = True
+                closed_rows.append(row)
+            return {"positions": closed_rows, "total_mtm": None, "total_position_pnl": sum(r["position_pnl"] for r in closed_rows), "pnl_complete": True, "updated_at": utc_now()}
+        output = []
+        for p in raw_positions:
+            seg = str(p.get("exSeg") or p.get("exchangeSegment") or "")
+            try: ltp = float(p.get("ltp"))
+            except (TypeError, ValueError): ltp = None
+            metrics = p
+            net_qty = metrics.get("netQty", p.get("qty") or p.get("netQty") or 0)
+            output.append({"symbol": p.get("trdSym") or p.get("sym") or "—", "exchange": seg, "quantity": net_qty, "ltp": ltp, "mtm_pnl": metrics.get("mtmPnl"), "position_pnl": metrics.get("positionPnl"), "pnl_error": metrics.get("pnlCalculationError") or ("Quote unavailable" if ltp is None else None), "closed": float(net_qty or 0) == 0})
+        complete = all(row["mtm_pnl"] is not None and row["position_pnl"] is not None for row in output if not row["closed"])
+        visible = [row for row in output if row["closed"] == closed]
+        return {"positions": visible, "total_mtm": sum(float(r["mtm_pnl"]) for r in output if not r["closed"]) if complete else None, "total_position_pnl": sum(float(r["position_pnl"]) for r in output if not r["closed"]) if complete else None, "pnl_complete": complete, "updated_at": utc_now()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Kotak positions/P&L failed: {_kotak_exception_summary(exc)}") from exc
 
 
 @app.get("/api/audit")
