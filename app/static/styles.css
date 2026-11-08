@@ -1894,9 +1894,42 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 600;
 }
 
+.chart-view-toggle {
+  font: 600 8.5px var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-view-toggle:hover {
+  background: var(--bg-surface-hover);
+  color: var(--ink-primary);
+  border-color: #2563eb;
+}
+
+.est-ltp-pill {
+  display: inline-block;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.12);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-right: 3px;
+}
+
+.est-ltp-tag {
+  color: var(--ink-muted);
+  font-size: 10.5px;
+}
+
 .tv-chart-canvas-wrap {
   width: 100%;
-  height: 340px;
+  height: 275px;
   position: relative;
   background: #ffffff;
 }

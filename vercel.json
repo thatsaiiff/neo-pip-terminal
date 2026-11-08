@@ -4,10 +4,14 @@
     { "src": "app/static/index.html", "use": "@vercel/static" },
     { "src": "app/static/styles.css", "use": "@vercel/static" },
     { "src": "app/static/app.js", "use": "@vercel/static" },
+    { "src": "app/static/chart.html", "use": "@vercel/static" },
+    { "src": "app/static/chart.css", "use": "@vercel/static" },
+    { "src": "app/static/chart.js", "use": "@vercel/static" },
     { "src": "app/static/lightweight-charts.js", "use": "@vercel/static" }
   ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://neo-pip-backend-production.up.railway.app/api/:path*" },
+    { "source": "/chart", "destination": "/app/static/chart.html" },
     { "source": "/", "destination": "/app/static/index.html" },
     { "source": "/static/:path*", "destination": "/app/static/:path*" }
   ],

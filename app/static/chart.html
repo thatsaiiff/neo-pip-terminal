@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Neo PIP — Advanced Pro Chart</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/chart.css?v=20261109-1">
+</head>
+<body class="chart-body">
+  <header class="chart-navbar">
+    <div class="nav-left">
+      <a href="/" class="nav-back-link" title="Back to Neo PIP Terminal">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        <span class="nav-back-text">Terminal</span>
+      </a>
+      <div class="nav-divider"></div>
+      <div class="symbol-box">
+        <input id="chart-symbol-input" type="text" value="NIFTY" spellcheck="false" autocomplete="off" title="Type symbol and hit Enter">
+        <button id="chart-symbol-apply" type="button" title="Apply symbol">↵</button>
+      </div>
+      <div class="symbol-chips">
+        <button class="sym-chip active" data-sym="NIFTY">NIFTY</button>
+        <button class="sym-chip" data-sym="BANKNIFTY">BANKNIFTY</button>
+        <button class="sym-chip" data-sym="FINNIFTY">FINNIFTY</button>
+        <button class="sym-chip" data-sym="SENSEX">SENSEX</button>
+      </div>
+      <div id="chart-quote-badge" class="quote-badge">
+        <span id="chart-ltp" class="quote-ltp">—</span>
+        <span id="chart-chg" class="quote-chg">—</span>
+      </div>
+    </div>
+
+    <div class="nav-center">
+      <div class="tf-group" role="group" aria-label="Timeframes">
+        <button type="button" class="tf-btn active" data-tf="5s" title="5-second scalper">5s</button>
+        <button type="button" class="tf-btn" data-tf="15s" title="15-second scalper">15s</button>
+        <button type="button" class="tf-btn" data-tf="1m" title="1-minute candles">1m</button>
+        <button type="button" class="tf-btn" data-tf="5m" title="5-minute candles">5m</button>
+        <button type="button" class="tf-btn" data-tf="15m" title="15-minute candles">15m</button>
+        <button type="button" class="tf-btn" data-tf="1h" title="1-hour candles">1h</button>
+        <button type="button" class="tf-btn" data-tf="1d" title="Daily candles">1D</button>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="indicator-group" role="group" aria-label="Indicators">
+        <button type="button" id="toggle-ema9" class="ind-btn active" title="Toggle 9 EMA (Blue)">
+          <span class="ind-dot ema9-dot"></span> EMA 9
+        </button>
+        <button type="button" id="toggle-ema21" class="ind-btn active" title="Toggle 21 EMA (Orange)">
+          <span class="ind-dot ema21-dot"></span> EMA 21
+        </button>
+        <button type="button" id="toggle-vpvr" class="ind-btn active" title="Toggle Volume Profile Visible Range (VPVR) with Point of Control">
+          <span class="ind-icon">📊</span> VPVR
+        </button>
+        <button type="button" id="toggle-vol" class="ind-btn active" title="Toggle Volume Histogram">
+          Vol
+        </button>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <div id="ema-cross-badge" class="cross-badge neutral" title="EMA 9 / 21 Cross Status">
+        <span class="cross-dot"></span>
+        <span id="ema-cross-text">EMA Cross: Neutral</span>
+      </div>
+      <div class="nav-divider"></div>
+      <div class="scalper-mini">
+        <span class="mini-label">Lots:</span>
+        <input id="chart-lots-input" type="number" value="1" min="1" max="500">
+        <button id="chart-buy-btn" class="chart-buy-btn" type="button" title="1-Click Buy Market">BUY MKT</button>
+        <button id="chart-exit-btn" class="chart-exit-btn" type="button" title="Panic Exit All Positions">EXIT ALL</button>
+      </div>
+      <button id="chart-token-btn" class="token-icon-btn" type="button" title="Upstox API Token Status">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Legend & Status Strip -->
+  <div class="chart-subbar">
+    <div class="legend-wrap">
+      <span class="legend-sym" id="leg-symbol">NSE:NIFTY</span>
+      <span class="leg-val">O: <b id="leg-o">—</b></span>
+      <span class="leg-val">H: <b id="leg-h">—</b></span>
+      <span class="leg-val">L: <b id="leg-l">—</b></span>
+      <span class="leg-val">C: <b id="leg-c">—</b></span>
+      <span class="leg-val">Vol: <b id="leg-v">—</b></span>
+      <span class="legend-sep">|</span>
+      <span class="legend-ema ema9-val">EMA 9: <b id="leg-ema9">—</b></span>
+      <span class="legend-ema ema21-val">EMA 21: <b id="leg-ema21">—</b></span>
+      <span class="legend-sep">|</span>
+      <span class="legend-poc">POC (VPVR): <b id="leg-poc">—</b></span>
+    </div>
+    <div class="status-wrap">
+      <span id="chart-feed-status" class="feed-status">Connecting to Upstox feed…</span>
+    </div>
+  </div>
+
+  <!-- Chart Main Canvas -->
+  <main class="chart-container-wrap">
+    <div id="chart-canvas" class="chart-canvas"></div>
+    <canvas id="vpvr-canvas" class="vpvr-overlay"></canvas>
+  </main>
+
+  <!-- Quick Upstox Token Modal -->
+  <div id="token-modal" class="token-modal-backdrop hidden">
+    <div class="token-modal-card">
+      <div class="token-modal-header">
+        <h3>Upstox API Feed Setup</h3>
+        <button id="close-token-modal" class="modal-close-btn" type="button">×</button>
+      </div>
+      <p class="token-modal-desc">
+        Upstox provides free sub-minute and historical chart candles. For live streaming during active market hours (09:15–15:30), paste your token from <a href="https://developer.upstox.com" target="_blank" rel="noopener">developer.upstox.com</a>.
+      </p>
+      <div class="token-status-pill" id="token-status-pill">Checking status…</div>
+      <label class="token-input-field">
+        <span>Upstox Access Token</span>
+        <input id="upstox-token-val" type="password" placeholder="Paste access token here">
+      </label>
+      <div class="token-modal-actions">
+        <button id="save-token-submit" type="button" class="token-save-btn">Save Token</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast">
+    <span id="toast-message"></span>
+  </div>
+
+  <script src="/static/lightweight-charts.js"></script>
+  <script src="/static/chart.js?v=20261109-1"></script>
+</body>
+</html>

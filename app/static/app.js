@@ -677,14 +677,15 @@
     const estVal = $('estimate-value');
     const estCap = estVal.nextElementSibling;
 
+    const unitLabel = (state.exchangeSegment || '').includes('fo') ? 'unit' : 'share';
     if (type === 'L' && Number.isFinite(price) && price > 0) {
       estVal.textContent = money(quantity * price);
       estVal.style.color = 'var(--ink-primary)';
-      estCap.textContent = 'Limit-price estimate';
+      estCap.innerHTML = `<span class="est-ltp-pill">@ ${money(price)} / ${unitLabel}</span> <span class="est-ltp-tag">Limit price</span>`;
     } else if (Number.isFinite(state.currentLtp) && state.currentLtp > 0) {
       estVal.textContent = money(quantity * state.currentLtp);
       estVal.style.color = 'var(--ink-primary)';
-      estCap.textContent = 'Indicative value at LTP';
+      estCap.innerHTML = `<span class="est-ltp-pill">@ ${money(state.currentLtp)} / ${unitLabel}</span> <span class="est-ltp-tag">at LTP</span>`;
     } else {
       estVal.textContent = '—';
       estVal.style.color = '';
@@ -748,6 +749,7 @@
   let currentChartInterval = '5s';
   let active5sCandle = null;
   let chartLastCandleTime = null;
+  let chartViewUnderlying = false;
 
   function initLightweightChart() {
     const container = $('tv-chart-canvas-wrap');
@@ -756,7 +758,7 @@
 
     tvChart = window.LightweightCharts.createChart(container, {
       width: container.clientWidth || 360,
-      height: 340,
+      height: 275,
       layout: {
         background: { type: 'solid', color: '#ffffff' },
         textColor: '#334155',
@@ -773,11 +775,15 @@
       rightPriceScale: {
         borderColor: '#e2e8f0',
         scaleMargins: { top: 0.1, bottom: 0.22 },
+        autoScale: true,
       },
       timeScale: {
         borderColor: '#e2e8f0',
         timeVisible: true,
         secondsVisible: true,
+        visible: true,
+        fixLeftEdge: true,
+        fixRightEdge: true,
       },
     });
 
@@ -816,6 +822,15 @@
         tvChart.applyOptions({ width: container.clientWidth });
       }
     });
+
+    const viewToggle = $('tv-chart-view-toggle');
+    if (viewToggle) {
+      viewToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chartViewUnderlying = !chartViewUnderlying;
+        loadChartCandles(state.currentSymbol, currentChartInterval);
+      });
+    }
   }
 
   async function loadChartCandles(symbol, interval) {
@@ -825,15 +840,37 @@
     const sym = symbol || state.currentSymbol || 'NIFTY';
     const tf = interval || currentChartInterval || '5s';
     currentChartInterval = tf;
+    const token = state.selectedInstrument?.instrument_token || '';
 
     const statusEl = $('tv-chart-status');
     if (statusEl) statusEl.textContent = `Fetching ${tf} candles…`;
 
     try {
-      const data = await api(`/api/chart/candles?symbol=${encodeURIComponent(sym)}&interval=${encodeURIComponent(tf)}`);
+      const url = `/api/chart/candles?symbol=${encodeURIComponent(sym)}&token=${encodeURIComponent(token)}&interval=${encodeURIComponent(tf)}&use_underlying=${chartViewUnderlying ? 'true' : 'false'}`;
+      const data = await api(url);
       if (!data.candles || !data.candles.length) {
         if (statusEl) statusEl.textContent = 'No candle data available';
         return;
+      }
+
+      const viewToggle = $('tv-chart-view-toggle');
+      if (viewToggle) {
+        if (data.is_option || token) {
+          viewToggle.classList.remove('hidden');
+          const toggleText = viewToggle.querySelector('.view-toggle-text') || viewToggle;
+          toggleText.textContent = chartViewUnderlying ? 'Show Contract' : 'Show Spot';
+        } else {
+          viewToggle.classList.add('hidden');
+        }
+      }
+
+      const label = $('tv-chart-symbol-label');
+      if (label) {
+        if (chartViewUnderlying) {
+          label.textContent = `SPOT: ${data.symbol}`;
+        } else {
+          label.textContent = state.selectedInstrument?.symbol_name || data.symbol;
+        }
       }
 
       const candles = data.candles.map(c => ({
@@ -873,6 +910,11 @@
 
   function updateLiveChartTick(ltp) {
     if (!tvCandleSeries || !ltp || ltp <= 0) return;
+    // If viewing underlying spot while tick is an option contract LTP, do not distort spot
+    if (chartViewUnderlying && ltp < 1000 && (active5sCandle?.close || 0) > 10000) return;
+    // If viewing option while tick is an index (25000), do not distort option
+    if (!chartViewUnderlying && ltp > 10000 && (active5sCandle?.close || 0) < 1000) return;
+
     const nowSec = Math.floor(Date.now() / 1000);
     const intervalSec = currentChartInterval === '15s' ? 15 : (currentChartInterval === '1m' ? 60 : (currentChartInterval === '5m' ? 300 : (currentChartInterval === '15m' ? 900 : 5)));
     const bucketTime = Math.floor(nowSec / intervalSec) * intervalSec;
@@ -1631,6 +1673,20 @@
       if (modalIp) {
         modalIp.textContent = state.kotakEgressIp || state.serverEgressIp || 'Fetching...';
       }
+      api('/api/chart/upstox-status').then(res => {
+        const uStatus = $('modal-upstox-status');
+        if (uStatus) {
+          if (res.token_configured) {
+            uStatus.textContent = `Active (${res.token_preview})`;
+            uStatus.style.background = 'rgba(16,185,129,0.25)';
+            uStatus.style.color = '#34d399';
+          } else {
+            uStatus.textContent = 'Not Configured';
+            uStatus.style.background = 'rgba(239,68,68,0.25)';
+            uStatus.style.color = '#f87171';
+          }
+        }
+      }).catch(() => {});
       state.mode = data.mode || 'simulation';
       updateModeUI();
 
@@ -1849,9 +1905,32 @@
   if ($('tv-chart-popout')) {
     $('tv-chart-popout').addEventListener('click', (e) => {
       e.stopPropagation();
-      const symLabel = $('tv-chart-symbol-label')?.textContent || 'NSE:NIFTY';
-      const popoutUrl = `https://in.tradingview.com/chart/?symbol=${encodeURIComponent(symLabel)}`;
-      window.open(popoutUrl, '_blank', 'noopener,noreferrer');
+      const sym = state.selectedInstrument?.trading_symbol || state.currentSymbol || 'NIFTY';
+      const tok = state.selectedInstrument?.instrument_token || '';
+      const popoutUrl = `/chart?symbol=${encodeURIComponent(sym)}&token=${encodeURIComponent(tok)}&interval=${encodeURIComponent(currentChartInterval)}`;
+      window.open(popoutUrl, '_blank', 'width=1280,height=820');
+    });
+  }
+
+  if ($('save-upstox-token-btn')) {
+    $('save-upstox-token-btn').addEventListener('click', async () => {
+      const input = $('upstox-token-input');
+      const token = input ? input.value.trim() : '';
+      if (!token) {
+        toast('Please paste your Upstox access token first.', 'warning');
+        return;
+      }
+      try {
+        const res = await api('/api/chart/upstox-token', {
+          method: 'POST',
+          body: JSON.stringify({ token })
+        });
+        toast(res.message || 'Upstox token saved and activated!', 'success');
+        refreshStatus();
+        if (input) input.value = '';
+      } catch (err) {
+        toast(`Failed to save token: ${cleanErrorMessage(err.message)}`, 'error');
+      }
     });
   }
 

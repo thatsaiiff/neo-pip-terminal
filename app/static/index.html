@@ -211,6 +211,9 @@
             <div class="tv-chart-title-wrap">
               <span id="tv-chart-symbol-label">NSE:NIFTY</span>
               <span id="tv-chart-tf-badge" class="chart-tf-badge">5s SCALPER</span>
+              <button id="tv-chart-view-toggle" class="chart-view-toggle hidden" type="button" title="Switch between Option Contract and Underlying Spot Index">
+                <span class="view-toggle-text">Show Spot</span>
+              </button>
             </div>
             <div id="tv-chart-legend" class="tv-chart-legend">
               <span class="leg-item">O: <b id="leg-o">—</b></span>
@@ -348,7 +351,7 @@
           <div class="summary-col">
             <span class="summary-label">EST. VALUE</span>
             <strong id="estimate-value" class="summary-val">—</strong>
-            <small class="estimate-caption">Price unavailable</small>
+            <small id="estimate-caption" class="estimate-caption">Price unavailable</small>
           </div>
         </div>
 
@@ -557,6 +560,19 @@
         <span>Trading MPIN</span>
         <input id="mpin-input" type="password" inputmode="numeric" maxlength="8" placeholder="Your Kotak trading MPIN" autocomplete="off">
       </label>
+      <div class="connect-callout" style="border-left: 3px solid #10b981; margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <strong style="color: #34d399;">Upstox 5s Chart Feed Token</strong>
+          <span id="modal-upstox-status" style="font-family: monospace; font-size: 11px; font-weight: 600; color: #fff; background: rgba(16,185,129,0.25); padding: 2px 8px; border-radius: 4px;">Checking...</span>
+        </div>
+        <p style="margin: 0 0 6px 0; font-size: 12px; color: #94a3b8; line-height: 1.4;">
+          Optional: Paste your daily Upstox token for sub-second live intraday market feed. (Historical candles work 24/7 without token).
+        </p>
+        <div style="display: flex; gap: 8px;">
+          <input id="upstox-token-input" type="password" placeholder="Paste Upstox access token" style="flex: 1; height: 36px; font-size: 13px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 0 10px; color: #fff;">
+          <button id="save-upstox-token-btn" type="button" class="secondary-button" style="height: 36px; padding: 0 12px; font-size: 12px;">Save Token</button>
+        </div>
+      </div>
       <div class="modal-actions">
         <button id="cancel-connect" class="secondary-button" type="button">Cancel</button>
         <button id="submit-connect" class="confirm-order-button" type="button">Authenticate</button>

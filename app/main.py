@@ -89,6 +89,11 @@ def init_db() -> None:
             event_type TEXT NOT NULL,
             detail TEXT NOT NULL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
         conn.execute("""CREATE TABLE IF NOT EXISTS sltp_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -115,9 +120,37 @@ def audit(event_type: str, detail: dict[str, Any]) -> None:
         conn.commit()
 
 
+def _get_stored_setting(key: str) -> str | None:
+    try:
+        with db() as conn:
+            row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+            if row:
+                return str(row["value"])
+    except Exception:
+        pass
+    return None
+
+
+def _set_stored_setting(key: str, value: str) -> None:
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (key, value, utc_now()),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global UPSTOX_ACCESS_TOKEN
     init_db()
+    if not UPSTOX_ACCESS_TOKEN:
+        saved_token = _get_stored_setting("UPSTOX_ACCESS_TOKEN")
+        if saved_token:
+            UPSTOX_ACCESS_TOKEN = saved_token
     yield
 
 
@@ -408,7 +441,7 @@ async def local_only(request: Request, call_next):
                 response.set_cookie("neo_lan_access", LAN_ACCESS_TOKEN, httponly=True, samesite="strict", secure=False, max_age=43200, path="/")
                 return response
             return JSONResponse(status_code=401, content={"detail": "Invalid local network access key"})
-        if request.url.path in {"/", "/api/health", "/static/styles.css", "/static/app.js"}:
+        if request.url.path in {"/", "/chart", "/api/health", "/static/styles.css", "/static/app.js", "/static/chart.css", "/static/chart.js", "/static/lightweight-charts.js"}:
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -426,6 +459,14 @@ async def local_only(request: Request, call_next):
 
 @app.get("/")
 def index():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/chart")
+def chart_view():
+    chart_file = STATIC_DIR / "chart.html"
+    if chart_file.exists():
+        return FileResponse(chart_file)
     return FileResponse(STATIC_DIR / "index.html")
 
 
@@ -1508,26 +1549,48 @@ UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
 }
 
 
-def _resolve_upstox_instrument(symbol: str) -> str:
+def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[str, bool]:
     sym = (symbol or "NIFTY").strip().upper()
+    if token and str(token).strip():
+        clean_tok = str(token).strip()
+        if "|" in clean_tok:
+            return clean_tok, True
+        return f"NSE_FO|{clean_tok}", True
+
     if sym in UPSTOX_INSTRUMENT_MAP:
-        return UPSTOX_INSTRUMENT_MAP[sym]
-    if sym.startswith("BANKNIFTY"):
-        return UPSTOX_INSTRUMENT_MAP["BANKNIFTY"]
-    if sym.startswith("FINNIFTY"):
-        return UPSTOX_INSTRUMENT_MAP["FINNIFTY"]
-    if sym.startswith("MIDCPNIFTY"):
-        return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"]
-    if sym.startswith("NIFTY"):
-        return UPSTOX_INSTRUMENT_MAP["NIFTY"]
-    if sym.startswith("SENSEX"):
-        return UPSTOX_INSTRUMENT_MAP["SENSEX"]
-    if sym.startswith("BANKEX"):
-        return UPSTOX_INSTRUMENT_MAP["BANKEX"]
+        return UPSTOX_INSTRUMENT_MAP[sym], False
+
+    is_option = bool(re.search(r"(CE|PE)$", sym))
+    if is_option and neo_client is not None:
+        try:
+            res = neo_client.search_scrip(exchange_segment="nse_fo", symbol=sym)
+            rows = _rows_from_sdk_result(res)
+            if rows:
+                tok = rows[0].get("pSymbol") or rows[0].get("instrument_token") or rows[0].get("token")
+                if tok:
+                    return f"NSE_FO|{tok}", True
+        except Exception:
+            pass
+
+    if not is_option:
+        if sym.startswith("BANKNIFTY"):
+            return UPSTOX_INSTRUMENT_MAP["BANKNIFTY"], False
+        if sym.startswith("FINNIFTY"):
+            return UPSTOX_INSTRUMENT_MAP["FINNIFTY"], False
+        if sym.startswith("MIDCPNIFTY"):
+            return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"], False
+        if sym.startswith("NIFTY"):
+            return UPSTOX_INSTRUMENT_MAP["NIFTY"], False
+        if sym.startswith("SENSEX"):
+            return UPSTOX_INSTRUMENT_MAP["SENSEX"], False
+        if sym.startswith("BANKEX"):
+            return UPSTOX_INSTRUMENT_MAP["BANKEX"], False
+
     m = re.match(r"^([A-Z&_-]+?)(\d{2}[A-Z]{3}|\d{2}[0-9]{2})", sym)
-    if m and m.group(1) in UPSTOX_INSTRUMENT_MAP:
-        return UPSTOX_INSTRUMENT_MAP[m.group(1)]
-    return UPSTOX_INSTRUMENT_MAP["NIFTY"]
+    if m and m.group(1) in UPSTOX_INSTRUMENT_MAP and not is_option:
+        return UPSTOX_INSTRUMENT_MAP[m.group(1)], False
+
+    return UPSTOX_INSTRUMENT_MAP.get(sym, UPSTOX_INSTRUMENT_MAP["NIFTY"]), is_option
 
 
 def _expand_1m_to_subminute(candles_1m: list[list[Any]], interval_sec: int = 5) -> list[dict[str, Any]]:
@@ -1626,9 +1689,29 @@ def _aggregate_1m_to_higher(candles_1m: list[list[Any]], interval_minutes: int) 
     return sorted(buckets.values(), key=lambda x: x["time"])
 
 
+class UpstoxTokenPayload(BaseModel):
+    token: str
+
+
+@app.post("/api/chart/upstox-token")
+def set_upstox_token(payload: UpstoxTokenPayload):
+    global UPSTOX_ACCESS_TOKEN
+    t = payload.token.strip()
+    UPSTOX_ACCESS_TOKEN = t
+    _set_stored_setting("UPSTOX_ACCESS_TOKEN", t)
+    audit("UPSTOX_TOKEN_SAVED", {"configured": bool(t), "preview": (t[:4] + "..." + t[-4:]) if len(t) > 8 else None})
+    return {
+        "ok": True,
+        "authenticated": bool(t),
+        "token_configured": bool(t),
+        "token_preview": (t[:4] + "..." + t[-4:]) if len(t) > 8 else None,
+        "message": "Upstox access token successfully saved and activated." if t else "Upstox token cleared.",
+    }
+
+
 @app.get("/api/chart/upstox-status")
 def upstox_status():
-    token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or UPSTOX_ACCESS_TOKEN
+    token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
     return {
         "ok": True,
         "authenticated": bool(token),
@@ -1638,14 +1721,34 @@ def upstox_status():
 
 
 @app.get("/api/chart/candles")
-def chart_candles(symbol: str = "NIFTY", interval: str = "5s", date: str | None = None):
-    inst_key = _resolve_upstox_instrument(symbol)
+def chart_candles(
+    symbol: str = "NIFTY",
+    token: str | None = None,
+    interval: str = "5s",
+    date: str | None = None,
+    use_underlying: bool = False,
+):
+    sym = (symbol or "NIFTY").strip().upper()
+    if use_underlying and re.search(r"(CE|PE)$", sym):
+        underlying_sym = "NIFTY"
+        if "BANKNIFTY" in sym:
+            underlying_sym = "BANKNIFTY"
+        elif "FINNIFTY" in sym:
+            underlying_sym = "FINNIFTY"
+        elif "MIDCPNIFTY" in sym:
+            underlying_sym = "MIDCPNIFTY"
+        elif "SENSEX" in sym:
+            underlying_sym = "SENSEX"
+        inst_key, is_option = _resolve_upstox_instrument(underlying_sym)
+    else:
+        inst_key, is_option = _resolve_upstox_instrument(sym, token=token)
+
     candles_1m = []
     selected_date = date
-    token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or UPSTOX_ACCESS_TOKEN
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
     upstox_headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json"}
-    if token:
-        upstox_headers["Authorization"] = f"Bearer {token}"
+    if up_token:
+        upstox_headers["Authorization"] = f"Bearer {up_token}"
 
     # 1. If requesting live/today's chart, first attempt intraday endpoint
     if not selected_date:
@@ -1712,6 +1815,7 @@ def chart_candles(symbol: str = "NIFTY", interval: str = "5s", date: str | None 
         "ok": True,
         "symbol": symbol,
         "instrument_key": inst_key,
+        "is_option": is_option,
         "interval": interval,
         "date": selected_date,
         "candles": res_candles,

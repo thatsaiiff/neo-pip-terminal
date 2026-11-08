@@ -69,7 +69,7 @@ echo "📂 Setting up application in ${APP_DIR}..."
 
 if [ ! -d "${APP_DIR}/.git" ]; then
   mkdir -p "${APP_DIR}"
-  git clone https://github.com/saif-ali-khan/neo-pip-terminal.git "${APP_DIR}" || {
+  git clone https://github.com/thatsaiiff/neo-pip-terminal.git "${APP_DIR}" || {
     echo "⚠️ Git clone failed (repository might be private). If this is a private repo, clone manually into ${APP_DIR}."
   }
 else

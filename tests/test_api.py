@@ -469,6 +469,25 @@ def test_upstox_status_endpoint(client):
     assert "token_configured" in data
 
 
+def test_set_upstox_token_endpoint(client):
+    res = client.post("/api/chart/upstox-token", json={"token": "test_token_1234567890"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["token_configured"] is True
+    assert data["token_preview"] is not None
+
+    # Check status endpoint reflects it
+    status_res = client.get("/api/chart/upstox-status")
+    assert status_res.status_code == 200
+    assert status_res.json()["token_configured"] is True
+
+
+def test_chart_view_endpoint(client):
+    res = client.get("/chart")
+    assert res.status_code == 200
+
+
 
 
 
