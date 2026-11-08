@@ -56,14 +56,53 @@
     }
   }
 
+  const AVAILABLE_EXCHANGES = [
+    { value: 'all', label: 'ALL', orderLabel: 'ALL (All Exchanges)' },
+    { value: 'nse_fo', label: 'NSE F&O', orderLabel: 'NSE Futures & Options' },
+    { value: 'bse_fo', label: 'BSE F&O', orderLabel: 'BSE Futures & Options' },
+    { value: 'nse_cm', label: 'NSE CASH', orderLabel: 'NSE Cash' },
+    { value: 'bse_cm', label: 'BSE CASH', orderLabel: 'BSE Cash' },
+    { value: 'mcx_fo', label: 'MCX', orderLabel: 'MCX Futures' }
+  ];
+
   function segmentLabel(segment) {
     return ({
+      all: 'ALL',
       nse_fo: 'NSE F&O',
       bse_fo: 'BSE F&O',
       nse_cm: 'NSE CASH',
       bse_cm: 'BSE CASH',
       mcx_fo: 'MCX'
     })[segment] || String(segment || 'NSE F&O').toUpperCase();
+  }
+
+  function updateExchangeChip(segment) {
+    state.searchSegment = segment || state.searchSegment || 'nse_fo';
+    const labelEl = $('exchange-chip-label') || $('exchange-chip');
+    if (labelEl) {
+      labelEl.textContent = segmentLabel(state.searchSegment);
+    }
+    const chip = $('exchange-chip');
+    if (chip) {
+      chip.classList.toggle('active-all', state.searchSegment === 'all');
+      chip.setAttribute('title', `Exchange: ${segmentLabel(state.searchSegment)} (Click to cycle)`);
+    }
+    if ($('exchange-select') && $('exchange-select').value !== state.searchSegment) {
+      $('exchange-select').value = state.searchSegment;
+    }
+  }
+
+  function cycleExchangeSegment() {
+    const current = state.searchSegment || 'nse_fo';
+    const currentIndex = AVAILABLE_EXCHANGES.findIndex(e => e.value === current);
+    const nextIndex = (currentIndex + 1) % AVAILABLE_EXCHANGES.length;
+    const next = AVAILABLE_EXCHANGES[nextIndex];
+    state.searchSegment = next.value;
+    if (next.value !== 'all') {
+      state.exchangeSegment = next.value;
+    }
+    updateExchangeChip(next.value);
+    toast(`Exchange: ${next.label}${next.value === 'all' ? ' (Search all exchanges)' : ''}`, 'info', 1500);
   }
 
   function cleanErrorMessage(raw) {
@@ -216,10 +255,10 @@
   function renderSymbol(symbol, segment, source, timestamp) {
     state.currentSymbol = String(symbol || 'NIFTY').toUpperCase();
     state.exchangeSegment = segment || state.exchangeSegment || 'nse_fo';
+    state.searchSegment = state.exchangeSegment;
     state.symbolSource = source || 'manual';
     $('symbol-input').value = state.currentSymbol;
-    $('exchange-select').value = state.exchangeSegment;
-    $('exchange-chip').textContent = segmentLabel(state.exchangeSegment);
+    updateExchangeChip(state.exchangeSegment);
     $('symbol-subtitle').textContent = source === 'chrome extension'
       ? `Synced from Kotak Neo · ${timestamp ? formatTime(timestamp) : 'just now'}`
       : (source === 'manual override' ? 'Manual symbol override' : 'Select a symbol on Kotak Neo or enter one above');
@@ -242,9 +281,9 @@
     state.selectedInstrument = instrument;
     state.currentSymbol = instrument.trading_symbol;
     state.exchangeSegment = instrument.exchange_segment;
+    state.searchSegment = instrument.exchange_segment;
     $('symbol-input').value = instrument.trading_symbol;
-    $('exchange-select').value = instrument.exchange_segment;
-    $('exchange-chip').textContent = segmentLabel(instrument.exchange_segment);
+    updateExchangeChip(instrument.exchange_segment);
     $('lot-size-input').value = instrument.lot_size;
     $('product-select').value = instrument.defaultProduct || 'CNC';
     $('type-select').value = 'MKT';
@@ -266,17 +305,18 @@
     const button = $('search-instruments');
     button.disabled = true;
     button.textContent = 'Searching…';
+    const segment = state.searchSegment || $('exchange-select').value || 'all';
     try {
       const data = await api('/api/instruments/search', {
         method: 'POST',
-        body: JSON.stringify({ query, exchange_segment: $('exchange-select').value })
+        body: JSON.stringify({ query, exchange_segment: segment })
       });
       const results = $('instrument-results');
       results.replaceChildren();
       if (!data.instruments || !data.instruments.length) {
         const empty = document.createElement('div');
         empty.className = 'instrument-result-empty';
-        empty.textContent = cloudDemoMode ? 'Instrument search is disabled in the cloud demo.' : 'No matching Kotak instruments found';
+        empty.textContent = cloudDemoMode ? 'Instrument search is disabled in the cloud demo.' : `No matching Kotak instruments found (${segmentLabel(segment)})`;
         results.appendChild(empty);
       } else {
         for (const instrument of data.instruments) {
@@ -284,11 +324,22 @@
           option.type = 'button';
           option.className = 'instrument-result';
           option.setAttribute('role', 'option');
+
+          const topRow = document.createElement('div');
+          topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+
           const name = document.createElement('strong');
           name.textContent = instrument.trading_symbol;
+
+          const segBadge = document.createElement('span');
+          segBadge.textContent = segmentLabel(instrument.exchange_segment);
+          segBadge.style.cssText = 'font: 600 9px var(--font-mono); padding: 1px 6px; border-radius: 3px; background: var(--bg-surface-subtle); border: 1px solid var(--border-light); color: var(--ink-secondary); margin-left: 6px; letter-spacing: 0.04em;';
+
+          topRow.append(name, segBadge);
+
           const meta = document.createElement('span');
-          meta.textContent = `${instrument.symbol_name || segmentLabel(instrument.exchange_segment)} · lot ${instrument.lot_size}${instrument.expiry ? ` · ${instrument.expiry}` : ''}${instrument.option_type ? ` · ${instrument.option_type}` : ''}`;
-          option.append(name, meta);
+          meta.textContent = `${instrument.symbol_name || ''} · lot ${instrument.lot_size}${instrument.expiry ? ` · ${instrument.expiry}` : ''}${instrument.option_type ? ` · ${instrument.option_type}` : ''}`;
+          option.append(topRow, meta);
           option.addEventListener('click', () => renderInstrument(instrument));
           results.appendChild(option);
         }
@@ -479,12 +530,20 @@
     if ((type === 'L' || type === 'SL') && (!Number.isFinite(price) || price <= 0)) throw new Error('Enter a valid limit price.');
     if ((type === 'SL' || type === 'SL-M') && (!Number.isFinite(trigger) || trigger <= 0)) throw new Error('Enter a valid trigger price.');
 
+    let segment = $('exchange-select').value;
+    if (segment === 'all') {
+      segment = state.selectedInstrument ? state.selectedInstrument.exchange_segment : 'nse_fo';
+      $('exchange-select').value = segment;
+      state.exchangeSegment = segment;
+      updateExchangeChip(segment);
+    }
+
     return {
       symbol,
       side,
       lots,
       lot_size: lotSize,
-      exchange_segment: $('exchange-select').value,
+      exchange_segment: segment,
       product: $('product-select').value,
       order_type: type,
       price,
@@ -1116,9 +1175,15 @@
 
   $('type-select').addEventListener('change', updateOrderTypeFields);
   $('exchange-select').addEventListener('change', () => {
-    state.exchangeSegment = $('exchange-select').value;
-    $('exchange-chip').textContent = segmentLabel(state.exchangeSegment);
+    state.searchSegment = $('exchange-select').value;
+    if (state.searchSegment !== 'all') {
+      state.exchangeSegment = state.searchSegment;
+    }
+    updateExchangeChip(state.searchSegment);
   });
+  if ($('exchange-chip')) {
+    $('exchange-chip').addEventListener('click', cycleExchangeSegment);
+  }
 
   // Clickable index tiles for quick switching
   const tileHandlers = [
@@ -1232,7 +1297,7 @@
   updateOrderTypeFields();
   setSide('BUY');
   $('exchange-select').value = 'nse_fo';
-  $('exchange-chip').textContent = segmentLabel('nse_fo');
+  updateExchangeChip('nse_fo');
   $('product-select').value = 'MIS';
   if ($('validity-select')) $('validity-select').value = 'DAY';
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);

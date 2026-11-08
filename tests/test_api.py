@@ -302,9 +302,29 @@ def test_index_quotes_endpoint(client):
 def test_egress_ip_endpoint(client):
     res = client.get("/api/egress-ip")
     assert res.status_code == 200
-    data = res.json()
+    data = response = res.json()
     assert data["ok"] is True
     assert "railway_static_ips" in data
     assert len(data["railway_static_ips"]) == 3
+
+
+def test_search_instruments_all_segments(client, monkeypatch):
+    class MockClient:
+        def search_scrip(self, exchange_segment, symbol, **kwargs):
+            if exchange_segment == "nse_fo":
+                return {"data": [{"pSymbol": "123", "pTrdSymbol": "NIFTY24DEC25000CE", "pSymbolName": "NIFTY", "lLotSize": 25}]}
+            elif exchange_segment == "nse_cm":
+                return {"data": [{"pSymbol": "456", "pTrdSymbol": "RELIANCE", "pSymbolName": "RELIANCE", "lLotSize": 1}]}
+            return {"data": []}
+
+    monkeypatch.setattr(main, "_market_data_client", lambda: MockClient())
+    res = client.post("/api/instruments/search", json={"query": "NIFTY", "exchange_segment": "all"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "instruments" in data
+    assert len(data["instruments"]) >= 1
+    segments = [inst["exchange_segment"] for inst in data["instruments"]]
+    assert "nse_fo" in segments
+
 
 

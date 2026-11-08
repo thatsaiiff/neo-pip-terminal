@@ -98,7 +98,10 @@
               <input id="symbol-input" type="text" value="NIFTY" spellcheck="false" autocomplete="off" aria-label="Trading symbol" maxlength="64">
               <button id="apply-symbol" class="apply-symbol" aria-label="Apply symbol" title="Apply entered symbol">↵</button>
             </div>
-            <span id="exchange-chip" class="exchange-chip">NSE F&amp;O</span>
+            <button id="exchange-chip" class="exchange-chip" type="button" title="Click to cycle exchange segment (ALL, NSE F&O, BSE F&O, NSE Cash, BSE Cash, MCX)">
+              <span id="exchange-chip-label">NSE F&amp;O</span>
+              <svg class="chip-chevron" viewBox="0 0 10 6" width="8" height="6" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1l4 4 4-4"/></svg>
+            </button>
           </div>
         </div>
 
@@ -185,6 +188,7 @@
           <label class="field field-wide">
             <span>Exchange segment</span>
             <select id="exchange-select">
+              <option value="all">ALL Exchanges &amp; Segments</option>
               <option value="nse_fo">NSE Futures &amp; Options</option>
               <option value="bse_fo">BSE Futures &amp; Options</option>
               <option value="nse_cm">NSE Cash</option>

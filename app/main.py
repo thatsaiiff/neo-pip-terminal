@@ -150,7 +150,7 @@ class BridgeSymbolPayload(BaseModel):
 
 class InstrumentSearchPayload(BaseModel):
     query: str = Field(min_length=1, max_length=40)
-    exchange_segment: Literal["nse_cm", "bse_cm", "nse_fo", "bse_fo", "mcx_fo"] = "nse_fo"
+    exchange_segment: Literal["all", "nse_cm", "bse_cm", "nse_fo", "bse_fo", "mcx_fo"] = "all"
 
 
 class InstrumentQuotePayload(BaseModel):
@@ -685,37 +685,60 @@ def _require_neo_session():
     return neo_client
 
 
+def _search_segment_scrip(segment: str, query: str) -> list[tuple[str, dict[str, Any]]]:
+    try:
+        result = _market_data_client().search_scrip(exchange_segment=segment, symbol=query)
+        rows = _rows_from_sdk_result(result)
+    except Exception:
+        rows = []
+    strike_match = re.search(r"\d{4,6}", query)
+    if strike_match and segment in {"nse_fo", "bse_fo"}:
+        try:
+            api_client = _market_data_client()
+            roots = ["SENSEX"] if segment == "bse_fo" else ["NIFTY", "BANKNIFTY"]
+            for root in roots:
+                rows.extend(_rows_from_sdk_result(api_client.search_scrip(
+                    exchange_segment=segment, symbol=root,
+                    option_type="CE,PE", strike_price=strike_match.group(0),
+                )))
+        except Exception:
+            pass
+    return [(segment, r) for r in rows if isinstance(r, dict)]
+
+
 @app.post("/api/instruments/search")
 def search_instruments(payload: InstrumentSearchPayload):
     query = payload.query.strip().upper()
-    try:
-        result = _market_data_client().search_scrip(exchange_segment=payload.exchange_segment, symbol=query)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Kotak instrument search failed ({type(exc).__name__})") from exc
-    rows = _rows_from_sdk_result(result)
-    # Kotak's symbol search is prefix-oriented. For strike/option fragments,
-    # supplement it with exact strike lookups for the supported index roots.
-    strike_match = re.search(r"\d{4,6}", query)
-    if strike_match and payload.exchange_segment in {"nse_fo", "bse_fo"}:
-        api_client = _market_data_client()
-        roots = ["SENSEX"] if payload.exchange_segment == "bse_fo" else ["NIFTY", "BANKNIFTY"]
-        for root in roots:
-            try:
-                rows.extend(_rows_from_sdk_result(api_client.search_scrip(
-                    exchange_segment=payload.exchange_segment, symbol=root,
-                    option_type="CE,PE", strike_price=strike_match.group(0),
-                )))
-            except Exception:
-                continue
+    target_segments = (
+        ["nse_fo", "bse_fo", "nse_cm", "bse_cm", "mcx_fo"]
+        if payload.exchange_segment == "all"
+        else [payload.exchange_segment]
+    )
+
+    tagged_rows: list[tuple[str, dict[str, Any]]] = []
+    if len(target_segments) == 1:
+        tagged_rows = _search_segment_scrip(target_segments[0], query)
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(target_segments))) as executor:
+            future_to_seg = {
+                executor.submit(_search_segment_scrip, seg, query): seg
+                for seg in target_segments
+            }
+            for future in concurrent.futures.as_completed(future_to_seg):
+                try:
+                    tagged_rows.extend(future.result())
+                except Exception:
+                    pass
+
     query_compact = re.sub(r"[^A-Z0-9]", "", query)
+    strike_match = re.search(r"\d{4,6}", query)
     strike_text = strike_match.group(0) if strike_match else ""
     option_type_text = next((value for value in ("CE", "PE") if query_compact.endswith(value)), "")
     underlying_text = next((value for value in ("BANKNIFTY", "SENSEX", "NIFTY") if query_compact.startswith(value)), "")
     instruments = []
     seen = set()
-    for row in rows if isinstance(rows, list) else []:
+    for seg, row in tagged_rows:
         if not isinstance(row, dict):
             continue
         token = row.get("pSymbol") or row.get("instrument_token") or row.get("token")
@@ -733,7 +756,7 @@ def search_instruments(payload: InstrumentSearchPayload):
             # Preserve general Kotak results when SDK already returned proper prefix matches.
             if not str(trading_symbol).upper().startswith(query):
                 continue
-        identity = (payload.exchange_segment, str(token))
+        identity = (seg, str(token))
         if identity in seen:
             continue
         seen.add(identity)
@@ -745,7 +768,7 @@ def search_instruments(payload: InstrumentSearchPayload):
             "instrument_token": str(token),
             "trading_symbol": str(trading_symbol).strip().upper(),
             "symbol_name": str(row.get("pSymbolName") or row.get("symbol_name") or "").strip(),
-            "exchange_segment": payload.exchange_segment,
+            "exchange_segment": seg,
             "lot_size": max(1, lot_size),
             "expiry": row.get("pExpiryDate") or row.get("expiry"),
             "strike_price": row.get("dStrikePrice;") or row.get("pStrikePrice") or row.get("strike_price"),
