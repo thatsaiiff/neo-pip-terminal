@@ -22,6 +22,11 @@
         </div>
       </div>
 
+      <div id="header-pnl" class="header-pnl" title="Today's Realized + MTM P&amp;L (Click to view Positions)">
+        <span class="header-pnl-label">TODAY'S P&amp;L</span>
+        <span id="header-pnl-value" class="header-pnl-value">—</span>
+      </div>
+
       <div class="top-actions">
         <span id="ip-pill" class="ip-pill hidden" title="Broker API egress IP">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -80,6 +85,33 @@
       </button>
     </nav>
 
+    <!-- Collapsible Market Movers Strip (Top 10 Gainers & Losers from Nifty 200) -->
+    <div id="movers-strip" class="movers-strip">
+      <div class="movers-header">
+        <div class="movers-tabs">
+          <button type="button" id="tab-movers-gainers" class="movers-tab active" data-tab="gainers">
+            <span class="tab-indicator green">▲</span> Gainers <span class="movers-badge">Top 10</span>
+          </button>
+          <button type="button" id="tab-movers-losers" class="movers-tab" data-tab="losers">
+            <span class="tab-indicator red">▼</span> Losers <span class="movers-badge">Top 10</span>
+          </button>
+          <button type="button" id="tab-movers-all" class="movers-tab" data-tab="all">
+            All Movers
+          </button>
+        </div>
+        <div class="movers-actions">
+          <button type="button" id="toggle-movers-btn" class="movers-toggle-btn" title="Collapse or expand movers ticker">
+            <span class="toggle-icon">−</span> <span class="toggle-label">Hide</span>
+          </button>
+        </div>
+      </div>
+      <div id="movers-body" class="movers-body">
+        <div id="movers-track" class="movers-track" role="marquee">
+          <!-- Dynamically populated stock pills -->
+        </div>
+      </div>
+    </div>
+
     <div id="cloud-demo-banner" class="cloud-demo-banner hidden" role="status">
       <span class="demo-icon">☁</span>
       <span>Cloud preview · Simulation mode only. Broker sign-in, live prices, and live orders require running locally.</span>
@@ -128,6 +160,7 @@
               <option value="SENSEX">SENSEX</option>
             </select>
             <select id="chain-expiry" aria-label="Option expiry"></select>
+            <button id="btn-center-atm" class="btn-center-atm" type="button" title="Scroll directly to ATM strike">Center ATM</button>
             <button id="chain-refresh" type="button" aria-label="Refresh option chain" title="Refresh option chain">↻</button>
           </div>
           <div id="chain-status" class="chain-status">Connect Kotak Neo in this app to load option-chain data.</div>

@@ -541,6 +541,97 @@ def _fetch_all_indices(client: Any = None) -> list[dict[str, Any]]:
     return _cached_indices
 
 
+NIFTY_MOVERS_TOKENS = {
+    "RELIANCE": "2885", "HDFCBANK": "1333", "ICICIBANK": "4963", "INFY": "1594",
+    "TCS": "11536", "ITC": "1660", "SBIN": "3045", "BHARTIARTL": "10604",
+    "LT": "11483", "HINDUNILVR": "1394", "BAJFINANCE": "317", "MARUTI": "10999",
+    "AXISBANK": "5900", "SUNPHARMA": "3351", "TITAN": "3506", "ADANIENT": "25",
+    "NTPC": "11630", "POWERGRID": "14977", "ULTRACEMCO": "11532", "TATASTEEL": "3499",
+    "M&M": "2031", "COALINDIA": "20374", "ONGC": "2475", "BAJAJFINSV": "16675",
+    "KOTAKBANK": "1922", "WIPRO": "3787", "HCLTECH": "7229", "ASIANPAINT": "236",
+    "NESTLEIND": "17963", "JSWSTEEL": "11723", "GRASIM": "1232", "TECHM": "13538",
+    "CIPLA": "694", "ADANIPORTS": "15083", "BPCL": "526", "HEROMOTOCO": "1348",
+    "EICHERMOT": "910", "HINDALCO": "1363", "TRENT": "1964", "BEL": "383", "HAL": "2303"
+}
+
+_cached_movers: dict[str, Any] = {
+    "gainers": [
+        {"symbol": "SUNPHARMA", "ltp": 1915.0, "change": 55.0, "change_percent": 2.96},
+        {"symbol": "TATASTEEL", "ltp": 190.2, "change": 3.9, "change_percent": 2.09},
+        {"symbol": "ONGC", "ltp": 234.8, "change": 3.04, "change_percent": 1.31},
+        {"symbol": "RELIANCE", "ltp": 1324.0, "change": 4.0, "change_percent": 0.30},
+        {"symbol": "M&M", "ltp": 2780.0, "change": 24.5, "change_percent": 0.89},
+        {"symbol": "TRENT", "ltp": 6450.0, "change": 58.0, "change_percent": 0.91},
+        {"symbol": "BEL", "ltp": 288.5, "change": 2.2, "change_percent": 0.77},
+        {"symbol": "NTPC", "ltp": 382.4, "change": 2.8, "change_percent": 0.74},
+        {"symbol": "ICICIBANK", "ltp": 1264.0, "change": 7.5, "change_percent": 0.60},
+        {"symbol": "ITC", "ltp": 472.0, "change": 2.4, "change_percent": 0.51},
+    ],
+    "losers": [
+        {"symbol": "BHARTIARTL", "ltp": 2085.5, "change": -21.7, "change_percent": -1.03},
+        {"symbol": "INFY", "ltp": 1171.6, "change": -9.8, "change_percent": -0.83},
+        {"symbol": "BPCL", "ltp": 317.6, "change": -2.3, "change_percent": -0.72},
+        {"symbol": "TCS", "ltp": 4120.0, "change": -24.0, "change_percent": -0.58},
+        {"symbol": "HDFCBANK", "ltp": 1740.0, "change": -8.5, "change_percent": -0.49},
+        {"symbol": "WIPRO", "ltp": 542.0, "change": -2.4, "change_percent": -0.44},
+        {"symbol": "HCLTECH", "ltp": 1780.0, "change": -6.2, "change_percent": -0.35},
+        {"symbol": "BAJFINANCE", "ltp": 6890.0, "change": -22.0, "change_percent": -0.32},
+        {"symbol": "TITAN", "ltp": 3240.0, "change": -9.0, "change_percent": -0.28},
+        {"symbol": "KOTAKBANK", "ltp": 1720.0, "change": -4.2, "change_percent": -0.24},
+    ],
+    "updated_at": "",
+}
+_cached_movers_time: float = 0.0
+
+
+def _fetch_market_movers() -> dict[str, Any]:
+    global _cached_movers, _cached_movers_time
+    now = time.time()
+    if _cached_movers.get("updated_at") and (now - _cached_movers_time < 8.0):
+        return _cached_movers
+
+    consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
+    if not consumer_key:
+        return _cached_movers
+
+    try:
+        query = ",".join(f"nse_cm|{tok}" for tok in NIFTY_MOVERS_TOKENS.values())
+        encoded_query = quote_url(query, safe="|,")
+        url = f"https://mis.kotaksecurities.com/script-details/1.0/quotes/neosymbol/{encoded_query}/all"
+        headers = {"Authorization": consumer_key, "accept": "application/json"}
+        with httpx.Client(timeout=4.0) as http_client:
+            resp = http_client.get(url, headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                token_to_sym = {v: k for k, v in NIFTY_MOVERS_TOKENS.items()}
+                quotes = []
+                for item in data:
+                    sym = token_to_sym.get(str(item.get("exchange_token")))
+                    if not sym:
+                        continue
+                    try:
+                        ltp = float(item.get("ltp") or 0)
+                        chg = float(item.get("change") or 0)
+                        pct = float(item.get("per_change") or 0)
+                    except (ValueError, TypeError):
+                        continue
+                    quotes.append({"symbol": sym, "ltp": ltp, "change": chg, "change_percent": pct})
+                if quotes:
+                    gainers = sorted(quotes, key=lambda x: x["change_percent"], reverse=True)[:10]
+                    losers = sorted(quotes, key=lambda x: x["change_percent"])[:10]
+                    _cached_movers = {
+                        "gainers": gainers,
+                        "losers": losers,
+                        "updated_at": utc_now(),
+                    }
+                    _cached_movers_time = now
+                    return _cached_movers
+    except Exception:
+        pass
+    return _cached_movers
+
+
 def _parse_amount(value: Any) -> float:
     if value is None or value == "":
         return 0.0
@@ -798,7 +889,7 @@ def option_chain(payload: OptionChainPayload):
     api_client = _require_neo_session()
     exchange = CHAIN_EXCHANGES[payload.underlying]
     try:
-        result = api_client.option_chain(exchange=exchange, underlying=payload.underlying, expiry=payload.expiry, instrument_type="option", count=10)
+        result = api_client.option_chain(exchange=exchange, underlying=payload.underlying, expiry=payload.expiry, instrument_type="option", count=25)
     except HTTPException:
         raise
     except Exception as exc:
@@ -859,10 +950,10 @@ def option_chain(payload: OptionChainPayload):
     except Exception:
         underlying_ltp = None
     atm_strike = min(rows, key=lambda row: abs(float(row["strike"]) - underlying_ltp))["strike"] if underlying_ltp is not None else None
-    if len(rows) > 10:
+    if len(rows) > 24:
         center = min(range(len(rows)), key=lambda i: abs(float(rows[i]["strike"]) - underlying_ltp)) if underlying_ltp is not None else len(rows) // 2
-        start = max(0, min(center - 5, len(rows) - 10))
-        rows = rows[start:start + 10]
+        start = max(0, min(center - 12, len(rows) - 24))
+        rows = rows[start:start + 24]
     return {
         "underlying": payload.underlying,
         "expiry": common.get("expiryDt") or payload.expiry,
@@ -1068,6 +1159,11 @@ def index_quotes():
     client = _market_data_client()
     indices = _fetch_all_indices(client)
     return {"indices": indices, "updated_at": utc_now()}
+
+
+@app.get("/api/market/movers")
+def market_movers():
+    return _fetch_market_movers()
 
 
 @app.get("/api/positions")

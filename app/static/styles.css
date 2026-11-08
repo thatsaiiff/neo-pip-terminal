@@ -158,6 +158,66 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--ink-muted);
 }
 
+/* Header Today's P&L display */
+.header-pnl {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 4px 12px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+  margin-right: auto;
+  margin-left: 12px;
+}
+
+.header-pnl:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--ink-muted);
+}
+
+.header-pnl-label {
+  font: 600 8.5px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.header-pnl-value {
+  font: 700 13px var(--font-mono);
+  letter-spacing: -0.01em;
+  color: var(--ink-secondary);
+  line-height: 1.2;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-pnl-value.positive {
+  color: var(--green-ink);
+}
+
+.header-pnl-value.negative {
+  color: var(--red-ink);
+}
+
+@media (max-width: 600px) {
+  .header-pnl {
+    padding: 3px 8px;
+    margin-left: 6px;
+  }
+  .header-pnl-label {
+    font-size: 7.5px;
+  }
+  .header-pnl-value {
+    font-size: 11px;
+  }
+}
+
 .top-actions {
   display: flex;
   align-items: center;
@@ -260,6 +320,187 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.index-strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+   Collapsible Market Movers Strip (Top 10 Gainers & Losers from Nifty 200)
+   ========================================================================== */
+
+.movers-strip {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  transition: all 0.2s ease;
+  font-family: var(--font-sans);
+  flex-shrink: 0;
+}
+
+.movers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 14px;
+  background: var(--bg-surface-subtle);
+  border-bottom: 1px solid var(--border-light);
+  min-height: 25px;
+}
+
+.movers-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.movers-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font: 600 10px var(--font-mono);
+  color: var(--ink-muted);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: all 0.12s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.movers-tab:hover {
+  color: var(--ink-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.movers-tab.active {
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-medium);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.tab-indicator.green {
+  color: var(--green-ink);
+  font-size: 9px;
+}
+
+.tab-indicator.red {
+  color: var(--red-ink);
+  font-size: 9px;
+}
+
+.movers-badge {
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--border-light);
+  color: var(--ink-secondary);
+}
+
+.movers-actions {
+  display: flex;
+  align-items: center;
+}
+
+.movers-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font: 500 9.5px var(--font-mono);
+  color: var(--ink-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: all 0.12s ease;
+}
+
+.movers-toggle-btn:hover {
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-light);
+}
+
+.movers-body {
+  overflow: hidden;
+  max-height: 48px;
+  transition: max-height 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.movers-strip.collapsed .movers-body {
+  max-height: 0;
+}
+
+.movers-strip.collapsed .movers-header {
+  border-bottom: none;
+}
+
+.movers-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.movers-track::-webkit-scrollbar {
+  display: none;
+}
+
+.mover-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-subtle);
+  font: 11px var(--font-mono);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.mover-pill:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-focus);
+  transform: translateY(-1px);
+}
+
+.mover-sym {
+  font-weight: 700;
+  color: var(--ink-primary);
+  font-size: 10.5px;
+}
+
+.mover-ltp {
+  color: var(--ink-secondary);
+  font-size: 10.5px;
+}
+
+.mover-pct {
+  font-weight: 600;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.mover-pill.gainer .mover-pct {
+  color: var(--green-ink);
+  background: var(--green-bg);
+}
+
+.mover-pill.loser .mover-pct {
+  color: var(--red-ink);
+  background: var(--red-bg);
 }
 
 .index-tile {
@@ -678,6 +919,22 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 13px;
 }
 
+.chain-controls button.btn-center-atm {
+  width: auto;
+  padding: 0 9px;
+  font: 600 10px var(--font-mono);
+  color: var(--ink-secondary);
+  white-space: nowrap;
+  background: var(--bg-surface);
+  transition: all 0.12s ease;
+}
+
+.chain-controls button.btn-center-atm:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
 .chain-status {
   padding: 6px 10px;
   font-size: 10px;
@@ -686,8 +943,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 
 .chain-table-wrap {
-  max-height: 200px;
+  max-height: 280px;
   overflow-y: auto;
+  position: relative;
 }
 
 .chain-table {
@@ -706,12 +964,23 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 8px;
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border-light);
+  z-index: 2;
 }
 
 .chain-table td {
   text-align: center;
   border-bottom: 1px solid var(--border-light);
   padding: 0;
+}
+
+.chain-table td.itm-call,
+.chain-table td.itm-put {
+  background: #fdf8eb !important;
+}
+
+.chain-table td.otm-call,
+.chain-table td.otm-put {
+  background: var(--bg-surface);
 }
 
 .chain-table td button {
@@ -732,13 +1001,34 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   padding: 6px 2px;
 }
 
+.chain-table tr.atm-row {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  position: relative;
+  z-index: 1;
+}
+
 .chain-table tr.atm-row td {
-  background: rgba(203, 242, 74, 0.15);
+  background: rgba(37, 99, 235, 0.08) !important;
 }
 
 .chain-table tr.atm-row td.strike {
-  background: #e9f5d1;
-  color: var(--lime-ink);
+  background: #2563eb !important;
+  color: #ffffff !important;
+  font-weight: 800;
+}
+
+.atm-badge {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  padding: 1px 3px;
+  margin-left: 3px;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #2563eb;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
 }
 
 .instrument-meta {

@@ -374,60 +374,169 @@
     }
   }
 
-  async function loadOptionChain() {
+  let optionChainInterval = null;
+  let isOptionChainFetching = false;
+
+  function centerAtmRow(smooth = true) {
+    const wrap = document.querySelector('.chain-table-wrap');
+    const atmRow = document.querySelector('#chain-rows tr.atm-row');
+    if (wrap && atmRow) {
+      const rowTop = atmRow.offsetTop;
+      const rowHeight = atmRow.offsetHeight;
+      const wrapHeight = wrap.clientHeight;
+      wrap.scrollTo({
+        top: Math.max(0, rowTop - (wrapHeight / 2) + (rowHeight / 2)),
+        behavior: smooth ? 'smooth' : 'auto'
+      });
+    }
+  }
+
+  async function loadOptionChain(isBackgroundRefresh = false) {
+    if (isOptionChainFetching) return;
     const underlying = $('chain-underlying').value;
     const expiry = $('chain-expiry').value || null;
-    $('chain-status').textContent = 'Loading Kotak option chain…';
-    $('chain-rows').replaceChildren();
+    const wrap = document.querySelector('.chain-table-wrap');
+    const savedScrollTop = wrap ? wrap.scrollTop : 0;
+
+    if (!isBackgroundRefresh) {
+      $('chain-status').textContent = 'Loading Kotak option chain…';
+    }
+
+    isOptionChainFetching = true;
     try {
       const data = await api('/api/options/chain', {
         method: 'POST',
         body: JSON.stringify({ underlying, expiry })
       });
+
       const body = $('chain-rows');
       $('chain-status').textContent = data.rows && data.rows.length
-        ? `${data.underlying} · ${data.expiry || expiry || 'nearest expiry'} · lot ${data.lot_size}${data.atm_strike ? ` · ATM ${data.atm_strike}` : ''} · click any cell to trade`
+        ? `${data.underlying} · ${data.expiry || expiry || 'nearest expiry'} · lot ${data.lot_size}${data.atm_strike ? ` · ATM ${data.atm_strike}` : ''} · 1s live quotes`
         : (cloudDemoMode ? 'Option-chain data requires a local Kotak connection.' : 'No option contracts returned for this expiry.');
 
-      for (const row of (data.rows || [])) {
-        const tr = document.createElement('tr');
-        if (data.atm_strike && Number(row.strike) === Number(data.atm_strike)) tr.classList.add('atm-row');
+      const atmStrike = data.atm_strike ? Number(data.atm_strike) : null;
+      const existingRows = body.querySelectorAll('tr');
+      const rowsData = data.rows || [];
 
-        const addCell = (side, field, value, label) => {
-          const td = document.createElement('td');
-          if (!side) {
-            td.className = 'strike th-strike';
-            td.textContent = row.strike;
-            tr.appendChild(td);
-            return;
+      // In-place fast update for background 1-second refresh to avoid jump & flicker
+      if (isBackgroundRefresh && existingRows.length === rowsData.length && existingRows.length > 0) {
+        rowsData.forEach((row, i) => {
+          const tr = existingRows[i];
+          const strike = Number(row.strike);
+          const isAtm = atmStrike !== null && strike === atmStrike;
+          tr.classList.toggle('atm-row', isAtm);
+
+          const callOiBtn = tr.cells[0]?.querySelector('button');
+          if (callOiBtn && row.call) {
+            callOiBtn.textContent = row.call.oi == null ? '—' : Number(row.call.oi).toLocaleString('en-IN');
           }
-          td.classList.add(label === 'CALL' ? 'call-cell' : 'put-cell');
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.textContent = value == null ? '—' : (field === 'ltp' ? Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Number(value).toLocaleString('en-IN'));
-          button.disabled = !side.symbol || !side.instrument_token;
-          button.title = button.disabled ? 'Contract unavailable' : `Select ${side.symbol} (${label})`;
-          button.addEventListener('click', () => renderInstrument({
-            trading_symbol: side.symbol,
-            symbol_name: `${underlying} ${row.strike} ${label}`,
-            instrument_token: side.instrument_token,
-            exchange_segment: side.exchange_segment,
-            lot_size: data.lot_size,
-            defaultProduct: 'NRML',
-          }));
-          td.appendChild(button);
-          tr.appendChild(td);
-        };
+          const callLtpBtn = tr.cells[1]?.querySelector('button');
+          if (callLtpBtn && row.call) {
+            callLtpBtn.textContent = row.call.ltp == null ? '—' : Number(row.call.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
 
-        addCell(row.call, 'oi', row.call?.oi, 'CALL');
-        addCell(row.call, 'ltp', row.call?.ltp, 'CALL');
-        addCell(null, null, null, null);
-        addCell(row.put, 'ltp', row.put?.ltp, 'PUT');
-        addCell(row.put, 'oi', row.put?.oi, 'PUT');
-        body.appendChild(tr);
+          const strikeCell = tr.cells[2];
+          if (strikeCell) {
+            if (isAtm && !strikeCell.querySelector('.atm-badge')) {
+              strikeCell.innerHTML = `<span class="strike-num">${row.strike}</span><span class="atm-badge">ATM</span>`;
+            } else if (!isAtm && strikeCell.querySelector('.atm-badge')) {
+              strikeCell.textContent = row.strike;
+            }
+          }
+
+          const putLtpBtn = tr.cells[3]?.querySelector('button');
+          if (putLtpBtn && row.put) {
+            putLtpBtn.textContent = row.put.ltp == null ? '—' : Number(row.put.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
+          const putOiBtn = tr.cells[4]?.querySelector('button');
+          if (putOiBtn && row.put) {
+            putOiBtn.textContent = row.put.oi == null ? '—' : Number(row.put.oi).toLocaleString('en-IN');
+          }
+        });
+      } else {
+        body.replaceChildren();
+
+        for (const row of rowsData) {
+          const strike = Number(row.strike);
+          const isAtm = atmStrike !== null && strike === atmStrike;
+          const isCallItm = atmStrike !== null && strike < atmStrike;
+          const isPutItm = atmStrike !== null && strike > atmStrike;
+
+          const tr = document.createElement('tr');
+          if (isAtm) tr.classList.add('atm-row');
+
+          const addCell = (side, field, value, label, isItm) => {
+            const td = document.createElement('td');
+            if (!side) {
+              td.className = 'strike th-strike';
+              if (isAtm) {
+                td.innerHTML = `<span class="strike-num">${row.strike}</span><span class="atm-badge">ATM</span>`;
+              } else {
+                td.textContent = row.strike;
+              }
+              tr.appendChild(td);
+              return;
+            }
+
+            td.classList.add(label === 'CALL' ? 'call-cell' : 'put-cell');
+            td.classList.add(isItm ? (label === 'CALL' ? 'itm-call' : 'itm-put') : (label === 'CALL' ? 'otm-call' : 'otm-put'));
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = value == null ? '—' : (field === 'ltp' ? Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Number(value).toLocaleString('en-IN'));
+            button.disabled = !side.symbol || !side.instrument_token;
+            button.title = button.disabled ? 'Contract unavailable' : `Select ${side.symbol} (${label})`;
+            button.addEventListener('click', () => renderInstrument({
+              trading_symbol: side.symbol,
+              symbol_name: `${underlying} ${row.strike} ${label}`,
+              instrument_token: side.instrument_token,
+              exchange_segment: side.exchange_segment,
+              lot_size: data.lot_size,
+              defaultProduct: 'NRML',
+            }));
+            td.appendChild(button);
+            tr.appendChild(td);
+          };
+
+          addCell(row.call, 'oi', row.call?.oi, 'CALL', isCallItm);
+          addCell(row.call, 'ltp', row.call?.ltp, 'CALL', isCallItm);
+          addCell(null, null, null, null, false);
+          addCell(row.put, 'ltp', row.put?.ltp, 'PUT', isPutItm);
+          addCell(row.put, 'oi', row.put?.oi, 'PUT', isPutItm);
+          body.appendChild(tr);
+        }
+
+        if (wrap && isBackgroundRefresh) {
+          wrap.scrollTop = savedScrollTop;
+        } else {
+          requestAnimationFrame(() => centerAtmRow(false));
+        }
       }
     } catch (error) {
-      $('chain-status').textContent = cleanErrorMessage(error.message);
+      if (!isBackgroundRefresh) {
+        $('chain-status').textContent = cleanErrorMessage(error.message);
+      }
+    } finally {
+      isOptionChainFetching = false;
+    }
+  }
+
+  function startOptionChainPolling() {
+    stopOptionChainPolling();
+    optionChainInterval = setInterval(() => {
+      const panel = $('option-chain-panel');
+      if (panel && !panel.classList.contains('hidden')) {
+        loadOptionChain(true);
+      } else {
+        stopOptionChainPolling();
+      }
+    }, 1000);
+  }
+
+  function stopOptionChainPolling() {
+    if (optionChainInterval) {
+      clearInterval(optionChainInterval);
+      optionChainInterval = null;
     }
   }
 
@@ -818,6 +927,7 @@
     if (cloudDemoMode) {
       $('positions-note').textContent = 'Live positions and current P&L require the local Kotak backend.';
       if ($('today-pnl')) $('today-pnl').textContent = '—';
+      if ($('header-pnl-value')) $('header-pnl-value').textContent = '—';
       $('total-mtm').textContent = '—';
       $('total-position-pnl').textContent = '—';
       $('positions-list').replaceChildren();
@@ -837,6 +947,12 @@
       if (todayEl) {
         todayEl.textContent = money(data.total_today_pnl ?? data.total_position_pnl, true);
         todayEl.className = `pnl-primary-value ${Number.isFinite(todayVal) ? (todayVal > 0 ? 'pnl-positive' : (todayVal < 0 ? 'pnl-negative' : '')) : ''}`;
+      }
+
+      const headerPnlEl = $('header-pnl-value');
+      if (headerPnlEl && Number.isFinite(todayVal)) {
+        headerPnlEl.textContent = money(todayVal, true);
+        headerPnlEl.className = `header-pnl-value ${todayVal > 0 ? 'positive' : (todayVal < 0 ? 'negative' : '')}`;
       }
 
       if (mtmEl) {
@@ -1002,6 +1118,7 @@
         }
       }
     }
+    updateIndexTickerSlide();
   }
 
   async function refreshStatus() {
@@ -1210,12 +1327,26 @@
     $('option-chain-toggle').setAttribute('aria-expanded', String(open));
     const span = $('option-chain-toggle').querySelector('span');
     if (span) span.textContent = open ? 'Close option chain' : 'Open option chain';
-    if (open) loadChainExpiries();
+    if (open) {
+      loadChainExpiries();
+      startOptionChainPolling();
+    } else {
+      stopOptionChainPolling();
+    }
   });
 
-  $('chain-underlying').addEventListener('change', loadChainExpiries);
-  $('chain-expiry').addEventListener('change', loadOptionChain);
-  $('chain-refresh').addEventListener('click', loadOptionChain);
+  $('chain-underlying').addEventListener('change', () => {
+    loadChainExpiries();
+  });
+  $('chain-expiry').addEventListener('change', () => {
+    loadOptionChain(false);
+  });
+  $('chain-refresh').addEventListener('click', () => {
+    loadOptionChain(false);
+  });
+  if ($('btn-center-atm')) {
+    $('btn-center-atm').addEventListener('click', () => centerAtmRow(true));
+  }
 
   $('apply-symbol').addEventListener('click', () => {
     try {
@@ -1282,6 +1413,200 @@
   if ($('orders-filter-completed')) $('orders-filter-completed').addEventListener('click', () => setOrdersFilter('completed'));
   if ($('orders-filter-failed')) $('orders-filter-failed').addEventListener('click', () => setOrdersFilter('failed'));
 
+  // Header P&L Click Handler (direct jump to Positions)
+  if ($('header-pnl')) {
+    $('header-pnl').addEventListener('click', () => {
+      setActivityTab('positions');
+      loadPositions();
+    });
+  }
+
+  // --- Header P&L Background Poller ---
+  let lastPnlPoll = 0;
+  async function maybeRefreshPnl() {
+    if (!state.authenticated || cloudDemoMode) return;
+    const now = Date.now();
+    if (now - lastPnlPoll < 4000) return;
+    lastPnlPoll = now;
+    try {
+      const data = await api('/api/positions?tab=open');
+      const todayVal = Number(data.total_today_pnl ?? data.total_position_pnl);
+      const headerPnlEl = $('header-pnl-value');
+      if (headerPnlEl && Number.isFinite(todayVal)) {
+        headerPnlEl.textContent = money(todayVal, true);
+        headerPnlEl.className = `header-pnl-value ${todayVal > 0 ? 'positive' : (todayVal < 0 ? 'negative' : '')}`;
+      }
+    } catch (_) {}
+  }
+
+  // --- Index Ticker Sliding (left to right only when overflowing viewport) ---
+  let indexSlideInterval = null;
+  let indexSlideDir = 1;
+  let isIndexHovered = false;
+
+  function updateIndexTickerSlide() {
+    const strip = $('index-strip');
+    if (!strip) return;
+
+    if (indexSlideInterval) {
+      clearInterval(indexSlideInterval);
+      indexSlideInterval = null;
+    }
+
+    // Only slide if device width causes numbers to be cut off / overflow
+    // If all numbers fit on the screen without overflow, keep completely static
+    if (strip.scrollWidth <= strip.clientWidth + 4) {
+      strip.scrollLeft = 0;
+      return;
+    }
+
+    indexSlideInterval = setInterval(() => {
+      if (isIndexHovered) return;
+      const maxScroll = strip.scrollWidth - strip.clientWidth;
+      if (maxScroll <= 0) return;
+
+      strip.scrollLeft += indexSlideDir * 0.5;
+
+      if (strip.scrollLeft >= maxScroll - 0.5) {
+        indexSlideDir = -1;
+      } else if (strip.scrollLeft <= 0.5) {
+        indexSlideDir = 1;
+      }
+    }, 35);
+  }
+
+  function setupIndexTickerSlide() {
+    const strip = $('index-strip');
+    if (!strip) return;
+
+    strip.addEventListener('mouseenter', () => { isIndexHovered = true; });
+    strip.addEventListener('mouseleave', () => { isIndexHovered = false; });
+    strip.addEventListener('touchstart', () => { isIndexHovered = true; }, { passive: true });
+    strip.addEventListener('touchend', () => {
+      setTimeout(() => { isIndexHovered = false; }, 2000);
+    }, { passive: true });
+
+    window.addEventListener('resize', debounce(updateIndexTickerSlide, 150));
+    setTimeout(updateIndexTickerSlide, 600);
+  }
+
+  // --- Market Movers (Top 10 Gainers & Losers from Nifty 200) ---
+  let activeMoversTab = 'gainers';
+  let moversData = { gainers: [], losers: [] };
+
+  async function loadMarketMovers() {
+    try {
+      const data = await api('/api/market/movers');
+      if (data && (data.gainers || data.losers)) {
+        moversData = data;
+        renderMarketMovers();
+      }
+    } catch (_) {}
+  }
+
+  function renderMarketMovers() {
+    const track = $('movers-track');
+    if (!track) return;
+    track.replaceChildren();
+
+    let items = [];
+    if (activeMoversTab === 'gainers') {
+      items = (moversData.gainers || []).map(item => ({ ...item, type: 'gainer' }));
+    } else if (activeMoversTab === 'losers') {
+      items = (moversData.losers || []).map(item => ({ ...item, type: 'loser' }));
+    } else {
+      items = [
+        ...(moversData.gainers || []).map(item => ({ ...item, type: 'gainer' })),
+        ...(moversData.losers || []).map(item => ({ ...item, type: 'loser' })),
+      ];
+    }
+
+    if (!items.length) {
+      const empty = document.createElement('span');
+      empty.className = 'mover-empty';
+      empty.textContent = 'Market movers loading…';
+      track.appendChild(empty);
+      return;
+    }
+
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `mover-pill ${item.type}`;
+      btn.setAttribute('data-symbol', item.symbol);
+      btn.title = `Click to trade ${item.symbol} on NSE Cash`;
+
+      const sym = document.createElement('span');
+      sym.className = 'mover-sym';
+      sym.textContent = item.symbol;
+
+      const ltp = document.createElement('span');
+      ltp.className = 'mover-ltp';
+      ltp.textContent = money(item.ltp, false);
+
+      const pct = document.createElement('span');
+      pct.className = 'mover-pct';
+      const pctVal = Number(item.change_percent || 0);
+      pct.textContent = `${pctVal >= 0 ? '+' : ''}${pctVal.toFixed(2)}%`;
+
+      btn.append(sym, ltp, pct);
+
+      btn.addEventListener('click', () => {
+        renderSymbol(item.symbol, 'nse_cm', 'market movers');
+        toast(`Selected ${item.symbol} (NSE Cash) from market movers`, 'info', 2000);
+      });
+
+      track.appendChild(btn);
+    }
+  }
+
+  function setupMoversControls() {
+    const strip = $('movers-strip');
+    const toggleBtn = $('toggle-movers-btn');
+    const isCollapsed = localStorage.getItem('movers_collapsed') === '1';
+
+    if (isCollapsed && strip) {
+      strip.classList.add('collapsed');
+      if (toggleBtn) {
+        const icon = toggleBtn.querySelector('.toggle-icon');
+        const label = toggleBtn.querySelector('.toggle-label');
+        if (icon) icon.textContent = '+';
+        if (label) label.textContent = 'Show';
+      }
+    }
+
+    if (toggleBtn && strip) {
+      toggleBtn.addEventListener('click', () => {
+        const collapsed = strip.classList.toggle('collapsed');
+        localStorage.setItem('movers_collapsed', collapsed ? '1' : '0');
+        const icon = toggleBtn.querySelector('.toggle-icon');
+        const label = toggleBtn.querySelector('.toggle-label');
+        if (icon) icon.textContent = collapsed ? '+' : '−';
+        if (label) label.textContent = collapsed ? 'Show' : 'Hide';
+      });
+    }
+
+    const tabs = [
+      { id: 'tab-movers-gainers', tab: 'gainers' },
+      { id: 'tab-movers-losers', tab: 'losers' },
+      { id: 'tab-movers-all', tab: 'all' },
+    ];
+
+    tabs.forEach(({ id, tab }) => {
+      const btn = $(id);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          activeMoversTab = tab;
+          tabs.forEach(t => $(t.id)?.classList.toggle('active', t.tab === tab));
+          renderMarketMovers();
+        });
+      }
+    });
+
+    loadMarketMovers();
+    setInterval(loadMarketMovers, 10000);
+  }
+
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -1302,9 +1627,13 @@
   if ($('validity-select')) $('validity-select').value = 'DAY';
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);
 
+  setupIndexTickerSlide();
+  setupMoversControls();
+
   requestLanAccess().then(() => {
     refreshStatus();
     loadOrders();
+    if (state.authenticated) loadPositions();
   });
   loadIndexQuotes();
 
@@ -1313,7 +1642,11 @@
   setInterval(loadOrders, 5000);
   setInterval(loadIndexQuotes, 5000);
   setInterval(() => {
-    if (state.activityTab === 'positions') loadPositions();
-  }, 8000);
+    if (state.activityTab === 'positions') {
+      loadPositions();
+    } else {
+      maybeRefreshPnl();
+    }
+  }, 4000);
   setInterval(refreshQuote, 3000);
 })();

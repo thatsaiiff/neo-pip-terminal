@@ -327,4 +327,20 @@ def test_search_instruments_all_segments(client, monkeypatch):
     assert "nse_fo" in segments
 
 
+def test_market_movers_endpoint(client):
+    res = client.get("/api/market/movers")
+    assert res.status_code == 200
+    data = res.json()
+    assert "gainers" in data
+    assert "losers" in data
+    assert len(data["gainers"]) <= 10
+    assert len(data["losers"]) <= 10
+    if data["gainers"]:
+        first = data["gainers"][0]
+        assert "symbol" in first
+        assert "change_percent" in first
+        assert "ltp" in first
+
+
+
 
