@@ -539,7 +539,9 @@
       $('confirm-order').classList.toggle('danger', live && side === 'SELL');
       $('confirm-order').textContent = live ? `Place live ${side}` : `Simulate ${side}`;
       $('review-modal').classList.remove('hidden');
-      $('confirm-check').focus();
+      if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+        $('confirm-check').focus();
+      }
     } catch (error) {
       toast(error.message, 'error');
     }
@@ -996,7 +998,9 @@
     $('totp-input').value = '';
     $('mpin-input').value = '';
     $('connect-modal').classList.remove('hidden');
-    $('totp-input').focus();
+    if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      $('totp-input').focus();
+    }
   }
 
   async function submitConnect() {
@@ -1183,6 +1187,12 @@
   $('close-connect').addEventListener('click', () => $('connect-modal').classList.add('hidden'));
   $('cancel-connect').addEventListener('click', () => $('connect-modal').classList.add('hidden'));
   $('submit-connect').addEventListener('click', submitConnect);
+  $('connect-modal').addEventListener('click', e => {
+    if (e.target === $('connect-modal')) $('connect-modal').classList.add('hidden');
+  });
+  $('review-modal').addEventListener('click', e => {
+    if (e.target === $('review-modal')) $('review-modal').classList.add('hidden');
+  });
 
   $('pip-btn').addEventListener('click', () => {
     if (document.body.dataset.pipWindow === 'true') window.close();

@@ -1892,6 +1892,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
     top: 0;
     z-index: 30;
     backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     background: rgba(255, 255, 255, 0.94);
   }
 
@@ -1903,11 +1904,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .index-strip {
     padding: 6px 12px;
     gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .index-strip::-webkit-scrollbar {
+    display: none;
   }
 
   .index-tile {
     padding: 4px 10px;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .primary-order {
@@ -1923,6 +1932,168 @@ button:focus-visible, input:focus-visible, select:focus-visible {
     max-height: 90vh;
     overflow-y: auto;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+}
+
+/* ==========================================================================
+   Mobile Phone Optimizations (<= 640px)
+   Prevents iOS WebKit Auto-Zoom & Provides Modern Touch Ergonomics
+   ========================================================================== */
+
+@media (max-width: 640px) {
+  /* 1. Prevent iOS Safari auto-zoom: inputs >= 16px never trigger auto-zoom */
+  input,
+  select,
+  textarea,
+  .field input,
+  .field select,
+  .stepper input,
+  .instrument-search input,
+  .symbol-input-wrap input {
+    font-size: 16px !important;
+  }
+
+  /* 2. Compact topbar for mobile */
+  .topbar {
+    padding: 0 10px;
+    height: 46px;
+    gap: 6px;
+  }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .pip-button {
+    display: none;
+  }
+
+  .top-actions {
+    gap: 5px;
+  }
+
+  .ip-pill {
+    padding: 3px 6px;
+    font-size: 9px;
+  }
+
+  .mode-pill {
+    padding: 4px 7px;
+    font-size: 9px;
+  }
+
+  /* 3. Mobile Bottom-Sheet Modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    padding: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(18, 19, 16, 0.6);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    z-index: 1000;
+  }
+
+  .modal-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 85dvh;
+    max-height: 85vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 20px 20px 0 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    padding: 20px 18px calc(24px + env(safe-area-inset-bottom, 16px)) !important;
+    box-sizing: border-box;
+    margin: 0;
+    box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.25);
+    animation: modalSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes modalSlideUp {
+    from {
+      transform: translateY(100%);
+      opacity: 0.8;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .modal-card h2 {
+    font-size: 20px;
+    margin: 6px 0 4px;
+  }
+
+  .modal-description {
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .field > span {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .field input,
+  .field select {
+    height: 44px !important;
+    padding: 0 12px !important;
+    border-radius: var(--radius-md);
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    width: 100%;
+  }
+
+  .secondary-button,
+  .confirm-order-button {
+    height: 44px !important;
+    font-size: 14px !important;
+    border-radius: var(--radius-md);
+  }
+
+  .secondary-button {
+    flex: 0 0 85px;
+  }
+
+  .confirm-order-button {
+    flex: 1;
+  }
+
+  /* 4. Touch Targets */
+  .stepper {
+    height: 42px;
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+  }
+
+  .stepper button {
+    font-size: 18px;
+  }
+
+  .primary-order {
+    height: 48px;
+    font-size: 15px;
+  }
+
+  .orders-subtabs,
+  .positions-subtabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .orders-subtabs::-webkit-scrollbar,
+  .positions-subtabs::-webkit-scrollbar {
+    display: none;
   }
 }
 
