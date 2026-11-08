@@ -298,3 +298,13 @@ def test_index_quotes_endpoint(client):
     for item in data["indices"]:
         assert item["ltp"] is not None and item["ltp"] > 0
 
+
+def test_egress_ip_endpoint(client):
+    res = client.get("/api/egress-ip")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "railway_static_ips" in data
+    assert len(data["railway_static_ips"]) == 3
+
+

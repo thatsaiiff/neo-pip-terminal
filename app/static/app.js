@@ -950,6 +950,11 @@
       state.authenticated = !!data.broker_authenticated;
       state.kotakEgressIp = data.kotak_egress_ip || null;
       state.kotakSessionIp = data.kotak_session_ip || null;
+      state.serverEgressIp = data.server_egress_ip || null;
+      const modalIp = $('modal-egress-ip');
+      if (modalIp) {
+        modalIp.textContent = state.kotakEgressIp || state.serverEgressIp || 'Fetching...';
+      }
       state.mode = data.mode || 'simulation';
       updateModeUI();
 

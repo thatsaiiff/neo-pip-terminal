@@ -36,6 +36,8 @@ neo_client: Any | None = None
 neo_authenticated = False
 neo_egress_ip: str | None = None
 neo_session_ip: str | None = None
+_cached_egress_ip: str | None = None
+_cached_egress_ip_time: float = 0.0
 threading = __import__("threading")
 neo_client_lock = threading.RLock()
 order_submit_lock = threading.Lock()
@@ -417,9 +419,34 @@ def lan_access():
     return {"ok": False}
 
 
+def _get_server_egress_ip() -> str | None:
+    global _cached_egress_ip, _cached_egress_ip_time
+    now = time.time()
+    if _cached_egress_ip and (now - _cached_egress_ip_time < 300.0):
+        return _cached_egress_ip
+    try:
+        res = httpx.get("https://api.ipify.org", timeout=2.5)
+        if res.status_code == 200 and res.text.strip():
+            _cached_egress_ip = res.text.strip()
+            _cached_egress_ip_time = now
+            return _cached_egress_ip
+    except Exception:
+        pass
+    return _cached_egress_ip
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "neo-pip-terminal", "version": app.version, "time": utc_now(), "lan_access_enabled": LAN_ACCESS_ENABLED and bool(LAN_ACCESS_TOKEN)}
+
+
+@app.get("/api/egress-ip")
+def egress_ip():
+    return {
+        "ok": True,
+        "egress_ip": _get_server_egress_ip(),
+        "railway_static_ips": ["162.220.234.241", "152.55.180.240", "152.55.180.242"],
+    }
 
 
 @app.get("/api/status")
@@ -430,6 +457,7 @@ def status():
         "broker_authenticated": neo_authenticated,
         "kotak_egress_ip": neo_egress_ip,
         "kotak_session_ip": neo_session_ip,
+        "server_egress_ip": _get_server_egress_ip(),
         "broker_configured": bool(os.getenv("NEO_CONSUMER_KEY") and os.getenv("NEO_MOBILE_NUMBER") and os.getenv("NEO_UCC")),
         "selected_symbol": selected_symbol,
         "extension_bridge_configured": bool(BRIDGE_TOKEN and not BRIDGE_TOKEN.startswith("replace-with-")),
