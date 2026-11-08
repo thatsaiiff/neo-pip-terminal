@@ -460,6 +460,15 @@ def test_chart_candles_endpoint(client):
         assert "close" in c
 
 
+def test_upstox_status_endpoint(client):
+    res = client.get("/api/chart/upstox-status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "authenticated" in data
+    assert "token_configured" in data
+
+
 
 
 

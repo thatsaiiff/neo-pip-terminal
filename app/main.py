@@ -1470,6 +1470,8 @@ def market_movers():
     return _fetch_market_movers()
 
 
+UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
+
 UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
@@ -1624,33 +1626,66 @@ def _aggregate_1m_to_higher(candles_1m: list[list[Any]], interval_minutes: int) 
     return sorted(buckets.values(), key=lambda x: x["time"])
 
 
+@app.get("/api/chart/upstox-status")
+def upstox_status():
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or UPSTOX_ACCESS_TOKEN
+    return {
+        "ok": True,
+        "authenticated": bool(token),
+        "token_configured": bool(token),
+        "token_preview": (token[:4] + "..." + token[-4:]) if len(token) > 8 else None,
+    }
+
+
 @app.get("/api/chart/candles")
 def chart_candles(symbol: str = "NIFTY", interval: str = "5s", date: str | None = None):
     inst_key = _resolve_upstox_instrument(symbol)
     candles_1m = []
     selected_date = date
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or UPSTOX_ACCESS_TOKEN
+    upstox_headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json"}
+    if token:
+        upstox_headers["Authorization"] = f"Bearer {token}"
 
-    if selected_date:
-        dates_to_try = [selected_date]
-    else:
-        d = datetime.now()
-        dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-
-    for try_date in dates_to_try:
-        url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+    # 1. If requesting live/today's chart, first attempt intraday endpoint
+    if not selected_date:
+        intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
         try:
             with httpx.Client(timeout=4.0) as client:
-                resp = client.get(url, headers={"User-Agent": "NeoPIP/1.0"})
+                resp = client.get(intraday_url, headers=upstox_headers)
                 if resp.status_code == 200:
                     payload = resp.json()
                     raw = payload.get("data", {}).get("candles", [])
                     if raw:
                         raw.reverse()
                         candles_1m = raw
-                        selected_date = try_date
-                        break
+                        selected_date = datetime.now().strftime("%Y-%m-%d")
         except Exception:
-            continue
+            pass
+
+    # 2. If intraday had no data (market closed / off-hours / weekend), fallback to recent completed daily sessions
+    if not candles_1m:
+        if selected_date:
+            dates_to_try = [selected_date]
+        else:
+            d = datetime.now()
+            dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+        for try_date in dates_to_try:
+            url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+            try:
+                with httpx.Client(timeout=4.0) as client:
+                    resp = client.get(url, headers=upstox_headers)
+                    if resp.status_code == 200:
+                        payload = resp.json()
+                        raw = payload.get("data", {}).get("candles", [])
+                        if raw:
+                            raw.reverse()
+                            candles_1m = raw
+                            selected_date = try_date
+                            break
+            except Exception:
+                continue
 
     if not candles_1m:
         return {"ok": False, "symbol": symbol, "interval": interval, "date": selected_date, "candles": []}
