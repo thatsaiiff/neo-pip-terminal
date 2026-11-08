@@ -187,6 +187,31 @@
           </div>
         </div>
 
+        <div class="chart-toggle-row">
+          <button id="tv-chart-toggle" class="chain-toggle chart-toggle-btn" type="button" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            <span>Live TV Advanced Chart</span>
+            <span class="toggle-arrow">▾</span>
+          </button>
+          <button id="tv-chart-popout" class="chart-popout-btn" type="button" title="Open chart in new browser window">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <span>Pop out</span>
+          </button>
+        </div>
+
+        <div id="tv-chart-panel" class="tv-chart-panel hidden">
+          <div class="tv-chart-header">
+            <span id="tv-chart-symbol-label">NSE:NIFTY</span>
+            <span class="tv-chart-hint">1m / 5m / 15m Candles · Indicators · Volume</span>
+          </div>
+          <iframe id="tv-chart-frame"
+            src="https://s.tradingview.com/widgetembed/?symbol=NSE%3ANIFTY&interval=5&theme=light&style=1&timezone=Asia%2FKolkata&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&save_image=0&locale=in"
+            loading="lazy"
+            allowtransparency="true"
+            scrolling="no">
+          </iframe>
+        </div>
+
         <div class="instrument-meta">
           <span id="symbol-subtitle">Waiting for broker symbol</span>
           <span id="live-price" class="price-unavailable"><span class="dot-pulse"></span> Price unavailable</span>
@@ -205,6 +230,15 @@
             <h1>Place an order<span class="title-dot">.</span></h1>
           </div>
           <span id="order-count" class="order-count">0 ORDERS</span>
+        </div>
+
+        <div class="scalper-strip">
+          <label class="scalper-toggle">
+            <input type="checkbox" id="scalper-mode-toggle">
+            <span class="scalper-slider"></span>
+            <span class="scalper-label">⚡ Scalper Mode (1-Click Instant Market BUY)</span>
+          </label>
+          <span id="scalper-funds-pill" class="scalper-funds-pill" title="Available cash balance from Kotak">Funds: ₹1,00,000</span>
         </div>
 
         <div class="side-toggle" role="group" aria-label="Order side">
@@ -303,6 +337,37 @@
           </div>
         </div>
 
+        <!-- Software SL & TP (OCO) Box -->
+        <div class="sltp-card">
+          <div class="sltp-header">
+            <label class="sltp-toggle-label">
+              <input type="checkbox" id="sltp-toggle" checked>
+              <span class="sltp-title">🛡️ Auto SL &amp; TP (Software OCO)</span>
+            </label>
+            <div class="sltp-chips">
+              <button type="button" class="sltp-preset active" data-sl="5" data-tp="10">SL 5% · TP 10%</button>
+              <button type="button" class="sltp-preset" data-sl="3" data-tp="6">SL 3% · TP 6%</button>
+              <button type="button" class="sltp-preset" data-sl="10" data-tp="20">SL 10% · TP 20%</button>
+            </div>
+          </div>
+          <div id="sltp-fields-wrap" class="sltp-fields-row">
+            <div class="sltp-input-col">
+              <div class="sltp-label-row">
+                <span>Stop Loss (SL)</span>
+                <span id="sl-badge" class="sltp-badge red">-5%</span>
+              </div>
+              <input type="number" id="sltp-sl-input" step="0.05" placeholder="SL Price">
+            </div>
+            <div class="sltp-input-col">
+              <div class="sltp-label-row">
+                <span>Take Profit (TP)</span>
+                <span id="tp-badge" class="sltp-badge green">+10%</span>
+              </div>
+              <input type="number" id="sltp-tp-input" step="0.05" placeholder="TP Price">
+            </div>
+          </div>
+        </div>
+
         <div class="risk-note">
           <span class="risk-icon">!</span>
           <p>Confirm the exact symbol, lot size, product and quantity before placing any live order. Market orders may fill at a different price.</p>
@@ -382,10 +447,15 @@
             </div>
           </div>
           <div id="positions-note" class="positions-note">Connect Kotak Neo to load live positions.</div>
-          <div class="position-tabs">
-            <button id="open-positions-tab" class="position-tab active" type="button">Open (<span id="pos-open-count">0</span>)</button>
-            <button id="closed-positions-tab" class="position-tab" type="button">Closed (<span id="pos-closed-count">0</span>)</button>
-            <button id="all-positions-tab" class="position-tab" type="button">All (<span id="pos-all-count">0</span>)</button>
+          <div class="position-tabs-row">
+            <div class="position-tabs">
+              <button id="open-positions-tab" class="position-tab active" type="button">Open (<span id="pos-open-count">0</span>)</button>
+              <button id="closed-positions-tab" class="position-tab" type="button">Closed (<span id="pos-closed-count">0</span>)</button>
+              <button id="all-positions-tab" class="position-tab" type="button">All (<span id="pos-all-count">0</span>)</button>
+            </div>
+            <button id="btn-exit-all" class="btn-exit-all" type="button" title="Cancel all open limit/stop orders and square off all open positions at market in 1 shot">
+              ⚠️ EXIT ALL
+            </button>
           </div>
           <div id="positions-list" class="positions-list"></div>
         </div>

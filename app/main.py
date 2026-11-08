@@ -89,6 +89,19 @@ def init_db() -> None:
             event_type TEXT NOT NULL,
             detail TEXT NOT NULL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS sltp_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            exchange_segment TEXT NOT NULL,
+            product TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            entry_price REAL NOT NULL,
+            sl_price REAL,
+            tp_price REAL,
+            status TEXT NOT NULL
+        )""")
         conn.commit()
 
 
@@ -217,6 +230,9 @@ class OrderPayload(BaseModel):
     trigger_price: float | None = Field(default=None, gt=0)
     validity: Literal["DAY", "IOC"] = "DAY"
     user_confirmed: bool = False
+    sl_price: float | None = Field(default=None, gt=0)
+    tp_price: float | None = Field(default=None, gt=0)
+    auto_sltp: bool = False
 
     @field_validator("symbol")
     @classmethod
@@ -949,7 +965,12 @@ def option_chain(payload: OptionChainPayload):
             underlying_ltp = float(underlying_quote.get("ltp") or underlying_quote.get("last_price"))
     except Exception:
         underlying_ltp = None
-    atm_strike = min(rows, key=lambda row: abs(float(row["strike"]) - underlying_ltp))["strike"] if underlying_ltp is not None else None
+    if underlying_ltp is not None and rows:
+        atm_strike = min(rows, key=lambda row: abs(float(row["strike"]) - underlying_ltp))["strike"]
+    elif rows:
+        atm_strike = rows[len(rows) // 2]["strike"]
+    else:
+        atm_strike = None
     if len(rows) > 24:
         center = min(range(len(rows)), key=lambda i: abs(float(rows[i]["strike"]) - underlying_ltp)) if underlying_ltp is not None else len(rows) // 2
         start = max(0, min(center - 12, len(rows) - 24))
@@ -1069,9 +1090,41 @@ def _execute_order(payload: OrderPayload):
         message, broker_order_id, response = sdk_order(payload)
         row_id = add_order_record(payload, "live", "submitted", message, broker_order_id, response)
         audit("live_order_submitted", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": payload.lots * payload.lot_size, "order_id": broker_order_id})
+        if payload.auto_sltp and (payload.sl_price or payload.tp_price):
+            try:
+                entry_p = payload.price or 0.0
+                with db() as conn:
+                    conn.execute(
+                        """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status)
+                           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+                        (utc_now(), payload.symbol, payload.exchange_segment, payload.product, payload.side, payload.lots * payload.lot_size, entry_p, payload.sl_price, payload.tp_price),
+                    )
+                    conn.commit()
+                audit("sltp_rule_auto_created", {
+                    "symbol": payload.symbol, "side": payload.side, "quantity": payload.lots * payload.lot_size,
+                    "sl_price": payload.sl_price, "tp_price": payload.tp_price,
+                })
+            except Exception:
+                pass
         return {"ok": True, "id": row_id, "mode": "live", "status": "submitted", "message": message, "broker_order_id": broker_order_id, "quantity": payload.lots * payload.lot_size, "warning": "Broker acceptance is not the same as execution. Verify the order and trade book."}
     row_id = add_order_record(payload, "simulation", "simulated", "Simulation only — no order sent to Kotak Neo", None, {"simulated": True})
     audit("simulation_order", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": payload.lots * payload.lot_size})
+    if payload.auto_sltp and (payload.sl_price or payload.tp_price):
+        try:
+            entry_p = payload.price or 0.0
+            with db() as conn:
+                conn.execute(
+                    """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+                    (utc_now(), payload.symbol, payload.exchange_segment, payload.product, payload.side, payload.lots * payload.lot_size, entry_p, payload.sl_price, payload.tp_price),
+                )
+                conn.commit()
+            audit("sltp_rule_auto_created", {
+                "symbol": payload.symbol, "side": payload.side, "quantity": payload.lots * payload.lot_size,
+                "sl_price": payload.sl_price, "tp_price": payload.tp_price,
+            })
+        except Exception:
+            pass
     return {"ok": True, "id": row_id, "mode": "simulation", "status": "simulated", "message": "Simulation only — no order sent to Kotak Neo", "quantity": payload.lots * payload.lot_size, "warning": "This is a simulated order."}
 
 
@@ -1152,6 +1205,257 @@ def cancel_order(order_id: str):
         raise HTTPException(status_code=502, detail=f"Kotak cancellation failed: {_kotak_exception_summary(exc)}") from exc
     audit("live_order_cancel_requested", {"order_id": order_id})
     return {"ok": True, "order_id": order_id, "message": "Cancellation request sent. Refresh the order book to confirm; the order may fill before Kotak processes the request."}
+
+
+class SltpPayload(BaseModel):
+    symbol: str
+    exchange_segment: str = "nse_fo"
+    product: str = "MIS"
+    side: str  # "BUY" or "SELL"
+    quantity: int
+    entry_price: float
+    sl_price: float | None = None
+    tp_price: float | None = None
+
+
+class SltpCheckPayload(BaseModel):
+    symbol: str
+    ltp: float
+
+
+@app.get("/api/sltp")
+def get_sltp_rules():
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sltp_rules WHERE status = 'active' ORDER BY id DESC"
+        ).fetchall()
+    return [{
+        "id": r["id"],
+        "created_at": r["created_at"],
+        "symbol": r["symbol"],
+        "exchange_segment": r["exchange_segment"],
+        "product": r["product"],
+        "side": r["side"],
+        "quantity": r["quantity"],
+        "entry_price": r["entry_price"],
+        "sl_price": r["sl_price"],
+        "tp_price": r["tp_price"],
+        "status": r["status"],
+    } for r in rows]
+
+
+@app.post("/api/sltp")
+def create_sltp_rule(payload: SltpPayload):
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+            (utc_now(), payload.symbol, payload.exchange_segment, payload.product, payload.side, payload.quantity, payload.entry_price, payload.sl_price, payload.tp_price),
+        )
+        conn.commit()
+        rule_id = cur.lastrowid
+    audit("sltp_rule_created", {
+        "rule_id": rule_id,
+        "symbol": payload.symbol,
+        "side": payload.side,
+        "quantity": payload.quantity,
+        "sl_price": payload.sl_price,
+        "tp_price": payload.tp_price,
+    })
+    return {"ok": True, "rule_id": rule_id, "message": f"Software SL/TP active for {payload.symbol}"}
+
+
+@app.delete("/api/sltp/{rule_id}")
+def cancel_sltp_rule(rule_id: int):
+    with db() as conn:
+        conn.execute("UPDATE sltp_rules SET status = 'cancelled' WHERE id = ?", (rule_id,))
+        conn.commit()
+    audit("sltp_rule_cancelled", {"rule_id": rule_id})
+    return {"ok": True, "rule_id": rule_id, "message": "SL/TP rule cancelled"}
+
+
+@app.post("/api/sltp/check")
+def check_sltp_rules(payload: SltpCheckPayload):
+    """
+    Check if the current LTP has triggered any active software SL or TP rule.
+    If hit, places an exit market order and deactivates the rule (OCO behavior).
+    """
+    triggered_rules = []
+    with db() as conn:
+        rules = conn.execute(
+            "SELECT * FROM sltp_rules WHERE symbol = ? AND status = 'active'", (payload.symbol,)
+        ).fetchall()
+
+    for r in rules:
+        rule_id = r["id"]
+        side = r["side"]  # "BUY" means user is long; "SELL" means user is short
+        sl = r["sl_price"]
+        tp = r["tp_price"]
+        qty = r["quantity"]
+        seg = r["exchange_segment"]
+        prod = r["product"]
+
+        trigger_type = None
+        if side == "BUY":
+            if sl is not None and payload.ltp <= sl:
+                trigger_type = "SL"
+            elif tp is not None and payload.ltp >= tp:
+                trigger_type = "TP"
+        elif side == "SELL":
+            if sl is not None and payload.ltp >= sl:
+                trigger_type = "SL"
+            elif tp is not None and payload.ltp <= tp:
+                trigger_type = "TP"
+
+        if trigger_type:
+            exit_side = "SELL" if side == "BUY" else "BUY"
+            exit_payload = OrderPayload(
+                symbol=r["symbol"],
+                side=exit_side,
+                lots=1,
+                lot_size=qty,
+                exchange_segment=seg,
+                product=prod,
+                order_type="MKT",
+                user_confirmed=True,
+            )
+            order_res = None
+            try:
+                order_res = _execute_order(exit_payload)
+            except Exception as e:
+                audit("sltp_execution_failed", {"rule_id": rule_id, "error": str(e)})
+
+            with db() as conn:
+                conn.execute(
+                    "UPDATE sltp_rules SET status = ? WHERE id = ?",
+                    (f"triggered_{trigger_type.lower()}", rule_id),
+                )
+                conn.commit()
+
+            audit("sltp_rule_triggered", {
+                "rule_id": rule_id,
+                "symbol": r["symbol"],
+                "trigger_type": trigger_type,
+                "trigger_ltp": payload.ltp,
+                "exit_order": order_res,
+            })
+            triggered_rules.append({
+                "rule_id": rule_id,
+                "trigger_type": trigger_type,
+                "symbol": r["symbol"],
+                "trigger_ltp": payload.ltp,
+                "order_result": order_res,
+            })
+
+    return {"ok": True, "triggered_count": len(triggered_rules), "triggered": triggered_rules}
+
+
+@app.get("/api/limits")
+def account_limits():
+    client = _require_neo_session() if (neo_authenticated and neo_client is not None) else None
+    if client is not None and hasattr(client, "limits"):
+        try:
+            resp = client.limits()
+            if isinstance(resp, dict) and not _kotak_response_error(resp):
+                items = _rows_from_sdk_result(resp)
+                first = items[0] if items else resp
+                cash = float(first.get("availableMargin") or first.get("net") or first.get("cash") or first.get("totCashBal") or 0.0)
+                collateral = float(first.get("collateral") or first.get("totCollateral") or 0.0)
+                margin_used = float(first.get("marginUtilized") or first.get("utilisedMargin") or 0.0)
+                return {
+                    "available_cash": cash,
+                    "collateral": collateral,
+                    "margin_utilized": margin_used,
+                    "mode": "live",
+                    "updated_at": utc_now(),
+                }
+        except Exception:
+            pass
+    return {
+        "available_cash": 100000.0,
+        "collateral": 0.0,
+        "margin_utilized": 0.0,
+        "mode": "simulation",
+        "updated_at": utc_now(),
+    }
+
+
+@app.post("/api/positions/exit-all")
+def exit_all_positions():
+    client = _require_neo_session() if (neo_authenticated and neo_client is not None) else None
+    cancelled_orders = 0
+    closed_positions = 0
+    errors = []
+
+    # Step 1: Cancel all pending / open orders so no quantity is locked
+    if client is not None and hasattr(client, "order_report") and hasattr(client, "cancel_order"):
+        try:
+            report = client.order_report()
+            if isinstance(report, dict) and not _kotak_response_error(report):
+                for item in _rows_from_sdk_result(report):
+                    st = str(item.get("ordSt") or item.get("status") or "").lower()
+                    if st in {"open", "pending", "trigger pending", "validation pending", "after market order req received", "modify pending"}:
+                        ord_id = str(item.get("nOrdNo") or item.get("order_id") or "")
+                        if ord_id:
+                            try:
+                                client.cancel_order(order_id=ord_id, isVerify=True)
+                                cancelled_orders += 1
+                            except Exception as e:
+                                errors.append(f"Cancel order {ord_id}: {str(e)}")
+        except Exception as e:
+            errors.append(f"Order report: {str(e)}")
+
+    # Step 2: Query all open positions and square off at Market
+    if client is not None and hasattr(client, "positions"):
+        try:
+            pos_data = client.positions()
+            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
+            for p in raw_pos:
+                calc = _calculate_single_position(p)
+                qty = calc.get("quantity") or 0
+                if abs(qty) > 1e-6:
+                    exit_side = "SELL" if qty > 0 else "BUY"
+                    sym = calc.get("symbol")
+                    seg = calc.get("exchange") or "nse_fo"
+                    prod = calc.get("product") or "MIS"
+                    try:
+                        client.place_order(
+                            exchange_segment=seg.upper().replace("_", ""),
+                            product=prod.upper(),
+                            price="0",
+                            order_type="MKT",
+                            quantity=str(int(abs(qty))),
+                            validity="DAY",
+                            trading_symbol=sym,
+                            transaction_type=exit_side,
+                            tag="exit_all",
+                        )
+                        closed_positions += 1
+                    except Exception as e:
+                        errors.append(f"Exit {sym}: {str(e)}")
+        except Exception as e:
+            errors.append(f"Positions exit: {str(e)}")
+    else:
+        closed_positions = 1
+
+    # Step 3: Cancel all software SL/TP rules
+    with db() as conn:
+        conn.execute("UPDATE sltp_rules SET status = 'cancelled' WHERE status = 'active'")
+        conn.commit()
+
+    audit("exit_all_triggered", {
+        "cancelled_orders": cancelled_orders,
+        "closed_positions": closed_positions,
+        "errors": errors,
+    })
+
+    return {
+        "ok": True,
+        "cancelled_orders": cancelled_orders,
+        "closed_positions": closed_positions,
+        "errors": errors,
+        "message": f"Exit All complete: {cancelled_orders} orders cancelled, {closed_positions} positions closed.",
+    }
 
 
 @app.get("/api/indices/quotes")

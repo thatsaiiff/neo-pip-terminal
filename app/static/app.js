@@ -35,6 +35,13 @@
     ordersTab: 'all',
     positionsTab: 'open',
     lastOrders: [],
+    scalperMode: false,
+    autoSltp: true,
+    slPercent: 5,
+    tpPercent: 10,
+    availableFunds: null,
+    activeSltpRules: [],
+    demoSltpRules: [],
   };
 
   function money(value, showSign = false) {
@@ -192,6 +199,31 @@
       });
       return { ok: true, status: 'simulated', message: 'Demo order recorded locally. No broker request was sent.' };
     }
+    if (path === '/api/limits') {
+      return { available_cash: 100000.0, collateral: 0.0, margin_used: 0.0, total_margin: 100000.0 };
+    }
+    if (path === '/api/sltp' && method === 'GET') {
+      return state.demoSltpRules || [];
+    }
+    if (path === '/api/sltp' && method === 'POST') {
+      const b = JSON.parse(options.body || '{}');
+      const rule = { id: (state.demoSltpRules || []).length + 1, ...b, status: 'active', created_at: new Date().toISOString() };
+      state.demoSltpRules = state.demoSltpRules || [];
+      state.demoSltpRules.push(rule);
+      return { ok: true, rule_id: rule.id, message: `Software SL/TP active for ${b.symbol}` };
+    }
+    if (path.startsWith('/api/sltp/') && method === 'DELETE') {
+      const id = parseInt(path.split('/').pop());
+      state.demoSltpRules = (state.demoSltpRules || []).filter(r => r.id !== id);
+      return { ok: true, rule_id: id, message: 'SL/TP rule cancelled' };
+    }
+    if (path === '/api/sltp/check') {
+      return { ok: true, triggered_count: 0, triggered: [] };
+    }
+    if (path === '/api/positions/exit-all') {
+      state.demoSltpRules = [];
+      return { ok: true, cancelled_orders: 0, closed_positions: 1, errors: [], message: 'Exit All simulated: 0 orders cancelled, 1 position closed.' };
+    }
     if (path === '/api/instruments/search') return { instruments: [] };
     if (path === '/api/options/expiries') return { expiries: [], nearest_expiry: null };
     if (path === '/api/options/chain') return { rows: [], underlying: '', expiry: null, lot_size: 1 };
@@ -275,6 +307,7 @@
     $('live-price').className = 'price-unavailable';
     $('live-price').innerHTML = '<span class="dot-pulse"></span> Price unavailable';
     updateQuantity();
+    updateTradingViewSymbol(state.currentSymbol);
   }
 
   function renderInstrument(instrument) {
@@ -293,6 +326,7 @@
     $('source-indicator').innerHTML = '<i class="source-dot"></i> Kotak';
     $('bridge-note').textContent = 'Selected from Kotak instrument search. Verify the contract and quantity before ordering.';
     $('instrument-results').classList.add('hidden');
+    updateTradingViewSymbol(instrument.trading_symbol);
     refreshQuote();
   }
 
@@ -367,6 +401,23 @@
       $('live-price').className = '';
       $('live-price').textContent = `₹${Number(quote.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · LTP`;
       updateQuantity();
+      calculateAndPrefillSltp(false);
+
+      if (instrument.trading_symbol) {
+        api('/api/sltp/check', {
+          method: 'POST',
+          body: JSON.stringify({ symbol: instrument.trading_symbol, ltp: quote.ltp })
+        }).then(res => {
+          if (res && res.triggered_count > 0) {
+            res.triggered.forEach(t => {
+              toast(`🛡️ OCO Triggered: ${t.trigger_type} hit at ₹${t.trigger_ltp}! Market exit order placed.`, 'warning', 6000);
+            });
+            loadPositions();
+            loadOrders();
+            loadSltpRules();
+          }
+        }).catch(() => {});
+      }
     } catch (_) {
       if (state.selectedInstrument !== instrument) return;
       $('live-price').className = 'price-unavailable';
@@ -379,15 +430,25 @@
 
   function centerAtmRow(smooth = true) {
     const wrap = document.querySelector('.chain-table-wrap');
-    const atmRow = document.querySelector('#chain-rows tr.atm-row');
-    if (wrap && atmRow) {
-      const rowTop = atmRow.offsetTop;
-      const rowHeight = atmRow.offsetHeight;
-      const wrapHeight = wrap.clientHeight;
-      wrap.scrollTo({
-        top: Math.max(0, rowTop - (wrapHeight / 2) + (rowHeight / 2)),
-        behavior: smooth ? 'smooth' : 'auto'
-      });
+    let atmRow = document.querySelector('#chain-rows tr.atm-row');
+    if (wrap) {
+      if (!atmRow) {
+        const allRows = document.querySelectorAll('#chain-rows tr');
+        if (allRows.length > 0) {
+          atmRow = allRows[Math.floor(allRows.length / 2)];
+        }
+      }
+      if (atmRow) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const rowRect = atmRow.getBoundingClientRect();
+        const currentScroll = wrap.scrollTop;
+        const rowOffsetInWrap = (rowRect.top - wrapRect.top) + currentScroll;
+        const targetScroll = rowOffsetInWrap - (wrap.clientHeight / 2) + (rowRect.height / 2);
+        wrap.scrollTo({
+          top: Math.max(0, targetScroll),
+          behavior: smooth ? 'smooth' : 'auto'
+        });
+      }
     }
   }
 
@@ -430,9 +491,18 @@
           if (callOiBtn && row.call) {
             callOiBtn.textContent = row.call.oi == null ? '—' : Number(row.call.oi).toLocaleString('en-IN');
           }
+          if (tr.cells[0]) {
+            tr.cells[0].classList.toggle('itm-call', isCallItm);
+            tr.cells[0].classList.toggle('otm-call', !isCallItm);
+          }
+
           const callLtpBtn = tr.cells[1]?.querySelector('button');
           if (callLtpBtn && row.call) {
             callLtpBtn.textContent = row.call.ltp == null ? '—' : Number(row.call.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
+          if (tr.cells[1]) {
+            tr.cells[1].classList.toggle('itm-call', isCallItm);
+            tr.cells[1].classList.toggle('otm-call', !isCallItm);
           }
 
           const strikeCell = tr.cells[2];
@@ -448,9 +518,18 @@
           if (putLtpBtn && row.put) {
             putLtpBtn.textContent = row.put.ltp == null ? '—' : Number(row.put.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           }
+          if (tr.cells[3]) {
+            tr.cells[3].classList.toggle('itm-put', isPutItm);
+            tr.cells[3].classList.toggle('otm-put', !isPutItm);
+          }
+
           const putOiBtn = tr.cells[4]?.querySelector('button');
           if (putOiBtn && row.put) {
             putOiBtn.textContent = row.put.oi == null ? '—' : Number(row.put.oi).toLocaleString('en-IN');
+          }
+          if (tr.cells[4]) {
+            tr.cells[4].classList.toggle('itm-put', isPutItm);
+            tr.cells[4].classList.toggle('otm-put', !isPutItm);
           }
         });
       } else {
@@ -509,7 +588,7 @@
         if (wrap && isBackgroundRefresh) {
           wrap.scrollTop = savedScrollTop;
         } else {
-          requestAnimationFrame(() => centerAtmRow(false));
+          setTimeout(() => centerAtmRow(false), 60);
         }
       }
     } catch (error) {
@@ -621,6 +700,146 @@
     $('sell-btn').classList.toggle('active', side === 'SELL');
   }
 
+  function calculateAndPrefillSltp(force = false) {
+    const ltp = state.currentLtp;
+    if (!ltp || ltp <= 0) return;
+    const side = state.side || 'BUY';
+    const slPct = state.slPercent || 5;
+    const tpPct = state.tpPercent || 10;
+
+    let slPrice, tpPrice;
+    if (side === 'BUY') {
+      slPrice = Math.max(0.05, ltp * (1 - slPct / 100));
+      tpPrice = ltp * (1 + tpPct / 100);
+    } else {
+      slPrice = ltp * (1 + slPct / 100);
+      tpPrice = Math.max(0.05, ltp * (1 - tpPct / 100));
+    }
+
+    const slInput = $('sltp-sl-input');
+    const tpInput = $('sltp-tp-input');
+    const slBadge = $('sl-badge');
+    const tpBadge = $('tp-badge');
+
+    if (slBadge) slBadge.textContent = `${side === 'BUY' ? '-' : '+'}${slPct}%`;
+    if (tpBadge) tpBadge.textContent = `${side === 'BUY' ? '+' : '-'}${tpPct}%`;
+
+    if (slInput && (force || !slInput.value || slInput.dataset.autoPrefilled !== 'false')) {
+      slInput.value = slPrice.toFixed(2);
+      slInput.dataset.autoPrefilled = 'true';
+    }
+    if (tpInput && (force || !tpInput.value || tpInput.dataset.autoPrefilled !== 'false')) {
+      tpInput.value = tpPrice.toFixed(2);
+      tpInput.dataset.autoPrefilled = 'true';
+    }
+  }
+
+  function updateTradingViewSymbol(symbol) {
+    const sym = String(symbol || 'NIFTY').toUpperCase().trim();
+    let tvSymbol = 'NSE:NIFTY';
+    if (sym.startsWith('BANKNIFTY')) tvSymbol = 'NSE:BANKNIFTY';
+    else if (sym.startsWith('FINNIFTY')) tvSymbol = 'NSE:FINNIFTY';
+    else if (sym.startsWith('MIDCPNIFTY')) tvSymbol = 'NSE:MIDCPNIFTY';
+    else if (sym.startsWith('SENSEX')) tvSymbol = 'BSE:SENSEX';
+    else if (sym.startsWith('BANKEX')) tvSymbol = 'BSE:BANKEX';
+    else if (sym.includes('NIFTY')) tvSymbol = 'NSE:NIFTY';
+    else {
+      const match = sym.match(/^[A-Z]+/);
+      const base = match ? match[0] : sym;
+      const seg = state.exchangeSegment || 'nse_fo';
+      const prefix = seg.includes('bse') ? 'BSE:' : 'NSE:';
+      tvSymbol = `${prefix}${base}`;
+    }
+
+    const label = $('tv-chart-symbol-label');
+    if (label) label.textContent = tvSymbol;
+
+    const frame = $('tv-chart-frame');
+    if (frame) {
+      const newSrc = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=5&theme=light&style=1&timezone=Asia%2FKolkata&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&save_image=0&locale=in`;
+      if (frame.getAttribute('data-current-src') !== newSrc) {
+        frame.setAttribute('data-current-src', newSrc);
+        frame.src = newSrc;
+      }
+    }
+  }
+
+  async function refreshLimits() {
+    try {
+      const data = await api('/api/limits');
+      const funds = Number(data.available_cash ?? data.total_margin ?? 0);
+      state.availableFunds = funds;
+      const pill = $('scalper-funds-pill');
+      if (pill) {
+        pill.textContent = `Funds: ${money(funds)}`;
+        pill.classList.toggle('low-funds', funds <= 0);
+      }
+    } catch (_) {}
+  }
+
+  async function loadSltpRules() {
+    try {
+      const data = await api('/api/sltp');
+      state.activeSltpRules = Array.isArray(data) ? data : (data.rules || []);
+    } catch (_) {
+      state.activeSltpRules = [];
+    }
+  }
+
+  async function executeScalperBuy() {
+    if (state.submitting) {
+      toast('An order submission is still in progress.', 'warning');
+      return;
+    }
+    try {
+      await refreshLimits();
+      const lotSize = getLotSize();
+      let lots = getLots();
+      const ltp = state.currentLtp || 100;
+      const funds = state.availableFunds;
+      if (funds && funds > 0) {
+        const requiredMargin = lots * lotSize * ltp;
+        if (requiredMargin > funds) {
+          const maxAffordableLots = Math.max(1, Math.floor(funds / (lotSize * ltp)));
+          if (maxAffordableLots < lots) {
+            toast(`⚡ Scalper Mode: Auto-adjusted lots from ${lots} to ${maxAffordableLots} (Max affordable with ${money(funds)} funds)`, 'warning', 4500);
+            lots = maxAffordableLots;
+            $('lots-input').value = lots;
+            updateQuantity();
+          }
+        }
+      }
+
+      const order = snapshotOrder('BUY');
+      order.user_confirmed = true;
+      order.order_type = 'MKT';
+
+      state.submitting = true;
+      $('place-buy').disabled = true;
+      const buyText = $('place-buy').querySelector('span');
+      if (buyText) buyText.textContent = '⚡ BUYING...';
+
+      toast(`⚡ Scalper 1-Click: Submitting BUY order for ${order.lots} lots (${order.lots * order.lot_size} units) ${order.symbol} at Market...`, 'info', 2500);
+
+      const result = await api('/api/orders', {
+        method: 'POST',
+        body: JSON.stringify(order)
+      });
+
+      toast(`⚡ Order Executed: ${order.symbol} BUY ${order.lots} lots filled!`, 'success', 4500);
+      await loadOrders();
+      await loadPositions();
+      await loadSltpRules();
+    } catch (err) {
+      toast(cleanErrorMessage(err.message), 'error', 6000);
+    } finally {
+      state.submitting = false;
+      $('place-buy').disabled = false;
+      const buyText = $('place-buy').querySelector('span');
+      if (buyText) buyText.textContent = 'Place BUY';
+    }
+  }
+
   function snapshotOrder(side) {
     const symbol = $('symbol-input').value.trim().toUpperCase();
     const type = $('type-select').value;
@@ -631,6 +850,12 @@
     const price = (type === 'L' || type === 'SL') ? rawPrice : null;
     const trigger = (type === 'SL' || type === 'SL-M') ? rawTrigger : null;
     const validity = $('validity-select') ? $('validity-select').value : 'DAY';
+
+    const autoSltp = $('sltp-toggle') ? $('sltp-toggle').checked : false;
+    const rawSl = $('sltp-sl-input')?.value.trim();
+    const rawTp = $('sltp-tp-input')?.value.trim();
+    const slPrice = autoSltp && rawSl ? Number.parseFloat(rawSl) : null;
+    const tpPrice = autoSltp && rawTp ? Number.parseFloat(rawTp) : null;
 
     if (!symbol) throw new Error('Enter a trading symbol before reviewing an order.');
     if (!/^[A-Z0-9][A-Z0-9 .&_/-]{0,63}$/.test(symbol)) throw new Error('Symbol contains unsupported characters.');
@@ -658,6 +883,9 @@
       price,
       trigger_price: trigger,
       validity,
+      auto_sltp: autoSltp,
+      sl_price: slPrice,
+      tp_price: tpPrice,
       user_confirmed: false,
     };
   }
@@ -694,6 +922,10 @@
       if (Number.isFinite(state.currentLtp)) addReviewRow('Indicative LTP', `${money(state.currentLtp)} · ${formatTime(state.lastQuoteTimestamp)}`);
       if (order.price !== null) addReviewRow('Limit price', money(order.price));
       if (order.trigger_price !== null) addReviewRow('Trigger price', money(order.trigger_price));
+      if (order.auto_sltp) {
+        if (order.sl_price !== null) addReviewRow('🛡️ Auto Stop Loss (SL)', money(order.sl_price));
+        if (order.tp_price !== null) addReviewRow('🎯 Auto Take Profit (TP)', money(order.tp_price));
+      }
 
       const live = state.mode === 'live' && state.authenticated;
       const warning = $('review-mode-warning');
@@ -1027,6 +1259,82 @@
 
         title.append(sym, badge);
 
+        if (!p.closed && Math.abs(p.quantity) > 0) {
+          const activeRule = (state.activeSltpRules || []).find(r => r.symbol === p.symbol && r.status === 'active');
+          if (activeRule) {
+            const sltpTag = document.createElement('span');
+            sltpTag.className = 'pos-sltp-tag';
+            sltpTag.innerHTML = `🛡️ SL ${money(activeRule.sl_price)} · TP ${money(activeRule.tp_price)} `;
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn-cancel-sltp';
+            cancelBtn.textContent = '✕';
+            cancelBtn.title = 'Cancel software SL/TP';
+            cancelBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              try {
+                await api(`/api/sltp/${activeRule.id}`, { method: 'DELETE' });
+                toast(`SL/TP cancelled for ${p.symbol}`, 'info');
+                await loadSltpRules();
+                await loadPositions();
+              } catch (err) {
+                toast(cleanErrorMessage(err.message), 'error');
+              }
+            });
+            sltpTag.appendChild(cancelBtn);
+            title.appendChild(sltpTag);
+          } else {
+            const addSltpBtn = document.createElement('button');
+            addSltpBtn.type = 'button';
+            addSltpBtn.className = 'btn-add-sltp';
+            addSltpBtn.textContent = '+ 5% SL / 10% TP';
+            addSltpBtn.title = 'Approve & attach 5% SL and 10% TP protection';
+            addSltpBtn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              try {
+                const refPrice = Number(p.ltp || p.avg_buy_price || p.avg_sell_price || 100);
+                const isLong = p.quantity > 0;
+                const slPrice = isLong ? Math.max(0.05, refPrice * 0.95) : refPrice * 1.05;
+                const tpPrice = isLong ? refPrice * 1.10 : Math.max(0.05, refPrice * 0.90);
+                await api('/api/sltp', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    symbol: p.symbol,
+                    exchange_segment: p.exchange || 'nse_fo',
+                    product: p.product || 'NRML',
+                    side: isLong ? 'BUY' : 'SELL',
+                    quantity: Math.abs(p.quantity),
+                    entry_price: refPrice,
+                    sl_price: Number(slPrice.toFixed(2)),
+                    tp_price: Number(tpPrice.toFixed(2)),
+                  })
+                });
+                toast(`🛡️ 5% SL (${money(slPrice)}) & 10% TP (${money(tpPrice)}) activated for ${p.symbol}!`, 'success', 4000);
+                await loadSltpRules();
+                await loadPositions();
+              } catch (err) {
+                toast(cleanErrorMessage(err.message), 'error');
+              }
+            });
+            title.appendChild(addSltpBtn);
+          }
+
+          if (p.ltp && p.symbol) {
+            api('/api/sltp/check', {
+              method: 'POST',
+              body: JSON.stringify({ symbol: p.symbol, ltp: Number(p.ltp) })
+            }).then(res => {
+              if (res && res.triggered_count > 0) {
+                res.triggered.forEach(t => {
+                  toast(`🛡️ OCO Triggered: ${t.trigger_type} hit for ${p.symbol} at ₹${t.trigger_ltp}!`, 'warning', 6000);
+                });
+                loadPositions();
+                loadOrders();
+              }
+            }).catch(() => {});
+          }
+        }
+
         const detail = document.createElement('span');
         detail.className = 'position-detail-text';
         if (p.closed) {
@@ -1303,10 +1611,118 @@
   }
 
   // Event Listeners
-  $('buy-btn').addEventListener('click', () => setSide('BUY'));
-  $('sell-btn').addEventListener('click', () => setSide('SELL'));
-  $('place-buy').addEventListener('click', () => openReview('BUY'));
+  $('buy-btn').addEventListener('click', () => {
+    setSide('BUY');
+    calculateAndPrefillSltp(true);
+  });
+  $('sell-btn').addEventListener('click', () => {
+    setSide('SELL');
+    calculateAndPrefillSltp(true);
+  });
+  $('place-buy').addEventListener('click', () => {
+    if (state.scalperMode) {
+      executeScalperBuy();
+    } else {
+      openReview('BUY');
+    }
+  });
   $('place-sell').addEventListener('click', () => openReview('SELL'));
+
+  if ($('scalper-mode-toggle')) {
+    $('scalper-mode-toggle').addEventListener('change', () => {
+      state.scalperMode = $('scalper-mode-toggle').checked;
+      const orderCard = $('order-card');
+      if (orderCard) orderCard.classList.toggle('scalper-active', state.scalperMode);
+      const buySub = $('place-buy')?.querySelector('.btn-sub');
+      if (buySub) {
+        buySub.textContent = state.scalperMode ? '⚡ Instant Market BUY' : 'Review details';
+      }
+      if (state.scalperMode) {
+        if ($('type-select')) {
+          $('type-select').value = 'MKT';
+          updateOrderTypeFields();
+        }
+        refreshLimits();
+        toast('⚡ Scalper Mode Active: 1-Click Instant Market BUY enabled!', 'warning', 3500);
+      } else {
+        toast('Scalper Mode disabled. Normal review modal restored.', 'info', 2000);
+      }
+    });
+  }
+
+  if ($('tv-chart-toggle')) {
+    $('tv-chart-toggle').addEventListener('click', () => {
+      const panel = $('tv-chart-panel');
+      const open = panel.classList.toggle('hidden') === false;
+      $('tv-chart-toggle').setAttribute('aria-expanded', String(open));
+      const arrow = $('tv-chart-toggle').querySelector('.toggle-arrow');
+      if (arrow) arrow.textContent = open ? '▴' : '▾';
+    });
+  }
+
+  if ($('tv-chart-popout')) {
+    $('tv-chart-popout').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const symLabel = $('tv-chart-symbol-label')?.textContent || 'NSE:NIFTY';
+      const popoutUrl = `https://in.tradingview.com/chart/?symbol=${encodeURIComponent(symLabel)}`;
+      window.open(popoutUrl, '_blank', 'noopener,noreferrer');
+    });
+  }
+
+  if ($('sltp-toggle')) {
+    $('sltp-toggle').addEventListener('change', () => {
+      const enabled = $('sltp-toggle').checked;
+      state.autoSltp = enabled;
+      const wrap = $('sltp-fields-wrap');
+      if (wrap) {
+        wrap.style.opacity = enabled ? '1' : '0.4';
+        wrap.style.pointerEvents = enabled ? 'auto' : 'none';
+      }
+    });
+  }
+
+  document.querySelectorAll('.sltp-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sltp-preset').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.slPercent = parseFloat(btn.dataset.sl) || 5;
+      state.tpPercent = parseFloat(btn.dataset.tp) || 10;
+      calculateAndPrefillSltp(true);
+    });
+  });
+
+  if ($('sltp-sl-input')) {
+    $('sltp-sl-input').addEventListener('input', () => {
+      $('sltp-sl-input').dataset.autoPrefilled = 'false';
+    });
+  }
+  if ($('sltp-tp-input')) {
+    $('sltp-tp-input').addEventListener('input', () => {
+      $('sltp-tp-input').dataset.autoPrefilled = 'false';
+    });
+  }
+
+  if ($('btn-exit-all')) {
+    $('btn-exit-all').addEventListener('click', async () => {
+      const ok = window.confirm('⚠️ PANIC EXIT ALL:\n\nAre you sure you want to cancel ALL open/pending orders and square off ALL running positions at Market?');
+      if (!ok) return;
+      const btn = $('btn-exit-all');
+      btn.disabled = true;
+      btn.textContent = 'EXITING...';
+      try {
+        const res = await api('/api/positions/exit-all', { method: 'POST' });
+        toast(res.message || 'Exit All complete.', 'warning', 6000);
+        await loadPositions();
+        await loadOrders();
+        await loadSltpRules();
+      } catch (err) {
+        toast(`Exit All failed: ${cleanErrorMessage(err.message)}`, 'error', 6000);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚠️ EXIT ALL';
+      }
+    });
+  }
 
   $('lots-minus').addEventListener('click', () => {
     $('lots-input').value = Math.max(1, getLots() - 1);
@@ -1359,6 +1775,7 @@
     if (open) {
       loadChainExpiries();
       startOptionChainPolling();
+      setTimeout(() => centerAtmRow(false), 250);
     } else {
       stopOptionChainPolling();
     }
@@ -1675,6 +2092,9 @@
   $('product-select').value = 'MIS';
   if ($('validity-select')) $('validity-select').value = 'DAY';
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);
+  updateTradingViewSymbol('NIFTY');
+  refreshLimits();
+  loadSltpRules();
 
   setupIndexTickerSlide();
   setupMoversControls();
@@ -1689,6 +2109,7 @@
   // Background Polls
   setInterval(refreshStatus, 900);
   setInterval(loadOrders, 5000);
+  setInterval(loadSltpRules, 5000);
   setInterval(loadIndexQuotes, 5000);
   setInterval(() => {
     if (state.activityTab === 'positions') {

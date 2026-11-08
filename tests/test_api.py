@@ -390,5 +390,59 @@ def test_market_movers_endpoint(client):
         assert "ltp" in first
 
 
+def test_sltp_creation_and_execution(client):
+    # Create rule
+    res = client.post("/api/sltp", json={
+        "symbol": "NIFTY24500CE",
+        "exchange_segment": "nse_fo",
+        "product": "MIS",
+        "side": "BUY",
+        "quantity": 50,
+        "entry_price": 100.0,
+        "sl_price": 95.0,
+        "tp_price": 110.0,
+    })
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    rule_id = res.json()["rule_id"]
+
+    # Check active rules
+    res_list = client.get("/api/sltp")
+    assert res_list.status_code == 200
+    rules = res_list.json()
+    assert any(r["id"] == rule_id for r in rules)
+
+    # Check non-triggering LTP (102.0)
+    check_res = client.post("/api/sltp/check", json={"symbol": "NIFTY24500CE", "ltp": 102.0})
+    assert check_res.status_code == 200
+    assert check_res.json()["triggered_count"] == 0
+
+    # Check triggering SL (94.0 <= 95.0)
+    sl_res = client.post("/api/sltp/check", json={"symbol": "NIFTY24500CE", "ltp": 94.0})
+    assert sl_res.status_code == 200
+    assert sl_res.json()["triggered_count"] == 1
+    assert sl_res.json()["triggered"][0]["trigger_type"] == "SL"
+
+    # Rule should no longer be active
+    res_list2 = client.get("/api/sltp")
+    assert not any(r["id"] == rule_id for r in res_list2.json())
+
+
+def test_limits_endpoint(client):
+    res = client.get("/api/limits")
+    assert res.status_code == 200
+    data = res.json()
+    assert "available_cash" in data
+    assert data["available_cash"] > 0
+
+
+def test_exit_all_positions_endpoint(client):
+    res = client.post("/api/positions/exit-all")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "closed_positions" in data
+
+
 
 
