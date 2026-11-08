@@ -293,6 +293,11 @@
 
         <!-- Orders Panel -->
         <div id="orders-panel" role="tabpanel">
+          <div class="order-sub-tabs" role="tablist">
+            <button id="orders-filter-all" class="order-sub-tab active" type="button">All (<span id="orders-all-count">0</span>)</button>
+            <button id="orders-filter-completed" class="order-sub-tab" type="button">Completed (<span id="orders-completed-count">0</span>)</button>
+            <button id="orders-filter-failed" class="order-sub-tab" type="button">Failed (<span id="orders-failed-count">0</span>)</button>
+          </div>
           <div id="orders-list" class="orders-list">
             <div class="empty-state">
               <span class="empty-glyph">↗</span>
@@ -307,19 +312,24 @@
         <!-- Positions & P&L Panel -->
         <div id="positions-panel" class="hidden" role="tabpanel">
           <div class="pnl-summary">
+            <div class="pnl-card pnl-card-primary">
+              <span class="pnl-label-highlight">TODAY'S P&amp;L</span>
+              <strong id="today-pnl" class="pnl-primary-value">—</strong>
+            </div>
             <div class="pnl-card">
-              <span>MTM P&amp;L</span>
+              <span>UNREALIZED (MTM)</span>
               <strong id="total-mtm">—</strong>
             </div>
             <div class="pnl-card">
-              <span id="position-pnl-label">POSITION P&amp;L</span>
+              <span id="position-pnl-label">REALIZED P&amp;L</span>
               <strong id="total-position-pnl">—</strong>
             </div>
           </div>
           <div id="positions-note" class="positions-note">Connect Kotak Neo to load live positions.</div>
           <div class="position-tabs">
-            <button id="open-positions-tab" class="position-tab active" type="button">Open</button>
-            <button id="closed-positions-tab" class="position-tab" type="button">Closed</button>
+            <button id="open-positions-tab" class="position-tab active" type="button">Open (<span id="pos-open-count">0</span>)</button>
+            <button id="closed-positions-tab" class="position-tab" type="button">Closed (<span id="pos-closed-count">0</span>)</button>
+            <button id="all-positions-tab" class="position-tab" type="button">All (<span id="pos-all-count">0</span>)</button>
           </div>
           <div id="positions-list" class="positions-list"></div>
         </div>

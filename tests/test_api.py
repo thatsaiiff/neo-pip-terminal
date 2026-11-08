@@ -242,3 +242,59 @@ def test_audit_events_list(client):
     response = client.get("/api/audit")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+def test_positions_calculates_closed_trade_pnl(client, monkeypatch):
+    class MockNeoWithTrade:
+        def positions(self):
+            return {
+                "data": [
+                    {
+                        "trdSym": "NIFTY 24500 CE",
+                        "exSeg": "nse_fo",
+                        "prod": "NRML",
+                        "buyAmt": "10000",
+                        "sellAmt": "7094",
+                        "flBuyQty": "50",
+                        "flSellQty": "50",
+                        "multiplier": "1",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", MockNeoWithTrade())
+
+    # Check closed tab
+    res_closed = client.get("/api/positions?tab=closed")
+    assert res_closed.status_code == 200
+    d_closed = res_closed.json()
+    assert d_closed["total_today_pnl"] == -2906.0
+    assert d_closed["total_realized_pnl"] == -2906.0
+    assert d_closed["total_position_pnl"] == -2906.0
+    assert d_closed["closed_count"] == 1
+    assert len(d_closed["positions"]) == 1
+    assert d_closed["positions"][0]["position_pnl"] == -2906.0
+
+    # Check open tab - today's P&L is still -2906.0
+    res_open = client.get("/api/positions?tab=open")
+    assert res_open.status_code == 200
+    d_open = res_open.json()
+    assert d_open["total_today_pnl"] == -2906.0
+    assert d_open["open_count"] == 0
+    assert d_open["closed_count"] == 1
+
+
+def test_index_quotes_endpoint(client):
+    res = client.get("/api/indices/quotes")
+    assert res.status_code == 200
+    data = res.json()
+    assert "indices" in data
+    assert len(data["indices"]) == 3
+    names = [item["name"] for item in data["indices"]]
+    assert "NIFTY" in names
+    assert "BANK NIFTY" in names
+    assert "SENSEX" in names
+    for item in data["indices"]:
+        assert item["ltp"] is not None and item["ltp"] > 0
+

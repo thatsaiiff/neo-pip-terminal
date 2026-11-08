@@ -32,7 +32,9 @@
       { id: 1, created_at: new Date().toISOString(), event_type: 'service_started', detail: { mode: 'simulation', note: 'Local trading terminal ready' } }
     ],
     activityTab: 'orders',
+    ordersTab: 'all',
     positionsTab: 'open',
+    lastOrders: [],
   };
 
   function money(value, showSign = false) {
@@ -120,7 +122,7 @@
     if (path === '/api/health') return { ok: true, service: 'neo-pip-cloud-demo', lan_access_enabled: false };
     if (path === '/api/status') return { live_trading_enabled: false, broker_authenticated: false, mode: 'simulation', selected_symbol: null, extension_bridge_configured: false };
     if (path.startsWith('/api/orders') && method === 'GET') return state.demoOrders;
-    if (path.startsWith('/api/positions')) return { positions: [], total_mtm: 0, total_position_pnl: 0, pnl_complete: true };
+    if (path.startsWith('/api/positions')) return { positions: [], total_today_pnl: 0, total_realized_pnl: 0, total_unrealized_pnl: 0, total_mtm: 0, total_position_pnl: 0, open_count: 0, closed_count: 0, all_count: 0, pnl_complete: true };
     if (path.startsWith('/api/audit')) return state.demoAudit;
     if (path === '/api/indices/quotes') {
       return {
@@ -575,15 +577,50 @@
   }
 
   function renderOrders(orders) {
+    state.lastOrders = orders || [];
     state.orderCount = orders.length;
     $('order-count').textContent = `${orders.length} ORDER${orders.length === 1 ? '' : 'S'}`;
     const list = $('orders-list');
-    if (!orders.length) {
-      list.innerHTML = '<div class="empty-state"><span class="empty-glyph">↗</span><div><strong>Nothing here yet</strong><p>Orders and executions will appear here.</p></div></div>';
+
+    const completedOrders = [];
+    const failedOrders = [];
+    const pendingOrders = [];
+
+    for (const item of orders) {
+      const st = String(item.status || '').toLowerCase();
+      if (['completed', 'complete', 'traded', 'filled', 'simulated'].includes(st)) {
+        completedOrders.push(item);
+      } else if (['rejected', 'cancelled', 'failed'].includes(st) || st.includes('reject') || st.includes('cancel') || st.includes('fail')) {
+        failedOrders.push(item);
+      } else {
+        pendingOrders.push(item);
+      }
+    }
+
+    if ($('orders-all-count')) $('orders-all-count').textContent = orders.length;
+    if ($('orders-completed-count')) $('orders-completed-count').textContent = completedOrders.length;
+    if ($('orders-failed-count')) $('orders-failed-count').textContent = failedOrders.length;
+
+    let displayList = [];
+    if (state.ordersTab === 'completed') {
+      displayList = completedOrders;
+    } else if (state.ordersTab === 'failed') {
+      displayList = failedOrders;
+    } else {
+      displayList = orders;
+    }
+
+    if (!displayList.length) {
+      const emptyNote = state.ordersTab === 'completed'
+        ? 'No completed orders yet today.'
+        : (state.ordersTab === 'failed' ? 'No failed or rejected orders.' : 'Nothing here yet. Orders and executions will appear here.');
+      list.innerHTML = `<div class="empty-state"><span class="empty-glyph">↗</span><div><strong>Nothing here yet</strong><p>${emptyNote}</p></div></div>`;
       return;
     }
+
     list.replaceChildren();
-    for (const item of orders.slice(0, 15)) {
+
+    const createOrderRow = (item) => {
       const row = document.createElement('div');
       row.className = 'order-item';
       const side = document.createElement('div');
@@ -595,7 +632,7 @@
       const title = document.createElement('strong');
       title.textContent = item.symbol;
       const meta = document.createElement('span');
-      meta.textContent = item.status === 'rejected' && item.message
+      meta.textContent = (item.status === 'rejected' || String(item.status).toLowerCase().includes('reject')) && item.message
         ? `${item.quantity} units · ${item.product} · REJECTED: ${cleanErrorMessage(item.message)} · ${formatTime(item.created_at)}`
         : `${item.quantity} units · ${item.product} · ${formatTime(item.created_at)}`;
       main.append(title, meta);
@@ -603,8 +640,10 @@
       const status = document.createElement('div');
       status.className = 'order-item-status';
       const tag = document.createElement('span');
-      tag.className = `status-tag ${item.status}`;
-      tag.textContent = item.mode === 'simulation' ? 'SIMULATED' : item.status;
+      const stLower = String(item.status).toLowerCase();
+      const badgeCls = ['completed', 'traded', 'filled', 'simulated'].includes(stLower) ? 'completed' : (['rejected', 'cancelled', 'failed'].includes(stLower) || stLower.includes('reject') || stLower.includes('fail') ? 'failed' : 'pending');
+      tag.className = `order-badge ${badgeCls}`;
+      tag.textContent = item.mode === 'simulation' ? 'SIMULATED' : String(item.status).toUpperCase();
       const id = document.createElement('small');
       id.textContent = item.broker_order_id ? `#${item.broker_order_id}` : `#${item.id}`;
       status.append(tag, id);
@@ -629,7 +668,45 @@
         status.append(cancel);
       }
       row.append(side, main, status);
-      list.appendChild(row);
+      return row;
+    };
+
+    if (state.ordersTab === 'all' && completedOrders.length > 0 && failedOrders.length > 0) {
+      if (pendingOrders.length > 0) {
+        const hPending = document.createElement('div');
+        hPending.className = 'order-section-divider';
+        hPending.textContent = `Pending (${pendingOrders.length})`;
+        list.appendChild(hPending);
+        pendingOrders.forEach(o => list.appendChild(createOrderRow(o)));
+      }
+
+      const hCompleted = document.createElement('div');
+      hCompleted.className = 'order-section-divider';
+      hCompleted.textContent = `Completed (${completedOrders.length})`;
+      list.appendChild(hCompleted);
+      completedOrders.forEach(o => list.appendChild(createOrderRow(o)));
+
+      const hFailed = document.createElement('div');
+      hFailed.className = 'order-section-divider';
+      hFailed.textContent = `Failed / Rejected (${failedOrders.length})`;
+      list.appendChild(hFailed);
+      failedOrders.forEach(o => list.appendChild(createOrderRow(o)));
+    } else {
+      for (const item of displayList) {
+        list.appendChild(createOrderRow(item));
+      }
+    }
+  }
+
+  function setOrdersFilter(filter) {
+    state.ordersTab = filter;
+    if ($('orders-filter-all')) $('orders-filter-all').classList.toggle('active', filter === 'all');
+    if ($('orders-filter-completed')) $('orders-filter-completed').classList.toggle('active', filter === 'completed');
+    if ($('orders-filter-failed')) $('orders-filter-failed').classList.toggle('active', filter === 'failed');
+    if (state.lastOrders && state.lastOrders.length) {
+      renderOrders(state.lastOrders);
+    } else {
+      loadOrders();
     }
   }
 
@@ -679,55 +756,85 @@
     $('positions-note').textContent = 'Refreshing Kotak positions and quotes…';
     if (cloudDemoMode) {
       $('positions-note').textContent = 'Live positions and current P&L require the local Kotak backend.';
+      if ($('today-pnl')) $('today-pnl').textContent = '—';
       $('total-mtm').textContent = '—';
       $('total-position-pnl').textContent = '—';
       $('positions-list').replaceChildren();
       return;
     }
     try {
-      const data = await api(`/api/positions?closed=${state.positionsTab === 'closed'}`);
-      const mtmVal = Number(data.total_mtm);
-      const posVal = Number(data.total_position_pnl);
+      const data = await api(`/api/positions?tab=${state.positionsTab}&closed=${state.positionsTab === 'closed'}`);
 
+      const todayVal = Number(data.total_today_pnl ?? data.total_position_pnl);
+      const mtmVal = Number(data.total_unrealized_pnl ?? data.total_mtm);
+      const posVal = Number(data.total_realized_pnl ?? data.total_position_pnl);
+
+      const todayEl = $('today-pnl');
       const mtmEl = $('total-mtm');
       const posEl = $('total-position-pnl');
 
-      mtmEl.textContent = money(data.total_mtm, true);
-      posEl.textContent = money(data.total_position_pnl, true);
+      if (todayEl) {
+        todayEl.textContent = money(data.total_today_pnl ?? data.total_position_pnl, true);
+        todayEl.className = `pnl-primary-value ${Number.isFinite(todayVal) ? (todayVal > 0 ? 'pnl-positive' : (todayVal < 0 ? 'pnl-negative' : '')) : ''}`;
+      }
 
-      mtmEl.className = Number.isFinite(mtmVal) ? (mtmVal > 0 ? 'pnl-positive' : (mtmVal < 0 ? 'pnl-negative' : '')) : '';
-      posEl.className = Number.isFinite(posVal) ? (posVal > 0 ? 'pnl-positive' : (posVal < 0 ? 'pnl-negative' : '')) : '';
+      if (mtmEl) {
+        mtmEl.textContent = money(data.total_unrealized_pnl ?? data.total_mtm, true);
+        mtmEl.className = Number.isFinite(mtmVal) ? (mtmVal > 0 ? 'pnl-positive' : (mtmVal < 0 ? 'pnl-negative' : '')) : '';
+      }
 
-      $('position-pnl-label').textContent = state.positionsTab === 'closed' ? 'REALIZED P&L' : 'POSITION P&L';
+      if (posEl) {
+        posEl.textContent = money(data.total_realized_pnl ?? data.total_position_pnl, true);
+        posEl.className = Number.isFinite(posVal) ? (posVal > 0 ? 'pnl-positive' : (posVal < 0 ? 'pnl-negative' : '')) : '';
+      }
+
+      if ($('pos-open-count')) $('pos-open-count').textContent = data.open_count ?? 0;
+      if ($('pos-closed-count')) $('pos-closed-count').textContent = data.closed_count ?? 0;
+      if ($('pos-all-count')) $('pos-all-count').textContent = data.all_count ?? 0;
+
       $('positions-note').textContent = state.positionsTab === 'closed'
-        ? `Today’s fully closed trades · gross realized P&L · ${formatTime(data.updated_at)}`
-        : (data.pnl_complete ? `Updated ${formatTime(data.updated_at)} · Kotak quotes` : 'Some quote data is missing; values shown where available.');
+        ? `Today’s closed trades · gross realized P&L · ${formatTime(data.updated_at)}`
+        : `Overall Today’s P&L · Kotak quotes · ${formatTime(data.updated_at)}`;
 
       const list = $('positions-list');
       list.replaceChildren();
 
-      if (!data.positions || !data.positions.length) {
+      const items = data.positions || [];
+      if (!items.length) {
         $('positions-note').textContent = `No ${state.positionsTab} positions currently found on Kotak.`;
-        list.innerHTML = '<div class="empty-state"><span class="empty-glyph">📊</span><div><strong>No positions</strong><p>Active positions and P&L will appear here.</p></div></div>';
+        list.innerHTML = `<div class="empty-state"><span class="empty-glyph">📊</span><div><strong>No ${state.positionsTab} positions</strong><p>Positions and P&L will appear here.</p></div></div>`;
         return;
       }
 
-      for (const p of data.positions) {
+      for (const p of items) {
         const row = document.createElement('div');
         row.className = 'position-row';
-        const title = document.createElement('strong');
-        title.textContent = p.symbol;
+        const title = document.createElement('div');
+        title.className = 'position-title-wrap';
+
+        const sym = document.createElement('strong');
+        sym.textContent = p.symbol;
+
+        const badge = document.createElement('span');
+        badge.className = `order-badge ${p.closed ? 'completed' : 'pending'}`;
+        badge.textContent = p.closed ? 'CLOSED' : `${p.quantity > 0 ? '+' : ''}${p.quantity}`;
+
+        title.append(sym, badge);
+
         const detail = document.createElement('span');
-        detail.textContent = `${p.quantity} units · LTP ${money(p.ltp)}${p.pnl_error ? ` · ${p.pnl_error}` : ''}`;
+        detail.className = 'position-detail-text';
+        if (p.closed) {
+          detail.textContent = `${p.product || 'NRML'} · Matched ${p.buy_qty || p.sell_qty || 0} units · Buy Avg ${money(p.avg_buy_price)} · Sell Avg ${money(p.avg_sell_price)}`;
+        } else {
+          detail.textContent = `${p.product || 'NRML'} · ${p.quantity} units · LTP ${money(p.ltp)}${p.pnl_error ? ` · ${p.pnl_error}` : ''}`;
+        }
 
         const pnl = document.createElement('b');
-        const pnlNum = Number(state.positionsTab === 'closed' ? p.position_pnl : p.mtm_pnl);
-        pnl.textContent = state.positionsTab === 'closed'
-          ? `Realized ${money(p.position_pnl, true)}`
-          : `MTM ${money(p.mtm_pnl, true)} · P&L ${money(p.position_pnl, true)}`;
+        const pnlVal = Number(p.closed ? (p.realized_pnl ?? p.position_pnl) : (p.unrealized_pnl ?? p.mtm_pnl ?? p.position_pnl));
+        pnl.textContent = money(pnlVal, true);
 
-        if (Number.isFinite(pnlNum)) {
-          pnl.className = pnlNum > 0 ? 'pnl-positive' : (pnlNum < 0 ? 'pnl-negative' : '');
+        if (Number.isFinite(pnlVal)) {
+          pnl.className = pnlVal > 0 ? 'pnl-positive' : (pnlVal < 0 ? 'pnl-negative' : '');
         }
 
         row.append(title, detail, pnl);
@@ -740,8 +847,9 @@
 
   function setPositionsTab(tab) {
     state.positionsTab = tab;
-    $('open-positions-tab').classList.toggle('active', tab === 'open');
-    $('closed-positions-tab').classList.toggle('active', tab === 'closed');
+    if ($('open-positions-tab')) $('open-positions-tab').classList.toggle('active', tab === 'open');
+    if ($('closed-positions-tab')) $('closed-positions-tab').classList.toggle('active', tab === 'closed');
+    if ($('all-positions-tab')) $('all-positions-tab').classList.toggle('active', tab === 'all');
     loadPositions();
   }
 
@@ -823,8 +931,10 @@
         const change = Number(item.change);
         const pct = Number(item.change_percent);
         if (Number.isFinite(change) && Number.isFinite(pct)) {
-          changeEl.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
-          changeEl.className = `index-change ${change >= 0 ? 'positive' : 'negative'}`;
+          const sign = change > 0 ? '+' : (change < 0 ? '-' : '');
+          const pctSign = pct > 0 ? '+' : (pct < 0 ? '-' : '');
+          changeEl.textContent = `${sign}${Math.abs(change).toFixed(2)} (${pctSign}${Math.abs(pct).toFixed(2)}%)`;
+          changeEl.className = `index-change ${change > 0 ? 'positive' : (change < 0 ? 'negative' : '')}`;
         } else if (item.ltp != null) {
           changeEl.textContent = 'Live Kotak quote';
           changeEl.className = 'index-change';
@@ -1086,6 +1196,11 @@
 
   $('open-positions-tab').addEventListener('click', () => setPositionsTab('open'));
   $('closed-positions-tab').addEventListener('click', () => setPositionsTab('closed'));
+  if ($('all-positions-tab')) $('all-positions-tab').addEventListener('click', () => setPositionsTab('all'));
+
+  if ($('orders-filter-all')) $('orders-filter-all').addEventListener('click', () => setOrdersFilter('all'));
+  if ($('orders-filter-completed')) $('orders-filter-completed').addEventListener('click', () => setOrdersFilter('completed'));
+  if ($('orders-filter-failed')) $('orders-filter-failed').addEventListener('click', () => setOrdersFilter('failed'));
 
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
