@@ -436,11 +436,16 @@
     if (!container) return;
 
     container.innerHTML = '';
+
+    const rect = canvasWrap ? canvasWrap.getBoundingClientRect() : null;
+    const initW = Math.max(300, Math.floor((rect && rect.width) || container.clientWidth || (window.innerWidth - 500)));
+    const initH = Math.max(250, Math.floor((rect && rect.height) || container.clientHeight || (window.innerHeight - 350)));
+
     const chart = LightweightCharts.createChart(container, {
-      width: container.clientWidth || 600,
-      height: container.clientHeight || 400,
+      width: initW,
+      height: initH,
       layout: {
-        background: { color: '#0e1117' },
+        background: { type: 'solid', color: '#0e1117' },
         textColor: '#8b95a5',
         fontFamily: "'Inter', sans-serif",
       },
@@ -455,7 +460,7 @@
       },
       rightPriceScale: {
         borderColor: '#202735',
-        scaleMargins: { top: 0.1, bottom: 0.18 },
+        scaleMargins: { top: 0.08, bottom: 0.18 },
         autoScale: true,
       },
       timeScale: {
@@ -535,13 +540,15 @@
 
     // Resize observer
     if (window.ResizeObserver && canvasWrap) {
-      const ro = new ResizeObserver(() => {
-        if (pane.chart && container) {
-          pane.chart.applyOptions({
-            width: container.clientWidth,
-            height: container.clientHeight,
-          });
-          renderVPVR(pane);
+      const ro = new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const cr = entry.contentRect;
+          const w = Math.floor(cr.width);
+          const h = Math.floor(cr.height);
+          if (w > 50 && h > 50 && pane.chart) {
+            pane.chart.applyOptions({ width: w, height: h });
+            renderVPVR(pane);
+          }
         }
       });
       ro.observe(canvasWrap);
@@ -658,6 +665,15 @@
       const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${pane.tf}&days=5`;
       const data = await api(url);
 
+      const pSym = $(`p${pane.idx + 1}-sym`);
+      if (pSym) pSym.textContent = pane.sym;
+      if (pane.idx === 0) {
+        const topSym = $('chart-active-sym');
+        const opSym = $('op-sym-name');
+        if (topSym) topSym.textContent = pane.sym;
+        if (opSym) opSym.textContent = pane.sym;
+      }
+
       if (!data || !data.ok || !data.candles || !data.candles.length) {
         return;
       }
@@ -685,8 +701,15 @@
 
       applyPaneIndicators(pane);
 
-      // Auto-fit to recent bars
-      pane.chart.timeScale().fitContent();
+      // Fit container dimensions and content
+      const canvasWrap = $(`${pane.id}-canvas-wrap`);
+      if (canvasWrap && pane.chart) {
+        const cr = canvasWrap.getBoundingClientRect();
+        if (cr.width > 50 && cr.height > 50) {
+          pane.chart.applyOptions({ width: Math.floor(cr.width), height: Math.floor(cr.height) });
+        }
+        pane.chart.timeScale().fitContent();
+      }
 
       const lastBar = pane.candles[pane.candles.length - 1];
       if (lastBar) {
@@ -709,8 +732,12 @@
           body: JSON.stringify({ items }),
         });
         if (res && res.ok && res.quotes) {
+          const qList = Array.isArray(res.quotes) ? res.quotes : Object.values(res.quotes);
+          const qMap = res.quotes_by_symbol || {};
+          qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
+
           panes.forEach(pane => {
-            const q = res.quotes[pane.sym];
+            const q = qMap[pane.sym];
             if (q) {
               updatePaneQuote(pane, q);
               // Update live candle bar
@@ -977,8 +1004,10 @@
 
     const symTitle = $('chart-active-sym');
     const symSeg = $('chart-active-seg');
+    const p1Sym = $('p1-sym');
     if (symTitle) symTitle.textContent = selected.symbol;
     if (symSeg) symSeg.textContent = panes[0].isOption ? 'NSE F&O' : 'NSE';
+    if (p1Sym) p1Sym.textContent = selected.symbol;
 
     const opSym = $('op-sym-name');
     if (opSym) opSym.textContent = selected.symbol;
@@ -1010,6 +1039,86 @@
     activeTabIndex = openTabs.length - 1;
     renderSymbolTabs();
     switchTab(activeTabIndex);
+  }
+
+  // --- Quick Instrument Search & Tab Add Button ---
+  function setupAddTabButton() {
+    const addBtn = $('btn-add-tab');
+    const popup = $('quick-tab-search-popup');
+    const input = $('quick-tab-search-input');
+    const resultsBox = $('quick-tab-search-results');
+    const leftPanel = $('ex-left-panel');
+
+    if (!addBtn) return;
+
+    function openSearchPopup(e) {
+      if (e) e.stopPropagation();
+      if (leftPanel) leftPanel.classList.remove('collapsed');
+      if (popup) {
+        popup.classList.toggle('hidden');
+        if (!popup.classList.contains('hidden') && input) {
+          input.focus();
+          input.select();
+        }
+      }
+    }
+
+    addBtn.addEventListener('click', openSearchPopup);
+
+    document.addEventListener('click', e => {
+      if (popup && !popup.contains(e.target) && e.target !== addBtn) {
+        popup.classList.add('hidden');
+      }
+    });
+
+    let debounceTimer = null;
+    if (input && resultsBox) {
+      input.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        const q = input.value.trim();
+        if (q.length < 2) {
+          resultsBox.innerHTML = '<div class="quick-search-hint">Type any symbol or strike to open chart tab</div>';
+          return;
+        }
+
+        debounceTimer = setTimeout(async () => {
+          try {
+            resultsBox.innerHTML = '<div class="quick-search-hint">Searching…</div>';
+            const data = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
+            if (data.ok && data.results && data.results.length) {
+              resultsBox.innerHTML = '';
+              data.results.forEach(r => {
+                const item = document.createElement('div');
+                item.className = 'quick-search-item';
+                item.innerHTML = `
+                  <div class="item-main"><b>${r.symbol}</b></div>
+                  <div class="item-sub">${r.segment || 'NSE'}</div>
+                `;
+                item.addEventListener('click', () => {
+                  addSymbolTab(r.symbol, r.token || '');
+                  popup.classList.add('hidden');
+                  input.value = '';
+                });
+                resultsBox.appendChild(item);
+              });
+            } else {
+              resultsBox.innerHTML = '<div class="quick-search-hint">No symbols found</div>';
+            }
+          } catch (err) {
+            resultsBox.innerHTML = `<div class="quick-search-hint" style="color:var(--bear);">Error: ${err.message}</div>`;
+          }
+        }, 150);
+      });
+
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const first = resultsBox.querySelector('.quick-search-item');
+          if (first) first.click();
+        } else if (e.key === 'Escape') {
+          popup.classList.add('hidden');
+        }
+      });
+    }
   }
 
   // --- Left Collapsible Instruments Watchlist ---
@@ -1150,9 +1259,15 @@
       });
 
       if (data && data.ok && data.quotes) {
+        const qList = Array.isArray(data.quotes) ? data.quotes : Object.values(data.quotes);
+        const qMap = data.quotes_by_symbol || {};
+        qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
+
         rows.forEach(r => {
-          const sym = r.querySelector('.sym-main').textContent;
-          const q = data.quotes[sym];
+          const symEl = r.querySelector('.sym-main');
+          if (!symEl) return;
+          const sym = symEl.textContent;
+          const q = qMap[sym];
           if (q && q.ltp) {
             const bidBtn = r.querySelector('.btn-price-bid');
             const askBtn = r.querySelector('.btn-price-ask');
@@ -1288,20 +1403,44 @@
 
       // Update Footer Equity & PnL
       const fundsData = await api('/api/funds').catch(() => ({}));
-      if (fundsData && fundsData.available_margin !== undefined) {
-        const eqEl = $('f-equity');
-        const fmEl = $('f-free-margin');
-        const muEl = $('f-margin-used');
-        const accBal = $('ex-acc-balance');
+      const eqEl = $('f-equity');
+      const fmEl = $('f-free-margin');
+      const muEl = $('f-margin-used');
+      const accBal = $('ex-acc-balance');
 
-        const avail = Number(fundsData.available_margin || 1000000);
+      if (fundsData && fundsData.funds_error) {
+        // Live Kotak funds failed to report
+        const errText = 'Error: Failed to fetch';
+        const errStyle = 'color: #ff4757 !important; font-weight: 700;';
+        if (accBal) { accBal.textContent = errText; accBal.setAttribute('style', errStyle); }
+        if (eqEl) { eqEl.textContent = errText; eqEl.setAttribute('style', errStyle); }
+        if (fmEl) { fmEl.textContent = errText; fmEl.setAttribute('style', errStyle); }
+        if (muEl) { muEl.textContent = '₹0.00'; }
+      } else if (fundsData && fundsData.is_demo) {
+        // Guest Demo Mode
+        const avail = Number(fundsData.available_margin !== undefined ? fundsData.available_margin : 1000000);
         const used = Number(fundsData.used_margin || 0);
-        const equity = Number(fundsData.total_equity || (avail + used));
-
-        if (eqEl) eqEl.textContent = `₹${equity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-        if (fmEl) fmEl.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-        if (muEl) muEl.textContent = `₹${used.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-        if (accBal) accBal.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        const equity = Number(fundsData.total_equity || avail);
+        const demoTag = ' (Demo)';
+        if (accBal) { accBal.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${demoTag}`; accBal.removeAttribute('style'); }
+        if (eqEl) { eqEl.textContent = `₹${equity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${demoTag}`; eqEl.removeAttribute('style'); }
+        if (fmEl) { fmEl.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${demoTag}`; fmEl.removeAttribute('style'); }
+        if (muEl) { muEl.textContent = `₹${used.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; }
+      } else if (fundsData && fundsData.available_margin !== undefined) {
+        // Live Kotak exact reported funds
+        const avail = Number(fundsData.available_margin);
+        const used = Number(fundsData.used_margin || 0);
+        const equity = Number(fundsData.total_equity || avail);
+        if (accBal) { accBal.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; accBal.removeAttribute('style'); }
+        if (eqEl) { eqEl.textContent = `₹${equity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; eqEl.removeAttribute('style'); }
+        if (fmEl) { fmEl.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; fmEl.removeAttribute('style'); }
+        if (muEl) { muEl.textContent = `₹${used.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; }
+      } else {
+        const errText = 'Error: Failed to fetch';
+        const errStyle = 'color: #ff4757 !important; font-weight: 700;';
+        if (accBal) { accBal.textContent = errText; accBal.setAttribute('style', errStyle); }
+        if (eqEl) { eqEl.textContent = errText; eqEl.setAttribute('style', errStyle); }
+        if (fmEl) { fmEl.textContent = errText; fmEl.setAttribute('style', errStyle); }
       }
 
       // Orders report
@@ -1369,6 +1508,7 @@
   function setupOptionChainModal() {
     const modal = $('option-chain-modal');
     const openBtn = $('btn-chart-opt-chain');
+    const headerBtn = $('btn-header-opt-chain');
     const railBtn = $('rail-btn-option-chain');
     const closeBtn = $('close-oc-modal');
     const expirySelect = $('oc-expiry-select');
@@ -1389,6 +1529,7 @@
     }
 
     if (openBtn) openBtn.addEventListener('click', openModal);
+    if (headerBtn) headerBtn.addEventListener('click', openModal);
     if (railBtn) railBtn.addEventListener('click', openModal);
     if (closeBtn) closeBtn.addEventListener('click', closeModal);
 
@@ -1421,8 +1562,9 @@
         }
 
         if (spotBadge) {
+          const spot = Number(data.spot_price || 0);
           const diff = Number(data.spot_change || 0);
-          spotBadge.textContent = `Spot: ₹${Number(data.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${diff >= 0 ? '+' : ''}${diff.toFixed(2)})`;
+          spotBadge.textContent = `Spot: ₹${spot.toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${diff >= 0 ? '+' : ''}${diff.toFixed(2)})`;
         }
 
         if (expirySelect && data.expiries && data.expiries.length) {
@@ -1436,38 +1578,57 @@
           });
         }
 
+        const chainRows = data.chain || data.rows || [];
         tbody.innerHTML = '';
-        data.chain.forEach(row => {
+        if (!chainRows.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="oc-loading" style="text-align:center; padding:20px; color:#8b95a5;">No active option strikes found for this expiry.</td></tr>';
+          return;
+        }
+
+        chainRows.forEach(row => {
+          const strike = row.strike;
+          const callSym = row.call_symbol || (row.call && row.call.symbol) || `${underlying} ${strike} CE`;
+          const callTok = row.call_token || (row.call && row.call.instrument_key) || '';
+          const callLtp = Number(row.call_ltp !== undefined ? row.call_ltp : (row.call && row.call.ltp ? row.call.ltp : 0));
+          const callOi = row.call_oi || (row.call && row.call.oi) || 0;
+          const callVol = row.call_vol || (row.call && row.call.volume) || 0;
+
+          const putSym = row.put_symbol || (row.put && row.put.symbol) || `${underlying} ${strike} PE`;
+          const putTok = row.put_token || (row.put && row.put.instrument_key) || '';
+          const putLtp = Number(row.put_ltp !== undefined ? row.put_ltp : (row.put && row.put.ltp ? row.put.ltp : 0));
+          const putOi = row.put_oi || (row.put && row.put.oi) || 0;
+          const putVol = row.put_vol || (row.put && row.put.volume) || 0;
+
           const tr = document.createElement('tr');
           tr.className = `oc-strike-row ${row.is_atm ? 'atm-row' : ''}`;
           tr.innerHTML = `
-            <td class="col-oi">${row.call_oi ? row.call_oi.toLocaleString('en-IN') : '—'}</td>
-            <td class="col-vol">${row.call_vol ? row.call_vol.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-oi">${callOi ? callOi.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-vol">${callVol ? callVol.toLocaleString('en-IN') : '—'}</td>
             <td class="col-ltp">
-              <button type="button" class="oc-ltp-btn call-ltp" data-sym="${row.call_symbol}" data-tok="${row.call_token}">
-                ${row.call_ltp ? Number(row.call_ltp).toFixed(2) : '—'}
+              <button type="button" class="oc-ltp-btn call-ltp" data-sym="${callSym}" data-tok="${callTok}">
+                ${callLtp ? callLtp.toFixed(2) : '—'}
               </button>
             </td>
             <td class="col-strike">
-              <b>${row.strike}</b>
+              <b>${strike}</b>
               ${row.is_atm ? '<span style="font-size:9px; color:#ffb703; display:block;">ATM</span>' : ''}
             </td>
             <td class="col-ltp">
-              <button type="button" class="oc-ltp-btn put-ltp" data-sym="${row.put_symbol}" data-tok="${row.put_token}">
-                ${row.put_ltp ? Number(row.put_ltp).toFixed(2) : '—'}
+              <button type="button" class="oc-ltp-btn put-ltp" data-sym="${putSym}" data-tok="${putTok}">
+                ${putLtp ? putLtp.toFixed(2) : '—'}
               </button>
             </td>
-            <td class="col-vol">${row.put_vol ? row.put_vol.toLocaleString('en-IN') : '—'}</td>
-            <td class="col-oi">${row.put_oi ? row.put_oi.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-vol">${putVol ? putVol.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-oi">${putOi ? putOi.toLocaleString('en-IN') : '—'}</td>
           `;
 
           // Click Call LTP
           const callBtn = tr.querySelector('.call-ltp');
           if (callBtn) {
             callBtn.addEventListener('click', () => {
-              addSymbolTab(row.call_symbol, row.call_token);
+              addSymbolTab(callSym, callTok);
               closeModal();
-              toast(`Loaded ${row.call_symbol} chart & ticket`);
+              toast(`Loaded ${callSym} chart & ticket`);
             });
           }
 
@@ -1475,9 +1636,9 @@
           const putBtn = tr.querySelector('.put-ltp');
           if (putBtn) {
             putBtn.addEventListener('click', () => {
-              addSymbolTab(row.put_symbol, row.put_token);
+              addSymbolTab(putSym, putTok);
               closeModal();
-              toast(`Loaded ${row.put_symbol} chart & ticket`);
+              toast(`Loaded ${putSym} chart & ticket`);
             });
           }
 
@@ -1822,10 +1983,144 @@
     }
   }
 
+  // --- Change API Keys Modal (Kotak Consumer Key & Upstox Analytics Key) ---
+  function setupKeysModal() {
+    const modal = $('modal-api-keys');
+    const openBtn = $('btn-open-change-keys');
+    const closeBtn = $('btn-close-keys-modal');
+    const cancelBtn = $('btn-cancel-keys');
+    const saveBtn = $('btn-save-keys-submit');
+
+    const inputKotak = $('input-kotak-consumer-key');
+    const inputUpstox = $('input-upstox-analytics-key');
+    const inputMpin = $('input-keys-mpin');
+    const upStatusTxt = $('keys-upstox-status-txt');
+    const kotakStatusTxt = $('keys-kotak-status-txt');
+
+    async function openKeysModal() {
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      if (inputKotak) inputKotak.value = '';
+      if (inputUpstox) inputUpstox.value = '';
+      if (inputMpin) inputMpin.value = '';
+
+      try {
+        const st = await api('/api/settings/keys-status');
+        if (st && st.ok) {
+          if (upStatusTxt) upStatusTxt.textContent = `Upstox 1-Year Analytics Key: ${st.upstox_masked}`;
+          if (kotakStatusTxt) kotakStatusTxt.textContent = `Kotak Neo Consumer Key: ${st.consumer_key_masked}`;
+        }
+      } catch (e) {
+        // quiet
+      }
+    }
+
+    function closeKeysModal() {
+      if (modal) modal.classList.add('hidden');
+    }
+
+    if (openBtn) openBtn.addEventListener('click', openKeysModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeKeysModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeKeysModal);
+
+    // Toggle mask buttons
+    document.querySelectorAll('.btn-toggle-mask').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.dataset.target;
+        const targetInput = $(targetId);
+        if (targetInput) {
+          const isPass = targetInput.type === 'password';
+          targetInput.type = isPass ? 'text' : 'password';
+          btn.textContent = isPass ? '🙈' : '👁';
+        }
+      });
+    });
+
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const ck = (inputKotak ? inputKotak.value : '').trim();
+        const up = (inputUpstox ? inputUpstox.value : '').trim();
+        const mpin = (inputMpin ? inputMpin.value : '').trim();
+
+        if (!ck && !up) {
+          toast('Please enter a new Kotak Consumer Key or Upstox Analytics Key');
+          return;
+        }
+
+        try {
+          toast('Updating API keys securely...');
+          const payload = {};
+          if (ck) payload.consumer_key = ck;
+          if (up) payload.upstox_token = up;
+          if (mpin) payload.mpin = mpin;
+
+          const res = await api('/api/settings/keys', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+
+          if (res.ok) {
+            toast(`✅ ${res.message || 'API keys successfully saved and applied!'}`);
+            closeKeysModal();
+            loadCandles(panes[0]);
+          } else {
+            toast(`❌ ${res.detail || 'Failed to update keys'}`);
+          }
+        } catch (err) {
+          toast(`❌ Error: ${err.message}`);
+        }
+      });
+    }
+  }
+
+  // --- Guest Paper Trading Profile Modal ---
+  function setupGuestProfileModal() {
+    const modal = $('modal-guest-profile');
+    const openBtn = $('btn-open-guest-profile');
+    const closeBtn = $('btn-close-profile-modal');
+    const saveBtn = $('btn-save-profile');
+    const nameInput = $('input-guest-name');
+    const idEl = $('ex-acc-id');
+
+    // Load saved handle
+    const savedHandle = localStorage.getItem('neo_guest_handle');
+    if (savedHandle && idEl && !isOwner) {
+      idEl.textContent = `#${savedHandle.toUpperCase()}`;
+    }
+
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        if (modal) {
+          modal.classList.remove('hidden');
+          if (nameInput) nameInput.value = localStorage.getItem('neo_guest_handle') || '';
+        }
+      });
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', () => modal && modal.classList.add('hidden'));
+
+    if (saveBtn) {
+      saveBtn.addEventListener('click', () => {
+        const val = (nameInput ? nameInput.value : '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!val) {
+          toast('Please enter a valid trader handle (alphanumeric)');
+          return;
+        }
+        localStorage.setItem('neo_guest_handle', val);
+        if (idEl && !isOwner) {
+          idEl.textContent = `#${val.toUpperCase()}`;
+        }
+        if (modal) modal.classList.add('hidden');
+        toast(`✅ Paper Trading Profile saved as #${val.toUpperCase()}!`);
+      });
+    }
+  }
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
     initChartPane(panes[0]);
     renderSymbolTabs();
+    setupAddTabButton();
     setupOrderPanelInteractions();
     setupLeftDrawer();
     setupBottomPanel();
@@ -1834,6 +2129,8 @@
     setupGuideModal();
     setupIndicatorsMenu();
     setupTokenModal();
+    setupKeysModal();
+    setupGuestProfileModal();
 
     loadCandles(panes[0]);
     startQuotesPolling();

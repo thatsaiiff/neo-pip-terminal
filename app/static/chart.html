@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness2">
 </head>
 <body class="ex-theme-dark">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -26,16 +26,32 @@
       <nav class="ex-tabs-bar" id="ex-tabs-bar" aria-label="Open Symbol Tabs">
         <!-- Rendered dynamically via JS -->
       </nav>
-      <button type="button" id="btn-add-tab" class="ex-tab-add-btn" title="Add Chart Tab (Search Symbol)">+</button>
+      <div class="ex-tab-add-wrap">
+        <button type="button" id="btn-add-tab" class="ex-tab-add-btn" title="Add Chart Tab (Search Symbol)">+</button>
+        <div id="quick-tab-search-popup" class="quick-tab-search-popup hidden">
+          <div class="quick-search-box">
+            <input type="text" id="quick-tab-search-input" placeholder="Search strike or symbol (e.g. 25000 CE, RELIANCE)" autocomplete="off">
+          </div>
+          <div id="quick-tab-search-results" class="quick-tab-search-results">
+            <div class="quick-search-hint">Type any symbol or strike to open chart tab</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="ex-header-right">
+      <!-- Real-Time Option Chain Button directly in Header beside Funds -->
+      <button type="button" id="btn-header-opt-chain" class="ex-header-opt-chain-btn" title="Open Real-time Option Chain">
+        <span class="chain-icon">📊</span>
+        <span>Option Chain</span>
+      </button>
+
       <!-- Account Badge (Guest Demo vs Live Kotak) -->
       <div class="ex-account-badge-wrap">
         <button type="button" id="ex-account-btn" class="ex-account-btn" title="Click to view Account Mode / Switch">
           <span class="ex-acc-pill demo" id="ex-acc-pill">Demo</span>
           <span class="ex-acc-id" id="ex-acc-id">#GUEST-8842</span>
-          <span class="ex-acc-balance" id="ex-acc-balance">₹10,00,000.00</span>
+          <span class="ex-acc-balance" id="ex-acc-balance">₹10,00,000.00 (Demo)</span>
           <span class="ex-acc-caret">▼</span>
         </button>
         <div id="ex-account-menu" class="ex-account-menu hidden">
@@ -47,7 +63,15 @@
           <div class="acc-menu-divider"></div>
           <button type="button" id="btn-open-owner-login" class="acc-menu-item">
             <span class="acc-item-icon">🔐</span>
-            <span>Owner Login (TOTP & MPIN)</span>
+            <span>Owner Login (TOTP &amp; MPIN)</span>
+          </button>
+          <button type="button" id="btn-open-change-keys" class="acc-menu-item">
+            <span class="acc-item-icon">🔑</span>
+            <span>Change API Keys (Kotak &amp; Upstox)</span>
+          </button>
+          <button type="button" id="btn-open-guest-profile" class="acc-menu-item">
+            <span class="acc-item-icon">👤</span>
+            <span>Paper Trading Profile</span>
           </button>
           <button type="button" id="btn-reset-demo" class="acc-menu-item">
             <span class="acc-item-icon">🔄</span>
@@ -57,6 +81,12 @@
             <span class="acc-item-icon">📖</span>
             <span>Setup Guide (Run on Your System)</span>
           </button>
+          <div class="acc-menu-divider"></div>
+          <div class="acc-menu-promo">
+            <p>🚀 <b>Wanted to trade with your own Kotak API key?</b></p>
+            <p>Direct broker connector coming soon!</p>
+            <small>Feedback welcome @thatsaiiff on Reddit</small>
+          </div>
           <button type="button" id="btn-logout" class="acc-menu-item hidden">
             <span class="acc-item-icon">🚪</span>
             <span>Logout Session</span>
@@ -796,12 +826,121 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
     </div>
   </div>
 
+  <!-- 5. CHANGE API KEYS MODAL (Upstox Analytics 1-Year & Kotak Consumer Key) -->
+  <div id="modal-api-keys" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card keys-card">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge">Security</span>
+          <h3>Change API Keys</h3>
+        </div>
+        <button type="button" id="btn-close-keys-modal" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="keys-modal-body">
+        <p class="keys-prompt-text">
+          <b>Change API key? Sure?</b> Enter your Kotak Neo Consumer Key and Upstox Analytics Key below. All keys are encrypted and stored safely on your instance. Raw keys are never shown in plain text.
+        </p>
+
+        <div class="keys-status-box" id="keys-status-box">
+          <div class="stat-pill-row">
+            <span class="status-dot-pulse">●</span>
+            <span id="keys-upstox-status-txt">Upstox 1-Year Analytics Key: Masked (••••••••)</span>
+          </div>
+          <div class="stat-pill-row">
+            <span class="status-dot-pulse">●</span>
+            <span id="keys-kotak-status-txt">Kotak Neo Consumer Key: Masked (••••••••)</span>
+          </div>
+        </div>
+
+        <div class="keys-inputs-wrap">
+          <div class="keys-field-group">
+            <label for="input-kotak-consumer-key">Kotak Neo Consumer Key</label>
+            <div class="masked-input-row">
+              <input type="password" id="input-kotak-consumer-key" placeholder="Enter new Consumer Key (or leave blank to keep current)">
+              <button type="button" class="btn-toggle-mask" data-target="input-kotak-consumer-key">👁</button>
+            </div>
+          </div>
+
+          <div class="keys-field-group">
+            <label for="input-upstox-analytics-key">Upstox Analytics Key (1-Year Access)</label>
+            <div class="masked-input-row">
+              <input type="password" id="input-upstox-analytics-key" placeholder="Enter new Upstox token (or leave blank to keep current)">
+              <button type="button" class="btn-toggle-mask" data-target="input-upstox-analytics-key">👁</button>
+            </div>
+          </div>
+
+          <div class="keys-field-group">
+            <label for="input-keys-mpin">Security Confirmation: Kotak MPIN</label>
+            <input type="password" id="input-keys-mpin" maxlength="8" placeholder="Enter your 6-digit MPIN to authorize">
+          </div>
+        </div>
+
+        <div class="keys-modal-actions">
+          <button type="button" id="btn-cancel-keys" class="btn-secondary-choice">Cancel</button>
+          <button type="button" id="btn-save-keys-submit" class="btn-owner-submit">Save &amp; Apply API Keys</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. GUEST PAPER TRADING PROFILE MODAL -->
+  <div id="modal-guest-profile" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card profile-card">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge">Paper Trading</span>
+          <h3>Guest Trader Profile</h3>
+        </div>
+        <button type="button" id="btn-close-profile-modal" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="profile-modal-body">
+        <p class="profile-intro-text">
+          Practice scalping with real sub-30ms Indian market candles and instant simulated orders with <b>zero risk</b>.
+        </p>
+
+        <div class="profile-input-wrap">
+          <label for="input-guest-name">Your Trader Handle / Name</label>
+          <input type="text" id="input-guest-name" placeholder="e.g. trader_rahul">
+        </div>
+
+        <div class="profile-stats-card">
+          <div class="p-stat-row">
+            <span>Virtual Cash:</span>
+            <b class="text-green">₹10,00,000.00 INR</b>
+          </div>
+          <div class="p-stat-row">
+            <span>Execution Latency:</span>
+            <b class="text-gold">Sub-30ms Instant (Simulated)</b>
+          </div>
+          <div class="p-stat-row">
+            <span>Zero Brokerage:</span>
+            <b>Enabled</b>
+          </div>
+        </div>
+
+        <div class="reddit-box">
+          <p>🚀 <b>Wanted to trade with your own Kotak API key?</b></p>
+          <p>Direct broker connector is coming soon! Direct live trading from your browser with your personal credentials.</p>
+          <a href="https://reddit.com/user/thatsaiiff" target="_blank" rel="noopener" class="reddit-link">
+            Feedback are welcome @thatsaiiff on Reddit ↗
+          </a>
+        </div>
+
+        <div class="profile-modal-actions">
+          <button type="button" id="btn-save-profile" class="btn-primary-choice">Save Trader Handle</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="toast">
     <span id="toast-message"></span>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-exness"></script>
+  <script src="/static/chart.js?v=20261110-exness2"></script>
 </body>
 </html>

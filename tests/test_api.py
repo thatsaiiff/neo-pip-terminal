@@ -593,6 +593,65 @@ def test_guest_demo_mode_isolation(client):
     assert st.json()["demo_balance"] == 1000000.0
 
 
+def test_change_api_keys_and_status(client, monkeypatch):
+    monkeypatch.setenv("OWNER_PIN", "2026")
+    # Status check
+    st = client.get("/api/settings/keys-status")
+    assert st.status_code == 200
+    assert "upstox_masked" in st.json()
+    assert "consumer_key_masked" in st.json()
+
+    # Change keys with correct MPIN
+    res = client.post(
+        "/api/settings/keys",
+        json={
+            "consumer_key": "test_consumer_key_xyz",
+            "upstox_token": "test_upstox_key_1year",
+            "mpin": "2026",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["upstox_configured"] is True
+    assert data["consumer_key_configured"] is True
+
+    # Check status again
+    st2 = client.get("/api/settings/keys-status")
+    assert st2.json()["upstox_configured"] is True
+    assert "••••" in st2.json()["upstox_masked"]
+
+
+def test_option_chain_normalized_structure(client):
+    res = client.get("/api/chart/option-chain?symbol=NIFTY")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "chain" in data
+    assert "rows" in data
+    assert len(data["rows"]) > 0
+    first = data["rows"][0]
+    assert "strike" in first
+    assert "call_symbol" in first
+    assert "call_ltp" in first
+    assert "put_symbol" in first
+    assert "put_ltp" in first
+    assert data["spot_price"] > 0
+
+
+def test_live_quotes_batch_dictionary_mapping(client):
+    res = client.post(
+        "/api/chart/live-quotes",
+        json={"items": [{"symbol": "NIFTY", "token": "NSE_INDEX|Nifty 50"}]},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "quotes" in data
+    assert "quotes_by_symbol" in data
+    assert "NIFTY" in data["quotes_by_symbol"]
+
+
 
 
 

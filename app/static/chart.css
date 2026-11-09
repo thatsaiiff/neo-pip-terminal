@@ -855,7 +855,8 @@ body.ex-theme-dark {
 
 /* Multi-Pane Chart Canvas Stage */
 .ex-chart-stage {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   display: grid;
@@ -900,6 +901,9 @@ body.ex-theme-dark {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 .chart-pane.active {
@@ -960,12 +964,20 @@ body.ex-theme-dark {
 .pane-chg.neg { color: var(--bear); }
 
 .pane-chart-wrap {
-  flex: 1;
+  flex: 1 1 0;
   position: relative;
   overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 250px;
 }
 
 .chart-canvas-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
   height: 100%;
 }
@@ -2026,6 +2038,249 @@ body.ex-theme-dark {
 
 .toast.show {
   opacity: 1;
+}
+
+/* Header Option Chain Button (beside funds) */
+.ex-header-opt-chain-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(30, 136, 229, 0.12);
+  border: 1px solid rgba(30, 136, 229, 0.35);
+  color: #64b5f6;
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ex-header-opt-chain-btn:hover {
+  background: var(--ex-buy);
+  color: #fff;
+  border-color: var(--ex-buy);
+}
+
+/* Tab Add Button & Quick Search Popup */
+.ex-tab-add-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.quick-tab-search-popup {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  width: 320px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-hover);
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.8);
+  padding: 8px;
+  z-index: 250;
+}
+.quick-search-box input {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+}
+.quick-search-box input:focus {
+  border-color: var(--accent-gold);
+}
+.quick-tab-search-results {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+.quick-search-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 10px;
+  text-align: center;
+}
+.quick-search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-main);
+  cursor: pointer;
+}
+.quick-search-item:hover {
+  background: var(--bg-card-hover);
+  color: #fff;
+}
+.quick-search-item .item-sub {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Account Menu Promo Note */
+.acc-menu-promo {
+  padding: 8px 10px;
+  background: rgba(255, 183, 3, 0.05);
+  border-radius: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.acc-menu-promo p { margin-bottom: 2px; }
+.acc-menu-promo small { color: var(--accent-gold); font-weight: 600; display: block; margin-top: 4px; }
+
+/* Keys & Profile Modals */
+.keys-card, .profile-card {
+  width: 480px;
+  max-width: 95vw;
+}
+.keys-modal-body, .profile-modal-body {
+  padding: 16px 20px 20px;
+}
+.keys-prompt-text, .profile-intro-text {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.keys-status-box {
+  background: rgba(0, 176, 116, 0.08);
+  border: 1px solid rgba(0, 176, 116, 0.25);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stat-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #fff;
+  font-family: var(--font-mono);
+}
+.status-dot-pulse {
+  color: var(--bull);
+  font-size: 10px;
+  animation: pulse-dot 1.5s infinite;
+}
+@keyframes pulse-dot {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+.keys-inputs-wrap, .profile-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.keys-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.keys-field-group label, .profile-input-wrap label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.masked-input-row {
+  display: flex;
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.masked-input-row input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.btn-toggle-mask {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.btn-toggle-mask:hover {
+  color: #fff;
+}
+.keys-field-group input[type="password"] {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.profile-input-wrap input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.keys-modal-actions, .profile-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+.profile-stats-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.p-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.reddit-box {
+  background: rgba(255, 69, 0, 0.08);
+  border: 1px solid rgba(255, 69, 0, 0.25);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-main);
+  line-height: 1.4;
+  margin-bottom: 14px;
+}
+.reddit-box p { margin-bottom: 4px; }
+.reddit-link {
+  color: #ff4500;
+  text-decoration: none;
+  font-weight: 700;
+  display: inline-block;
+  margin-top: 4px;
+}
+.reddit-link:hover {
+  text-decoration: underline;
 }
 
 .hidden {
