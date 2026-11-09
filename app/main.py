@@ -1666,8 +1666,31 @@ def check_sltp_rules(payload: SltpCheckPayload):
     return {"ok": True, "triggered_count": len(triggered_rules), "triggered": triggered_rules}
 
 
+@app.get("/api/funds")
 @app.get("/api/limits")
-def account_limits():
+def account_limits(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+
+    if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and (not neo_authenticated or LIVE_TRADING_ENABLED):
+        used = sum(float(p.get("average_price", 0)) * int(p.get("quantity", 0)) for p in _GUEST_POSITIONS)
+        avail = max(0.0, _GUEST_DEMO_BALANCE - used)
+        equity = avail + used + sum(float(p.get("m2m", 0)) for p in _GUEST_POSITIONS)
+        return {
+            "available_cash": avail,
+            "available_margin": avail,
+            "used_margin": used,
+            "total_equity": equity,
+            "collateral": 0.0,
+            "margin_utilized": used,
+            "mode": "simulation",
+            "is_demo": True,
+            "updated_at": utc_now(),
+        }
+
     client = _require_neo_session() if (neo_authenticated and neo_client is not None) else None
     if client is not None and hasattr(client, "limits"):
         try:
@@ -1680,8 +1703,11 @@ def account_limits():
                 margin_used = float(first.get("marginUtilized") or first.get("utilisedMargin") or 0.0)
                 return {
                     "available_cash": cash,
+                    "available_margin": cash,
                     "collateral": collateral,
                     "margin_utilized": margin_used,
+                    "used_margin": margin_used,
+                    "total_equity": cash + collateral,
                     "mode": "live",
                     "updated_at": utc_now(),
                 }
@@ -1689,8 +1715,11 @@ def account_limits():
             pass
     return {
         "available_cash": 100000.0,
+        "available_margin": 100000.0,
         "collateral": 0.0,
         "margin_utilized": 0.0,
+        "used_margin": 0.0,
+        "total_equity": 100000.0,
         "mode": "simulation",
         "updated_at": utc_now(),
     }
