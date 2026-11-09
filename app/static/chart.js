@@ -1,5 +1,5 @@
-// Neo PIP — Trade From Charts (Kotak Neo Dark Engine)
-// Multi-Pane Lightweight Charts + Fast Sub-Second Quotes + Scalper Window + VPVR
+// Neo PIP — Exness WebTrading Engine
+// Multi-Pane Lightweight Charts + Exness Layout + Order Form + Live Quotes + Option Chain
 (function () {
   'use strict';
 
@@ -18,18 +18,75 @@
     showEma200: false,
   };
 
-  let activeLayout = 3; // 1, 2, or 3
-  let activePaneIdx = 0; // 0, 1, or 2
+  // Auth & Session State
+  let ownerToken = localStorage.getItem('neo_owner_token') || '';
+  let isOwner = false;
+  let lastUserActivity = Date.now();
+  let inactivityTimerInterval = null;
+  const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+  // Active Layout: 1 (Full), 2 (Dual Split), 3 (3-Charts)
+  let activeLayout = 1;
+  let activePaneIdx = 0;
+
+  // Order Ticket State
+  let selectedProduct = 'NRML'; // Default NRML (Carry Forward) as requested
+  let selectedOrderType = 'MKT'; // MKT, L, SL
+  let selectedLots = 1;
+
+  // Open Symbol Tabs
+  let openTabs = [
+    { symbol: 'NIFTY 25000 CE', token: 'NSE_FO|40037', interval: '1m', isOption: true },
+    { symbol: 'NIFTY 25000 PE', token: 'NSE_FO|40038', interval: '1m', isOption: true },
+    { symbol: 'NIFTY', token: 'NSE_INDEX|Nifty 50', interval: '5m', isOption: false },
+    { symbol: 'BANKNIFTY', token: 'NSE_INDEX|Nifty Bank', interval: '5m', isOption: false },
+  ];
+  let activeTabIndex = 0;
+
+  // Watchlist Favorites & Category lists
+  const WATCHLIST_PRESETS = {
+    favorites: [
+      { symbol: 'NIFTY 25000 CE', name: 'Nifty 50 25000 Call', token: 'NSE_FO|40037', signal: 'BUY' },
+      { symbol: 'NIFTY 25000 PE', name: 'Nifty 50 25000 Put', token: 'NSE_FO|40038', signal: 'SELL' },
+      { symbol: 'NIFTY', name: 'Nifty 50 Index', token: 'NSE_INDEX|Nifty 50', signal: 'BUY' },
+      { symbol: 'BANKNIFTY', name: 'Bank Nifty Index', token: 'NSE_INDEX|Nifty Bank', signal: 'SELL' },
+      { symbol: 'RELIANCE', name: 'Reliance Industries', token: 'NSE_EQ|INE002A01018', signal: 'BUY' },
+      { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', token: 'NSE_EQ|INE040A01034', signal: 'BUY' },
+    ],
+    indices: [
+      { symbol: 'NIFTY', name: 'Nifty 50 Spot', token: 'NSE_INDEX|Nifty 50', signal: 'BUY' },
+      { symbol: 'BANKNIFTY', name: 'Bank Nifty Spot', token: 'NSE_INDEX|Nifty Bank', signal: 'SELL' },
+      { symbol: 'FINNIFTY', name: 'Fin Nifty Spot', token: 'NSE_INDEX|Nifty Fin Service', signal: 'BUY' },
+      { symbol: 'SENSEX', name: 'BSE Sensex Spot', token: 'BSE_INDEX|SENSEX', signal: 'BUY' },
+    ],
+    nifty_options: [
+      { symbol: 'NIFTY 25000 CE', name: 'ATM 25000 Call', token: 'NSE_FO|40037', signal: 'BUY' },
+      { symbol: 'NIFTY 25000 PE', name: 'ATM 25000 Put', token: 'NSE_FO|40038', signal: 'SELL' },
+      { symbol: 'NIFTY 25050 CE', name: 'OTM 25050 Call', token: 'NSE_FO|40039', signal: 'BUY' },
+      { symbol: 'NIFTY 24950 PE', name: 'OTM 24950 Put', token: 'NSE_FO|40036', signal: 'SELL' },
+    ],
+    bank_options: [
+      { symbol: 'BANKNIFTY 59200 CE', name: 'Bank 59200 Call', token: '', signal: 'BUY' },
+      { symbol: 'BANKNIFTY 59200 PE', name: 'Bank 59200 Put', token: '', signal: 'SELL' },
+      { symbol: 'BANKNIFTY 59000 PE', name: 'Bank 59000 Put', token: '', signal: 'SELL' },
+    ],
+    stocks: [
+      { symbol: 'RELIANCE', name: 'Reliance Industries', token: 'NSE_EQ|INE002A01018', signal: 'BUY' },
+      { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', token: 'NSE_EQ|INE040A01034', signal: 'BUY' },
+      { symbol: 'ICICIBANK', name: 'ICICI Bank Ltd', token: 'NSE_EQ|INE090A01021', signal: 'BUY' },
+      { symbol: 'TCS', name: 'Tata Consultancy Services', token: 'NSE_EQ|INE467B01029', signal: 'SELL' },
+    ],
+  };
 
   // Pane configurations
   const panes = [
     {
       idx: 0,
       id: 'pane-1',
-      sym: 'NIFTY',
-      token: '',
-      tf: '5m',
-      isOption: false,
+      sym: 'NIFTY 25000 CE',
+      token: 'NSE_FO|40037',
+      tf: '1m',
+      isOption: true,
       candles: [],
       volumes: [],
       chart: null,
@@ -54,9 +111,9 @@
     {
       idx: 1,
       id: 'pane-2',
-      sym: 'NIFTY26N0925000CE',
-      token: '',
-      tf: '3m',
+      sym: 'NIFTY 25000 PE',
+      token: 'NSE_FO|40038',
+      tf: '1m',
       isOption: true,
       candles: [],
       volumes: [],
@@ -82,10 +139,10 @@
     {
       idx: 2,
       id: 'pane-3',
-      sym: 'NIFTY26N0925000PE',
-      token: '',
-      tf: '1m',
-      isOption: true,
+      sym: 'NIFTY',
+      token: 'NSE_INDEX|Nifty 50',
+      tf: '5m',
+      isOption: false,
       candles: [],
       volumes: [],
       chart: null,
@@ -109,25 +166,18 @@
     },
   ];
 
-  // Read URL query params to initialize active symbol
+  // URL query parameter parsing
   const urlParams = new URLSearchParams(window.location.search);
   const qSym = urlParams.get('symbol');
   const qTok = urlParams.get('token');
   const qTf = urlParams.get('interval');
-
   if (qSym) {
-    const isOpt = /(CE|PE)$/i.test(qSym);
-    if (isOpt) {
-      panes[1].sym = qSym.toUpperCase();
-      panes[1].token = qTok || '';
-      if (qTf) panes[1].tf = qTf;
-      activePaneIdx = 1;
-    } else {
-      panes[0].sym = qSym.toUpperCase();
-      panes[0].token = qTok || '';
-      if (qTf) panes[0].tf = qTf;
-      activePaneIdx = 0;
-    }
+    panes[0].sym = qSym.toUpperCase();
+    panes[0].token = qTok || '';
+    if (qTf) panes[0].tf = qTf;
+    panes[0].isOption = /(CE|PE)$/i.test(qSym);
+    openTabs[0].symbol = panes[0].sym;
+    openTabs[0].token = panes[0].token;
   }
 
   function toast(msg, duration = 3000) {
@@ -135,20 +185,35 @@
     const txt = $('toast-message');
     if (!el || !txt) return;
     txt.textContent = msg;
-    el.classList.add('visible');
-    setTimeout(() => el.classList.remove('visible'), duration);
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), duration);
   }
 
   async function api(path, options = {}) {
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    if (ownerToken) {
+      headers['X-Owner-Token'] = ownerToken;
+      headers['Authorization'] = `Bearer ${ownerToken}`;
+    }
     const res = await fetch(path, {
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers,
       ...options,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
     return data;
   }
+
+  // Activity tracking for 5-minute inactivity timeout
+  function recordUserActivity() {
+    lastUserActivity = Date.now();
+    localStorage.setItem('neo_last_active', String(lastUserActivity));
+  }
+
+  ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'].forEach(evt => {
+    window.addEventListener(evt, recordUserActivity, { passive: true });
+  });
 
   // --- Technical Math (TradingView Indicators) ---
   function calculateEMA(candles, period) {
@@ -166,7 +231,6 @@
     return result;
   }
 
-  // Institutional Intraday VWAP (Volume Weighted Average Price)
   function calculateVWAP(candles) {
     if (!candles || !candles.length) return [];
     const result = [];
@@ -193,7 +257,6 @@
     return result;
   }
 
-  // Supertrend (10, 3)
   function calculateSupertrend(candles, period = 10, multiplier = 3) {
     if (!candles || candles.length < period) return [];
     const tr = [candles[0].high - candles[0].low];
@@ -237,7 +300,7 @@
       result.push({
         time: c.time,
         value: Math.round(stVal * 100) / 100,
-        color: inUptrend ? '#10b981' : '#ef4444',
+        color: inUptrend ? '#00b074' : '#ff4757',
       });
 
       prevUpper = finalUpper;
@@ -246,7 +309,6 @@
     return result;
   }
 
-  // Bollinger Bands (20, 2)
   function calculateBollingerBands(candles, period = 20, mult = 2) {
     if (!candles || candles.length < period) return { upper: [], basis: [], lower: [] };
     const upper = [];
@@ -269,7 +331,6 @@
     return { upper, basis, lower };
   }
 
-  // --- VPVR Calculation & Rendering ---
   function computeVPVR(visibleCandles) {
     if (!visibleCandles || visibleCandles.length < 5) return { bins: [], pocPrice: null, maxVol: 0 };
     let minP = Infinity;
@@ -280,7 +341,7 @@
     });
     if (minP >= maxP) return { bins: [], pocPrice: null, maxVol: 0 };
 
-    const binCount = 32;
+    const binCount = 30;
     const binSize = (maxP - minP) / binCount;
     const bins = Array.from({ length: binCount }, (_, i) => ({
       priceLow: minP + i * binSize,
@@ -312,339 +373,297 @@
     return { bins, pocPrice, maxVol };
   }
 
-  function drawPaneVPVR(pane) {
-    if (!pane.vpvrCanvas || !pane.vpvrCtx || !pane.chart || !indicators.showVpvr) {
-      if (pane.vpvrCtx && pane.vpvrCanvas) pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
+  function renderVPVR(pane) {
+    const canvas = pane.vpvrCanvas;
+    const ctx = pane.vpvrCtx;
+    if (!canvas || !ctx || !indicators.showVpvr || !pane.candleSeries) {
+      if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
 
+    const rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
     const { bins, pocPrice, maxVol } = pane.vpvrData;
-    const ctx = pane.vpvrCtx;
-    const w = pane.vpvrCanvas.width;
-    ctx.clearRect(0, 0, w, pane.vpvrCanvas.height);
-    if (!bins.length || maxVol <= 0) return;
+    if (!bins.length || maxVol === 0) return;
 
-    const maxBarW = w * 0.85;
-
+    const maxBarW = canvas.width - 15;
     bins.forEach(b => {
       const yTop = pane.candleSeries.priceToCoordinate(b.priceHigh);
-      const yBottom = pane.candleSeries.priceToCoordinate(b.priceLow);
-      if (yTop == null || yBottom == null) return;
-
-      const barH = Math.max(2, Math.abs(yBottom - yTop) - 1);
-      const y = Math.min(yTop, yBottom);
+      const yBot = pane.candleSeries.priceToCoordinate(b.priceLow);
+      if (yTop === null || yBot === null) return;
+      const y = Math.min(yTop, yBot);
+      const h = Math.max(2, Math.abs(yBot - yTop));
 
       const buyW = (b.buyVol / maxVol) * maxBarW;
       const sellW = (b.sellVol / maxVol) * maxBarW;
+      const xRight = canvas.width;
 
-      // Buy Volume (Soft Cyan/Teal)
-      ctx.fillStyle = 'rgba(0, 188, 212, 0.45)';
-      ctx.fillRect(w - buyW - sellW, y, buyW, barH);
+      ctx.fillStyle = 'rgba(0, 176, 116, 0.45)';
+      ctx.fillRect(xRight - (buyW + sellW), y, buyW, h - 0.5);
 
-      // Sell Volume (Soft Magenta/Red)
-      ctx.fillStyle = 'rgba(233, 30, 99, 0.45)';
-      ctx.fillRect(w - sellW, y, sellW, barH);
+      ctx.fillStyle = 'rgba(255, 71, 87, 0.45)';
+      ctx.fillRect(xRight - sellW, y, sellW, h - 0.5);
     });
 
-    // Draw POC Line (Yellow Dashed)
-    if (pocPrice != null) {
-      const yPoc = pane.candleSeries.priceToCoordinate(pocPrice);
-      if (yPoc != null) {
-        ctx.strokeStyle = '#ffeb3b';
+    if (pocPrice !== null) {
+      const yPOC = pane.candleSeries.priceToCoordinate(pocPrice);
+      if (yPOC !== null) {
+        ctx.strokeStyle = '#ffb703';
         ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 4]);
+        ctx.setLineDash([4, 2]);
         ctx.beginPath();
-        ctx.moveTo(0, yPoc);
-        ctx.lineTo(w, yPoc);
+        ctx.moveTo(0, yPOC);
+        ctx.lineTo(canvas.width, yPOC);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.fillStyle = '#ffeb3b';
-        ctx.font = 'bold 9px "DM Mono", monospace';
-        ctx.fillText(`POC ${pocPrice.toFixed(2)}`, 6, yPoc - 4);
+        ctx.fillStyle = '#ffb703';
+        ctx.font = '9px DM Mono';
+        ctx.fillText(`POC: ${pocPrice.toFixed(2)}`, 6, yPOC - 3);
       }
     }
   }
 
-  function recalculatePaneVPVR(pane) {
-    if (!pane.chart || !pane.candles.length || !indicators.showVpvr) return;
-    const range = pane.chart.timeScale().getVisibleLogicalRange();
-    if (!range) return;
-
-    const from = Math.max(0, Math.floor(range.from));
-    const to = Math.min(pane.candles.length - 1, Math.ceil(range.to));
-    const visible = pane.candles.slice(from, to + 1);
-
-    pane.vpvrData = computeVPVR(visible);
-    drawPaneVPVR(pane);
-  }
-
-  // --- Initialize a Single Chart Pane ---
+  // --- Lightweight Charts Initialization ---
   function initChartPane(pane) {
-    const wrap = $(`p${pane.idx + 1}-canvas-wrap`);
-    const container = $(`p${pane.idx + 1}-chart-container`);
-    const vpvrEl = $(`p${pane.idx + 1}-vpvr-canvas`);
-    if (!container || !window.LightweightCharts) return;
+    const container = $(`${pane.id}-chart-container`);
+    const canvasWrap = $(`${pane.id}-canvas-wrap`);
+    if (!container) return;
 
-    if (vpvrEl) {
-      pane.vpvrCanvas = vpvrEl;
-      pane.vpvrCtx = vpvrEl.getContext('2d');
-      vpvrEl.width = 160;
-      vpvrEl.height = wrap.clientHeight || 300;
-    }
-
-    pane.chart = window.LightweightCharts.createChart(container, {
-      width: container.clientWidth,
-      height: container.clientHeight,
+    container.innerHTML = '';
+    const chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth || 600,
+      height: container.clientHeight || 400,
       layout: {
-        background: { type: 'solid', color: '#131722' },
-        textColor: '#94a3b8',
-        fontFamily: "'DM Mono', monospace, -apple-system, sans-serif",
-        fontSize: 11,
+        background: { color: '#0e1117' },
+        textColor: '#8b95a5',
+        fontFamily: "'Inter', sans-serif",
       },
       grid: {
         vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
         horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
       },
       crosshair: {
-        mode: window.LightweightCharts.CrosshairMode.Normal,
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: '#ffb703', width: 1, style: 3 },
+        horzLine: { color: '#ffb703', width: 1, style: 3 },
       },
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-        scaleMargins: { top: 0.06, bottom: 0.16 },
+        borderColor: '#202735',
+        scaleMargins: { top: 0.1, bottom: 0.18 },
         autoScale: true,
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderColor: '#202735',
         timeVisible: true,
-        secondsVisible: false,
-        visible: true,
-        fixLeftEdge: false,
-        fixRightEdge: false,
-        rightOffset: 12,
-        barSpacing: 9,
-        minBarSpacing: 0.5,
+        secondsVisible: pane.tf.includes('s'),
       },
     });
 
-    // 1. Candlestick Series (Kotak Neo colors: #089981 bull, #f23645 bear)
-    pane.candleSeries = pane.chart.addCandlestickSeries({
-      upColor: '#089981',
-      downColor: '#f23645',
+    // Candlestick Series
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#00b074',
+      downColor: '#ff4757',
       borderVisible: false,
-      wickUpColor: '#089981',
-      wickDownColor: '#f23645',
+      wickUpColor: '#00b074',
+      wickDownColor: '#ff4757',
     });
 
-    // 2. Volume Series (Dedicated 'vol' scale confined to bottom 12% so it never overlaps candles)
-    pane.volSeries = pane.chart.addHistogramSeries({
+    // Volume Series
+    const volSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
-      priceScaleId: 'vol',
-    });
-    pane.chart.priceScale('vol').applyOptions({
-      scaleMargins: {
-        top: 0.88,
-        bottom: 0,
-      },
+      priceScaleId: '',
+      scaleMargins: { top: 0.82, bottom: 0 },
     });
 
-    // 3. EMA 9 (Blue)
-    pane.ema9Series = pane.chart.addLineSeries({
-      color: '#2962ff',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'EMA 9',
-    });
+    // Indicators Series
+    const ema9Series = chart.addLineSeries({ color: '#00d2d3', lineWidth: 1.5, title: 'EMA 9' });
+    const ema21Series = chart.addLineSeries({ color: '#fb8500', lineWidth: 1.5, title: 'EMA 21' });
+    const ema50Series = chart.addLineSeries({ color: '#8e44ad', lineWidth: 1.5, title: 'EMA 50' });
+    const ema200Series = chart.addLineSeries({ color: '#ffb703', lineWidth: 2, title: 'EMA 200' });
+    const vwapSeries = chart.addLineSeries({ color: '#9b59b6', lineWidth: 2, title: 'VWAP' });
+    const supertrendSeries = chart.addLineSeries({ color: '#00b074', lineWidth: 2, title: 'Supertrend' });
+    const bbUpperSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1 });
+    const bbBasisSeries = chart.addLineSeries({ color: '#1e88e5', lineWidth: 1.5 });
+    const bbLowerSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1 });
 
-    // 4. EMA 21 (Orange)
-    pane.ema21Series = pane.chart.addLineSeries({
-      color: '#ff9800',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'EMA 21',
-    });
+    pane.chart = chart;
+    pane.candleSeries = candleSeries;
+    pane.volSeries = volSeries;
+    pane.ema9Series = ema9Series;
+    pane.ema21Series = ema21Series;
+    pane.ema50Series = ema50Series;
+    pane.ema200Series = ema200Series;
+    pane.vwapSeries = vwapSeries;
+    pane.supertrendSeries = supertrendSeries;
+    pane.bbUpperSeries = bbUpperSeries;
+    pane.bbBasisSeries = bbBasisSeries;
+    pane.bbLowerSeries = bbLowerSeries;
 
-    // 5. VWAP (Cyan)
-    pane.vwapSeries = pane.chart.addLineSeries({
-      color: '#06b6d4',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'VWAP',
-    });
+    pane.vpvrCanvas = $(`${pane.id}-vpvr-canvas`);
+    if (pane.vpvrCanvas) {
+      pane.vpvrCtx = pane.vpvrCanvas.getContext('2d');
+    }
 
-    // 6. Supertrend (Green / Red Trend Line)
-    pane.supertrendSeries = pane.chart.addLineSeries({
-      color: '#10b981',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'Supertrend',
-    });
-
-    // 7. EMA 50 (Purple)
-    pane.ema50Series = pane.chart.addLineSeries({
-      color: '#a855f7',
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      title: 'EMA 50',
-    });
-
-    // 8. EMA 200 (Yellow)
-    pane.ema200Series = pane.chart.addLineSeries({
-      color: '#eab308',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'EMA 200',
-    });
-
-    // 9. Bollinger Bands (Upper, Basis, Lower)
-    pane.bbUpperSeries = pane.chart.addLineSeries({
-      color: '#38bdf8',
-      lineWidth: 1,
-      lineStyle: 2,
-      priceLineVisible: false,
-      title: 'BB Upper',
-    });
-    pane.bbBasisSeries = pane.chart.addLineSeries({
-      color: '#94a3b8',
-      lineWidth: 1,
-      priceLineVisible: false,
-      title: 'BB Basis',
-    });
-    pane.bbLowerSeries = pane.chart.addLineSeries({
-      color: '#38bdf8',
-      lineWidth: 1,
-      lineStyle: 2,
-      priceLineVisible: false,
-      title: 'BB Lower',
-    });
-
-    // Crosshair info sync
-    pane.chart.subscribeCrosshairMove(param => {
-      if (!param || !param.time || !param.seriesData) return;
-      const c = param.seriesData.get(pane.candleSeries);
-      if (c) {
-        const idPrefix = `p${pane.idx + 1}`;
-        if ($(idPrefix + '-o')) $(idPrefix + '-o').textContent = Number(c.open).toFixed(2);
-        if ($(idPrefix + '-h')) $(idPrefix + '-h').textContent = Number(c.high).toFixed(2);
-        if ($(idPrefix + '-l')) $(idPrefix + '-l').textContent = Number(c.low).toFixed(2);
-        if ($(idPrefix + '-c')) $(idPrefix + '-c').textContent = Number(c.close).toFixed(2);
+    // Crosshair move handler
+    chart.subscribeCrosshairMove(param => {
+      if (!param || !param.time) return;
+      const bar = param.seriesData.get(candleSeries);
+      if (bar) {
+        updatePaneHeaderQuote(pane, bar.open, bar.high, bar.low, bar.close);
       }
     });
 
-    // Range subscriber for real-time VPVR
-    pane.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-      recalculatePaneVPVR(pane);
+    // Visible logical range change for VPVR re-render
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      if (indicators.showVpvr && pane.candles.length) {
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (range) {
+          const fromIdx = Math.max(0, Math.floor(range.from));
+          const toIdx = Math.min(pane.candles.length - 1, Math.ceil(range.to));
+          const visible = pane.candles.slice(fromIdx, toIdx + 1);
+          pane.vpvrData = computeVPVR(visible);
+          renderVPVR(pane);
+        }
+      }
     });
 
-    // Click pane to select it
-    const paneEl = $(pane.id);
-    if (paneEl) {
-      paneEl.addEventListener('click', () => {
-        setActivePane(pane.idx);
+    // Resize observer
+    if (window.ResizeObserver && canvasWrap) {
+      const ro = new ResizeObserver(() => {
+        if (pane.chart && container) {
+          pane.chart.applyOptions({
+            width: container.clientWidth,
+            height: container.clientHeight,
+          });
+          renderVPVR(pane);
+        }
       });
-    }
-  }
-
-  function setActivePane(idx) {
-    activePaneIdx = idx;
-    panes.forEach((p, i) => {
-      const el = $(p.id);
-      if (el) el.classList.toggle('active', i === idx);
-    });
-
-    const activePane = panes[idx];
-    if (activePane) {
-      // Sync topbar search & timeframe
-      const searchIn = $('symbol-search-input');
-      if (searchIn) searchIn.value = activePane.sym;
-
-      document.querySelectorAll('.tf-pill').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tf === activePane.tf);
-      });
-
-      // Sync floating scalper window to this contract
-      updateScalperContract(activePane);
+      ro.observe(canvasWrap);
     }
   }
 
   function applyPaneIndicators(pane) {
-    if (!pane.chart || !pane.candles || !pane.candles.length) return;
+    if (!pane.candles.length) return;
 
-    // 1. Volume Series
-    const isIndex = !pane.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(pane.sym);
-    if (pane.volSeries) {
-      pane.volSeries.setData((indicators.showVol && !isIndex) ? pane.volumes : []);
-    }
+    if (indicators.showEma9) pane.ema9Series.setData(calculateEMA(pane.candles, 9));
+    else pane.ema9Series.setData([]);
 
-    // 2. EMA 9 & 21
-    if (pane.ema9Series) {
-      const ema9 = calculateEMA(pane.candles, 9);
-      pane.ema9Series.setData(indicators.showEma9 ? ema9 : []);
-    }
-    if (pane.ema21Series) {
-      const ema21 = calculateEMA(pane.candles, 21);
-      pane.ema21Series.setData(indicators.showEma21 ? ema21 : []);
-    }
+    if (indicators.showEma21) pane.ema21Series.setData(calculateEMA(pane.candles, 21));
+    else pane.ema21Series.setData([]);
 
-    // 3. VWAP
-    if (pane.vwapSeries) {
-      const vwap = calculateVWAP(pane.candles);
-      pane.vwapSeries.setData(indicators.showVwap ? vwap : []);
-    }
+    if (indicators.showEma50) pane.ema50Series.setData(calculateEMA(pane.candles, 50));
+    else pane.ema50Series.setData([]);
 
-    // 4. Supertrend (10, 3)
-    if (pane.supertrendSeries) {
-      const st = calculateSupertrend(pane.candles, 10, 3);
-      pane.supertrendSeries.setData(indicators.showSupertrend ? st : []);
-    }
+    if (indicators.showEma200) pane.ema200Series.setData(calculateEMA(pane.candles, 200));
+    else pane.ema200Series.setData([]);
 
-    // 5. EMA 50 & 200
-    if (pane.ema50Series) {
-      const ema50 = calculateEMA(pane.candles, 50);
-      pane.ema50Series.setData(indicators.showEma50 ? ema50 : []);
-    }
-    if (pane.ema200Series) {
-      const ema200 = calculateEMA(pane.candles, 200);
-      pane.ema200Series.setData(indicators.showEma200 ? ema200 : []);
+    if (indicators.showVwap) pane.vwapSeries.setData(calculateVWAP(pane.candles));
+    else pane.vwapSeries.setData([]);
+
+    if (indicators.showSupertrend) pane.supertrendSeries.setData(calculateSupertrend(pane.candles, 10, 3));
+    else pane.supertrendSeries.setData([]);
+
+    if (indicators.showBb) {
+      const bb = calculateBollingerBands(pane.candles, 20, 2);
+      pane.bbUpperSeries.setData(bb.upper);
+      pane.bbBasisSeries.setData(bb.basis);
+      pane.bbLowerSeries.setData(bb.lower);
+    } else {
+      pane.bbUpperSeries.setData([]);
+      pane.bbBasisSeries.setData([]);
+      pane.bbLowerSeries.setData([]);
     }
 
-    // 6. Bollinger Bands (20, 2)
-    if (pane.bbUpperSeries && pane.bbBasisSeries && pane.bbLowerSeries) {
-      if (indicators.showBb) {
-        const bb = calculateBollingerBands(pane.candles, 20, 2);
-        pane.bbUpperSeries.setData(bb.upper);
-        pane.bbBasisSeries.setData(bb.basis);
-        pane.bbLowerSeries.setData(bb.lower);
-      } else {
-        pane.bbUpperSeries.setData([]);
-        pane.bbBasisSeries.setData([]);
-        pane.bbLowerSeries.setData([]);
-      }
+    if (indicators.showVol) {
+      pane.volSeries.setData(
+        pane.volumes.map(v => ({
+          time: v.time,
+          value: v.value,
+          color: v.color,
+        }))
+      );
+    } else {
+      pane.volSeries.setData([]);
     }
 
-    // 7. VPVR
-    recalculatePaneVPVR(pane);
+    if (indicators.showVpvr) {
+      pane.vpvrData = computeVPVR(pane.candles.slice(-100));
+      renderVPVR(pane);
+    } else if (pane.vpvrCtx && pane.vpvrCanvas) {
+      pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
+    }
   }
 
-  // --- Load Candles for a Pane ---
-  async function loadPaneData(pane) {
+  function updatePaneHeaderQuote(pane, open, high, low, close) {
+    const oEl = $(`p${pane.idx + 1}-o`);
+    const hEl = $(`p${pane.idx + 1}-h`);
+    const lEl = $(`p${pane.idx + 1}-l`);
+    const cEl = $(`p${pane.idx + 1}-c`);
+    if (oEl) oEl.textContent = open ? open.toFixed(2) : '—';
+    if (hEl) hEl.textContent = high ? high.toFixed(2) : '—';
+    if (lEl) lEl.textContent = low ? low.toFixed(2) : '—';
+    if (cEl) cEl.textContent = close ? close.toFixed(2) : '—';
+
+    // If active pane, also update top bar OHLC
+    if (pane.idx === 0) {
+      const co = $('c-open');
+      const ch = $('c-high');
+      const cl = $('c-low');
+      const cc = $('c-close');
+      if (co) co.textContent = open ? open.toFixed(2) : '—';
+      if (ch) ch.textContent = high ? high.toFixed(2) : '—';
+      if (cl) cl.textContent = low ? low.toFixed(2) : '—';
+      if (cc) cc.textContent = close ? close.toFixed(2) : '—';
+    }
+  }
+
+  function updatePaneQuote(pane, quote) {
+    if (!quote || quote.ltp === undefined) return;
+    const ltp = Number(quote.ltp);
+    pane.lastLtp = ltp;
+
+    if (quote.prev_close !== undefined && quote.prev_close > 0) {
+      pane.prevClose = Number(quote.prev_close);
+    }
+
+    const ref = (pane.prevClose && pane.prevClose > 0) ? pane.prevClose : (pane.candles[0] ? pane.candles[0].open : ltp);
+    const diff = ltp - ref;
+    const pct = ref > 0 ? (diff / ref) * 100 : 0;
+    const isPos = diff >= 0;
+
     const ltpEl = $(`p${pane.idx + 1}-ltp`);
     const chgEl = $(`p${pane.idx + 1}-chg`);
-    const symEl = $(`p${pane.idx + 1}-sym`);
-    const tfEl = $(`p${pane.idx + 1}-tf`);
+    if (ltpEl) ltpEl.textContent = `₹${ltp.toFixed(2)}`;
+    if (chgEl) {
+      chgEl.textContent = `${isPos ? '+' : ''}${diff.toFixed(2)} (${isPos ? '+' : ''}${pct.toFixed(2)}%)`;
+      chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
+    }
 
-    if (symEl) symEl.textContent = pane.sym;
-    if (tfEl) tfEl.textContent = pane.tf;
+    // If this is primary pane, update Right Order Ticket values!
+    if (pane.idx === 0) {
+      updateOrderFormPrices(ltp);
+    }
+  }
 
+  async function loadCandles(pane) {
     try {
-      const url = `/api/chart/candles?symbol=${encodeURIComponent(pane.sym)}&token=${encodeURIComponent(pane.token)}&interval=${encodeURIComponent(pane.tf)}`;
+      const tokenEnc = encodeURIComponent(pane.token || '');
+      const symEnc = encodeURIComponent(pane.sym);
+      const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${pane.tf}&days=5`;
       const data = await api(url);
 
-      if (!data.candles || !data.candles.length) return;
+      if (!data || !data.ok || !data.candles || !data.candles.length) {
+        return;
+      }
 
-      pane.isOption = !!data.is_option;
-      pane.prevClose = data.prev_close || (data.candles[0]?.open || data.candles[0]?.close);
-      pane.lastLtp = data.ltp || (data.candles[data.candles.length - 1]?.close);
+      if (data.prev_close) pane.prevClose = Number(data.prev_close);
+      if (data.ltp) pane.lastLtp = Number(data.ltp);
 
       pane.candles = data.candles.map(c => ({
         time: c.time,
@@ -655,887 +674,1172 @@
         volume: c.volume || 100,
       }));
 
-      pane.volumes = data.candles.map(c => ({
+      pane.volumes = pane.candles.map(c => ({
         time: c.time,
-        value: c.volume || 0,
-        color: c.close >= c.open ? 'rgba(8, 153, 129, 0.4)' : 'rgba(242, 54, 69, 0.4)',
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
       }));
 
       pane.candleSeries.setData(pane.candles);
-
-      // Fit content and restore spacious right margin
-      pane.chart.timeScale().applyOptions({
-        rightOffset: 12,
-        barSpacing: 9,
-        minBarSpacing: 0.5,
-      });
-
-      const last = pane.candles[pane.candles.length - 1];
-      if (last) {
-        pane.activeBar = { ...last };
-      }
+      pane.volSeries.setData(pane.volumes);
 
       applyPaneIndicators(pane);
-      updatePaneQuote(pane, pane.lastLtp, pane.prevClose, data.change, data.change_percent);
+
+      // Auto-fit to recent bars
+      pane.chart.timeScale().fitContent();
+
+      const lastBar = pane.candles[pane.candles.length - 1];
+      if (lastBar) {
+        pane.activeBar = { ...lastBar };
+        updatePaneHeaderQuote(pane, lastBar.open, lastBar.high, lastBar.low, lastBar.close);
+        updatePaneQuote(pane, { ltp: lastBar.close, prev_close: pane.prevClose });
+      }
     } catch (err) {
-      console.warn(`Load pane ${pane.idx} error:`, err);
+      console.warn(`[Candles] Failed loading candles for ${pane.sym}:`, err.message);
     }
   }
 
-  function updatePaneQuote(pane, ltp, refPrice, changePts, changePct) {
-    const ltpEl = $(`p${pane.idx + 1}-ltp`);
-    const chgEl = $(`p${pane.idx + 1}-chg`);
-    if (!ltpEl) return;
-
-    const oldLtp = pane.lastLtp;
-    pane.lastLtp = ltp;
-
-    ltpEl.textContent = `₹${Number(ltp).toFixed(2)}`;
-
-    // Subtle tick flash animation
-    if (oldLtp != null && ltp !== oldLtp) {
-      ltpEl.classList.remove('flash-up', 'flash-down');
-      void ltpEl.offsetWidth; // trigger reflow
-      ltpEl.classList.add(ltp > oldLtp ? 'flash-up' : 'flash-down');
-      setTimeout(() => ltpEl.classList.remove('flash-up', 'flash-down'), 400);
-    }
-
-    const base = refPrice || pane.prevClose || ltp;
-    const diff = (changePts != null && !isNaN(changePts)) ? changePts : (ltp - base);
-    const pct = (changePct != null && !isNaN(changePct)) ? changePct : (base > 0 ? (diff / base) * 100 : 0);
-
-    if (chgEl) {
-      const isPos = diff >= 0;
-      chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
-      chgEl.textContent = `${isPos ? '+' : ''}${diff.toFixed(2)} (${isPos ? '+' : ''}${pct.toFixed(2)}%)`;
-    }
-
-    // Sync to scalper window if this pane is currently active
-    if (pane.idx === activePaneIdx) {
-      const scLtp = $('sc-ltp');
-      const scChg = $('sc-chg');
-      if (scLtp) scLtp.textContent = Number(ltp).toFixed(2);
-      if (scChg) {
-        const isPos = diff >= 0;
-        scChg.className = `sc-chg ${isPos ? 'pos' : 'neg'}`;
-        scChg.textContent = `${isPos ? '▲ +' : '▼ '}${diff.toFixed(2)} (${pct.toFixed(2)}%)`;
-      }
-    }
-  }
-
-  // --- Real-Time Market Data Engine (Ultra-Low Latency WebSocket + 350ms Fallback Polling) ---
-  let openPositions = [];
-  let allPositions = [];
-  let quoteWs = null;
-  let wsConnected = false;
-
-  function handleTick(q) {
-    if (!q || !q.symbol || !q.ltp) return;
-    const pane = panes.find(p => p.sym === q.symbol);
-    if (!pane || !pane.candleSeries) return;
-
-    const ltp = q.ltp;
-    pane.lastLtp = ltp;
-    if (q.prev_close) pane.prevClose = q.prev_close;
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    const tfSec = pane.tf === '15s' ? 15 : (pane.tf === '1m' ? 60 : (pane.tf === '3m' ? 180 : (pane.tf === '5m' ? 300 : (pane.tf === '15m' ? 900 : (pane.tf === '1h' ? 3600 : (pane.tf === '1d' ? 86400 : 5))))));
-    const bucketTime = Math.floor(nowSec / tfSec) * tfSec;
-
-    if (!pane.activeBar || bucketTime > pane.activeBar.time) {
-      pane.activeBar = {
-        time: bucketTime,
-        open: ltp,
-        high: ltp,
-        low: ltp,
-        close: ltp,
-        volume: 10,
-      };
-    } else {
-      pane.activeBar.high = Math.max(pane.activeBar.high, ltp);
-      pane.activeBar.low = Math.min(pane.activeBar.low, ltp);
-      pane.activeBar.close = ltp;
-      pane.activeBar.volume += 10;
-    }
-
-    try {
-      pane.candleSeries.update(pane.activeBar);
-    } catch (_) {}
-
-    updatePaneQuote(pane, ltp, pane.prevClose, q.change, q.change_percent);
-
-    // If this symbol has an open position, dynamically update running P&L with every tick
-    const matchPos = openPositions.find(p => p.symbol === q.symbol);
-    if (matchPos && pane.idx === activePaneIdx) {
-      const livePnl = (ltp - matchPos.avg_price) * matchPos.quantity;
-      const posPnl = $('sc-pos-pnl');
-      const scalperPnlEl = $('val-scalper-pnl');
-      const isPos = livePnl >= 0;
-      if (posPnl) {
-        posPnl.className = `sc-pnl-pill ${isPos ? 'pos' : 'neg'}`;
-        posPnl.textContent = `P&L: ${isPos ? '+' : ''}₹${livePnl.toFixed(2)}`;
-      }
-      if (scalperPnlEl) {
-        scalperPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
-        scalperPnlEl.textContent = `${isPos ? '+' : ''}₹${livePnl.toFixed(2)}`;
-      }
-    }
-  }
-
-  function getWsEndpoint() {
-    const loc = window.location;
-    if (loc.hostname === 'localhost' || loc.hostname === '127.0.0.1') {
-      return `ws://${loc.hostname}:8000/api/ws/quotes`;
-    }
-    if (loc.hostname === '92.4.87.82') {
-      return `ws://92.4.87.82:8000/api/ws/quotes`;
-    }
-    // Remote or Vercel
-    return `ws://92.4.87.82:8000/api/ws/quotes`;
-  }
-
-  function initWebSocket() {
-    try {
-      const wsUrl = getWsEndpoint();
-      quoteWs = new WebSocket(wsUrl);
-
-      quoteWs.onopen = () => {
-        wsConnected = true;
-        syncWebSocketSubscriptions();
-      };
-
-      quoteWs.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'ticks' && Array.isArray(msg.quotes)) {
-            msg.quotes.forEach(handleTick);
-          }
-        } catch (_) {}
-      };
-
-      quoteWs.onclose = () => {
-        wsConnected = false;
-        setTimeout(initWebSocket, 3000);
-      };
-
-      quoteWs.onerror = () => {
-        wsConnected = false;
-        try { quoteWs.close(); } catch (_) {}
-      };
-    } catch (_) {
-      wsConnected = false;
-    }
-  }
-
-  function syncWebSocketSubscriptions() {
-    if (!quoteWs || quoteWs.readyState !== WebSocket.OPEN) return;
-    const visiblePanes = activeLayout === 1 ? [panes[0]] : (activeLayout === 2 ? [panes[0], panes[1]] : panes);
-    const syms = visiblePanes.map(p => p.sym).filter(Boolean);
-    quoteWs.send(JSON.stringify({ action: 'subscribe', symbols: syms }));
-  }
-
-  // Fallback high-frequency polling when WS is offline
-  function startRealtimeTickLoop() {
-    initWebSocket();
-
-    setInterval(async () => {
-      if (wsConnected) return; // WebSocket is handling sub-30ms ticks
-      const visiblePanes = activeLayout === 1 ? [panes[0]] : (activeLayout === 2 ? [panes[0], panes[1]] : panes);
-      const items = visiblePanes.map(p => ({ symbol: p.sym, token: p.token }));
-
+  // --- Sub-second Quotes Stream ---
+  function startQuotesPolling() {
+    async function tick() {
       try {
-        const data = await api('/api/chart/live-quotes', {
+        const items = panes.map(p => ({ symbol: p.sym, token: p.token }));
+        const res = await api('/api/chart/live-quotes', {
           method: 'POST',
           body: JSON.stringify({ items }),
         });
-
-        if (data.quotes && Array.isArray(data.quotes)) {
-          data.quotes.forEach(handleTick);
-        }
-      } catch (_) {}
-    }, 350);
-
-    // Indices Ticker & Position P&L update every 2.0 seconds
-    setInterval(async () => {
-      try {
-        const idxData = await api('/api/indices/quotes');
-        if (idxData.indices && Array.isArray(idxData.indices)) {
-          idxData.indices.forEach(idx => {
-            const elId = `ticker-${idx.name.toLowerCase().replace(/[^a-z]/g, '')}`;
-            const el = $(elId);
-            if (el) {
-              const ltpEl = el.querySelector('.t-ltp');
-              const chgEl = el.querySelector('.t-chg');
-              if (ltpEl) ltpEl.textContent = Number(idx.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-              if (chgEl) {
-                const isPos = idx.change >= 0;
-                chgEl.className = `t-chg ${isPos ? 'pos' : 'neg'}`;
-                chgEl.textContent = `${isPos ? '+' : ''}${idx.change_percent.toFixed(2)}%`;
+        if (res && res.ok && res.quotes) {
+          panes.forEach(pane => {
+            const q = res.quotes[pane.sym];
+            if (q) {
+              updatePaneQuote(pane, q);
+              // Update live candle bar
+              if (pane.activeBar && q.ltp) {
+                const ltp = Number(q.ltp);
+                pane.activeBar.close = ltp;
+                if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
+                if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
+                pane.candleSeries.update(pane.activeBar);
+                updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
               }
             }
           });
         }
-
-        await updatePositionsReport();
-      } catch (_) {}
-    }, 2000);
+      } catch (e) {
+        // quiet error
+      }
+      setTimeout(tick, 500); // 500ms ultra-fast quote refresh
+    }
+    tick();
   }
 
-  // --- Real-time Positions, Charges, & Scalper Position Sync ---
-  async function updatePositionsReport() {
+  // --- Exness Order Ticket Controls ---
+  function getIndexLotSize(symbol) {
+    const s = symbol.toUpperCase();
+    if (s.includes('BANKNIFTY')) return 15;
+    if (s.includes('FINNIFTY')) return 25;
+    if (s.includes('SENSEX')) return 10;
+    return 25; // Default Nifty lot size
+  }
+
+  function updateOrderFormPrices(ltp) {
+    if (!ltp) return;
+    const spread = (ltp * 0.0005) + 0.05;
+    const askPrice = ltp + (spread / 2);
+    const bidPrice = Math.max(0.05, ltp - (spread / 2));
+
+    const sellLbl = $('lbl-sell-price');
+    const buyLbl = $('lbl-buy-price');
+    if (sellLbl) sellLbl.textContent = bidPrice.toFixed(2);
+    if (buyLbl) buyLbl.textContent = askPrice.toFixed(2);
+
+    const spreadText = $('op-spread-text');
+    if (spreadText) spreadText.textContent = `${spread.toFixed(2)} Spread`;
+
+    // Margin estimation
+    const lotSize = getIndexLotSize(panes[0].sym);
+    const totalQty = selectedLots * lotSize;
+    const estMargin = (ltp * totalQty).toFixed(2);
+    const marginEl = $('op-margin-req');
+    if (marginEl) marginEl.textContent = `₹${Number(estMargin).toLocaleString('en-IN')}`;
+
+    // Auto-fill limit price input if empty or at default
+    const limitInput = $('input-limit-price');
+    if (limitInput && (!limitInput.value || limitInput.dataset.manual !== 'true')) {
+      limitInput.value = ltp.toFixed(2);
+    }
+  }
+
+  function setupOrderPanelInteractions() {
+    // 1. Product Toggle (NRML vs MIS)
+    const btnNrml = $('btn-prod-nrml');
+    const btnMis = $('btn-prod-mis');
+    if (btnNrml && btnMis) {
+      btnNrml.addEventListener('click', () => {
+        selectedProduct = 'NRML';
+        btnNrml.classList.add('active');
+        btnMis.classList.remove('active');
+        toast('Product set to NRML (Carry Forward Overnight)');
+      });
+      btnMis.addEventListener('click', () => {
+        selectedProduct = 'MIS';
+        btnMis.classList.add('active');
+        btnNrml.classList.remove('active');
+        toast('Product set to MIS (Intraday — auto squared-off at 3:15 PM)');
+      });
+    }
+
+    // 2. Order Type Tabs (MKT, L, SL)
+    const typeTabs = document.querySelectorAll('.op-type-tab');
+    typeTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        typeTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        selectedOrderType = tab.dataset.type;
+
+        const fLimit = $('field-limit-price');
+        const fTrigger = $('field-trigger-price');
+        if (fLimit) fLimit.classList.toggle('hidden', selectedOrderType === 'MKT');
+        if (fTrigger) fTrigger.classList.toggle('hidden', selectedOrderType !== 'SL');
+
+        const lblSellAction = $('lbl-sell-action');
+        const lblBuyAction = $('lbl-buy-action');
+        if (selectedOrderType === 'L') {
+          if (lblSellAction) lblSellAction.textContent = 'Sell Limit';
+          if (lblBuyAction) lblBuyAction.textContent = 'Buy Limit';
+        } else if (selectedOrderType === 'SL') {
+          if (lblSellAction) lblSellAction.textContent = 'Sell Stop';
+          if (lblBuyAction) lblBuyAction.textContent = 'Buy Stop';
+        } else {
+          if (lblSellAction) lblSellAction.textContent = 'Sell';
+          if (lblBuyAction) lblBuyAction.textContent = 'Buy';
+        }
+      });
+    });
+
+    // 3. Lots Stepper
+    const inputLots = $('input-lots');
+    const btnLotsMinus = $('btn-lots-minus');
+    const btnLotsPlus = $('btn-lots-plus');
+    const unitsSub = $('op-units-sub');
+
+    function updateLotDisplay() {
+      selectedLots = Math.max(1, parseInt(inputLots.value) || 1);
+      inputLots.value = selectedLots;
+      const lotSize = getIndexLotSize(panes[0].sym);
+      const units = selectedLots * lotSize;
+      if (unitsSub) unitsSub.textContent = `${units} units (${selectedLots} Lot${selectedLots > 1 ? 's' : ''})`;
+      if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
+    }
+
+    if (btnLotsMinus && btnLotsPlus && inputLots) {
+      btnLotsMinus.addEventListener('click', () => {
+        if (selectedLots > 1) {
+          inputLots.value = selectedLots - 1;
+          updateLotDisplay();
+        }
+      });
+      btnLotsPlus.addEventListener('click', () => {
+        inputLots.value = selectedLots + 1;
+        updateLotDisplay();
+      });
+      inputLots.addEventListener('change', updateLotDisplay);
+    }
+
+    // 4. Steppers for Limit Price & Trigger Price
+    const btnPriceMinus = $('btn-price-minus');
+    const btnPricePlus = $('btn-price-plus');
+    const inputPrice = $('input-limit-price');
+    if (btnPriceMinus && btnPricePlus && inputPrice) {
+      btnPriceMinus.addEventListener('click', () => {
+        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
+        inputPrice.value = Math.max(0.05, cur - 0.05).toFixed(2);
+        inputPrice.dataset.manual = 'true';
+      });
+      btnPricePlus.addEventListener('click', () => {
+        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
+        inputPrice.value = (cur + 0.05).toFixed(2);
+        inputPrice.dataset.manual = 'true';
+      });
+      inputPrice.addEventListener('input', () => { inputPrice.dataset.manual = 'true'; });
+    }
+
+    // 5. Submit Order (Buy / Sell)
+    async function submitOrder(side) {
+      const sym = panes[0].sym;
+      const lotSize = getIndexLotSize(sym);
+      const qty = selectedLots * lotSize;
+      const seg = panes[0].isOption ? 'nse_fo' : 'nse_cm';
+
+      let limitPrice = null;
+      let triggerPrice = null;
+      if (selectedOrderType === 'L' || selectedOrderType === 'SL') {
+        limitPrice = parseFloat($('input-limit-price').value) || panes[0].lastLtp;
+      }
+      if (selectedOrderType === 'SL') {
+        triggerPrice = parseFloat($('input-trigger-price').value) || panes[0].lastLtp;
+      }
+
+      const payload = {
+        symbol: sym,
+        exchange_segment: seg,
+        side: side,
+        lots: selectedLots,
+        lot_size: lotSize,
+        product: selectedProduct,
+        order_type: selectedOrderType,
+        price: limitPrice,
+        trigger_price: triggerPrice,
+        validity: 'GFD',
+        user_confirmed: true,
+      };
+
+      try {
+        toast(`Submitting ${side} ${selectedLots} Lot(s) ${sym}...`);
+        const res = await api('/api/orders', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          const modeTag = res.mode === 'live' ? 'Kotak Live' : 'Demo Paper';
+          toast(`✅ ${side} order placed (${modeTag})! Qty: ${qty}`);
+          fetchPositionsAndOrders();
+        } else {
+          toast(`❌ Order failed: ${res.detail || 'Rejection'}`);
+        }
+      } catch (err) {
+        toast(`❌ Error: ${err.message}`);
+      }
+    }
+
+    const btnSell = $('btn-order-sell');
+    const btnBuy = $('btn-order-buy');
+    if (btnSell) btnSell.addEventListener('click', () => submitOrder('SELL'));
+    if (btnBuy) btnBuy.addEventListener('click', () => submitOrder('BUY'));
+
+    // Toggle Order Panel visibility
+    const btnToggleOrder = $('btn-toggle-order-panel');
+    const btnCloseOrder = $('btn-close-order-panel');
+    const orderPanel = $('ex-order-panel');
+    if (btnToggleOrder && orderPanel) {
+      btnToggleOrder.addEventListener('click', () => {
+        orderPanel.classList.toggle('collapsed');
+      });
+    }
+    if (btnCloseOrder && orderPanel) {
+      btnCloseOrder.addEventListener('click', () => {
+        orderPanel.classList.add('collapsed');
+      });
+    }
+  }
+
+  // --- Exness Symbol Tabs ---
+  function renderSymbolTabs() {
+    const tabsBar = $('ex-tabs-bar');
+    if (!tabsBar) return;
+    tabsBar.innerHTML = '';
+
+    openTabs.forEach((tab, idx) => {
+      const tabEl = document.createElement('div');
+      tabEl.className = `ex-tab ${idx === activeTabIndex ? 'active' : ''}`;
+      tabEl.innerHTML = `
+        <span class="tab-icon">${tab.isOption ? '🪙' : '📈'}</span>
+        <span class="tab-name">${tab.symbol}</span>
+        <button type="button" class="tab-close" data-idx="${idx}" title="Close Tab">✕</button>
+      `;
+
+      tabEl.addEventListener('click', e => {
+        if (e.target.classList.contains('tab-close')) return;
+        switchTab(idx);
+      });
+
+      const closeBtn = tabEl.querySelector('.tab-close');
+      closeBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        closeTab(idx);
+      });
+
+      tabsBar.appendChild(tabEl);
+    });
+  }
+
+  function switchTab(index) {
+    if (index < 0 || index >= openTabs.length) return;
+    activeTabIndex = index;
+    renderSymbolTabs();
+
+    const selected = openTabs[index];
+    panes[0].sym = selected.symbol;
+    panes[0].token = selected.token || '';
+    panes[0].tf = selected.interval || '1m';
+    panes[0].isOption = /(CE|PE)$/i.test(selected.symbol);
+
+    const symTitle = $('chart-active-sym');
+    const symSeg = $('chart-active-seg');
+    if (symTitle) symTitle.textContent = selected.symbol;
+    if (symSeg) symSeg.textContent = panes[0].isOption ? 'NSE F&O' : 'NSE';
+
+    const opSym = $('op-sym-name');
+    if (opSym) opSym.textContent = selected.symbol;
+
+    loadCandles(panes[0]);
+  }
+
+  function closeTab(index) {
+    if (openTabs.length <= 1) {
+      toast('Cannot close the last remaining tab');
+      return;
+    }
+    openTabs.splice(index, 1);
+    if (activeTabIndex >= openTabs.length) {
+      activeTabIndex = openTabs.length - 1;
+    }
+    renderSymbolTabs();
+    switchTab(activeTabIndex);
+  }
+
+  function addSymbolTab(sym, token = '') {
+    const isOpt = /(CE|PE)$/i.test(sym);
+    const existing = openTabs.findIndex(t => t.symbol === sym);
+    if (existing >= 0) {
+      switchTab(existing);
+      return;
+    }
+    openTabs.push({ symbol: sym, token, interval: '1m', isOption: isOpt });
+    activeTabIndex = openTabs.length - 1;
+    renderSymbolTabs();
+    switchTab(activeTabIndex);
+  }
+
+  // --- Left Collapsible Instruments Watchlist ---
+  function setupLeftDrawer() {
+    const leftPanel = $('ex-left-panel');
+    const btnCollapse = $('btn-collapse-drawer');
+    const railBtnInst = $('rail-btn-instruments');
+
+    if (btnCollapse && leftPanel) {
+      btnCollapse.addEventListener('click', () => {
+        leftPanel.classList.toggle('collapsed');
+      });
+    }
+
+    if (railBtnInst && leftPanel) {
+      railBtnInst.addEventListener('click', () => {
+        leftPanel.classList.toggle('collapsed');
+      });
+    }
+
+    // Category filter dropdown
+    const catSelect = $('ex-inst-category');
+    if (catSelect) {
+      catSelect.addEventListener('change', () => {
+        renderInstrumentsList(catSelect.value);
+      });
+    }
+
+    // Search input
+    const searchInput = $('ex-inst-search');
+    const searchDropdown = $('ex-inst-search-results');
+    let searchDebounce = null;
+
+    if (searchInput && searchDropdown) {
+      searchInput.addEventListener('input', () => {
+        clearTimeout(searchDebounce);
+        const q = searchInput.value.trim();
+        if (q.length < 2) {
+          searchDropdown.classList.add('hidden');
+          return;
+        }
+
+        searchDebounce = setTimeout(async () => {
+          try {
+            const data = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
+            if (data.ok && data.results && data.results.length) {
+              searchDropdown.innerHTML = '';
+              data.results.slice(0, 10).forEach(r => {
+                const item = document.createElement('div');
+                item.className = 'acc-menu-item';
+                item.innerHTML = `<b>${r.symbol}</b> <small style="margin-left:auto; color:#8b95a5;">${r.segment}</small>`;
+                item.addEventListener('click', () => {
+                  addSymbolTab(r.symbol, r.token || '');
+                  searchDropdown.classList.add('hidden');
+                  searchInput.value = '';
+                });
+                searchDropdown.appendChild(item);
+              });
+              searchDropdown.classList.remove('hidden');
+            }
+          } catch (e) {
+            // quiet
+          }
+        }, 200);
+      });
+
+      document.addEventListener('click', e => {
+        if (!searchInput.contains(e.target) && !searchDropdown.contains(e.target)) {
+          searchDropdown.classList.add('hidden');
+        }
+      });
+    }
+
+    renderInstrumentsList('favorites');
+  }
+
+  function renderInstrumentsList(category = 'favorites') {
+    const tbody = $('ex-instruments-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const list = WATCHLIST_PRESETS[category] || WATCHLIST_PRESETS.favorites;
+    list.forEach(inst => {
+      const tr = document.createElement('tr');
+      tr.className = 'ex-inst-row';
+      tr.innerHTML = `
+        <td>
+          <div class="td-sym-wrap">
+            <span class="sym-main">${inst.symbol}</span>
+            <span class="sym-sub">${inst.name}</span>
+          </div>
+        </td>
+        <td>
+          <span class="sig-badge ${inst.signal.toLowerCase()}">${inst.signal === 'BUY' ? '▲' : '▼'} ${inst.signal}</span>
+        </td>
+        <td>
+          <button type="button" class="btn-price-bid" data-sym="${inst.symbol}" title="Sell @ Bid">—</button>
+        </td>
+        <td>
+          <button type="button" class="btn-price-ask" data-sym="${inst.symbol}" title="Buy @ Ask">—</button>
+        </td>
+      `;
+
+      tr.addEventListener('click', e => {
+        if (e.target.classList.contains('btn-price-bid') || e.target.classList.contains('btn-price-ask')) return;
+        addSymbolTab(inst.symbol, inst.token);
+      });
+
+      const bidBtn = tr.querySelector('.btn-price-bid');
+      const askBtn = tr.querySelector('.btn-price-ask');
+      bidBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        addSymbolTab(inst.symbol, inst.token);
+        $('ex-order-panel').classList.remove('collapsed');
+      });
+      askBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        addSymbolTab(inst.symbol, inst.token);
+        $('ex-order-panel').classList.remove('collapsed');
+      });
+
+      tbody.appendChild(tr);
+    });
+
+    // Populate prices for watchlist
+    updateWatchlistQuotes();
+  }
+
+  async function updateWatchlistQuotes() {
+    try {
+      const rows = document.querySelectorAll('.ex-inst-row');
+      const symbols = Array.from(rows).map(r => ({ symbol: r.querySelector('.sym-main').textContent }));
+      if (!symbols.length) return;
+
+      const data = await api('/api/chart/live-quotes', {
+        method: 'POST',
+        body: JSON.stringify({ items: symbols }),
+      });
+
+      if (data && data.ok && data.quotes) {
+        rows.forEach(r => {
+          const sym = r.querySelector('.sym-main').textContent;
+          const q = data.quotes[sym];
+          if (q && q.ltp) {
+            const bidBtn = r.querySelector('.btn-price-bid');
+            const askBtn = r.querySelector('.btn-price-ask');
+            const spread = (q.ltp * 0.0005) + 0.05;
+            if (bidBtn) bidBtn.textContent = Math.max(0.05, q.ltp - spread / 2).toFixed(2);
+            if (askBtn) askBtn.textContent = (q.ltp + spread / 2).toFixed(2);
+          }
+        });
+      }
+    } catch (e) {
+      // quiet
+    }
+  }
+
+  // --- Bottom Docked Positions & Orders ---
+  function setupBottomPanel() {
+    const btnOpen = $('tab-btn-open');
+    const btnPending = $('tab-btn-pending');
+    const btnClosed = $('tab-btn-closed');
+
+    const vOpen = $('view-open-positions');
+    const vPending = $('view-pending-orders');
+    const vClosed = $('view-closed-trades');
+
+    function switchDockTab(tab) {
+      [btnOpen, btnPending, btnClosed].forEach(b => b && b.classList.remove('active'));
+      [vOpen, vPending, vClosed].forEach(v => v && v.classList.add('hidden'));
+
+      if (tab === 'open') {
+        if (btnOpen) btnOpen.classList.add('active');
+        if (vOpen) vOpen.classList.remove('hidden');
+      } else if (tab === 'pending') {
+        if (btnPending) btnPending.classList.add('active');
+        if (vPending) vPending.classList.remove('hidden');
+      } else if (tab === 'closed') {
+        if (btnClosed) btnClosed.classList.add('active');
+        if (vClosed) vClosed.classList.remove('hidden');
+      }
+    }
+
+    if (btnOpen) btnOpen.addEventListener('click', () => switchDockTab('open'));
+    if (btnPending) btnPending.addEventListener('click', () => switchDockTab('pending'));
+    if (btnClosed) btnClosed.addEventListener('click', () => switchDockTab('closed'));
+
+    // Toggle minimize
+    const toggleDockBtn = $('btn-toggle-dock');
+    const bottomPanel = $('ex-bottom-panel');
+    if (toggleDockBtn && bottomPanel) {
+      toggleDockBtn.addEventListener('click', () => {
+        bottomPanel.classList.toggle('minimized');
+        toggleDockBtn.textContent = bottomPanel.classList.contains('minimized') ? '▢' : '_';
+      });
+    }
+
+    // Exit All Button
+    const btnExitAll = $('btn-dock-exit-all');
+    if (btnExitAll) {
+      btnExitAll.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to SQUARE OFF ALL open positions immediately?')) return;
+        try {
+          toast('Squaring off all positions...');
+          const res = await api('/api/positions/exit-all', { method: 'POST' });
+          if (res.ok) {
+            toast(`✅ ${res.message || 'All positions squared off!'}`);
+            fetchPositionsAndOrders();
+          }
+        } catch (err) {
+          toast(`❌ Error: ${err.message}`);
+        }
+      });
+    }
+  }
+
+  async function fetchPositionsAndOrders() {
     try {
       const posData = await api('/api/positions?tab=open');
-      allPositions = posData.positions || [];
-      openPositions = allPositions.filter(p => Math.abs(p.quantity || 0) > 0);
+      const openTbody = $('open-positions-tbody');
+      const openCountBadge = $('open-pos-count');
 
-      // 1. POSITIONS P&L (Gross MTM + Realized)
-      const grossPnl = posData.total_today_pnl != null ? posData.total_today_pnl : (posData.total_pnl || 0);
-      const posPnlEl = $('val-pos-pnl');
-      if (posPnlEl) {
-        const isPos = grossPnl >= 0;
-        posPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
-        posPnlEl.textContent = `${isPos ? '+' : ''}₹${grossPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      }
+      const positions = Array.isArray(posData) ? posData : (posData.positions || []);
+      if (openCountBadge) openCountBadge.textContent = positions.length;
 
-      // 2. NET P&L (After Charges)
-      const netPnl = posData.total_net_pnl != null ? posData.total_net_pnl : (posData.net_pnl || grossPnl);
-      const netPnlEl = $('val-net-pnl');
-      if (netPnlEl) {
-        const isPos = netPnl >= 0;
-        netPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
-        netPnlEl.textContent = `${isPos ? '+' : ''}₹${netPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      }
-
-      // 3. Open Positions Alert Pill in Header
-      const alertBtn = $('open-positions-alert');
-      const alertText = $('open-pos-alert-text');
-      if (alertBtn && alertText) {
-        if (openPositions.length > 0) {
-          alertBtn.classList.remove('hidden');
-          alertText.textContent = `${openPositions.length} Open Position${openPositions.length > 1 ? 's' : ''}`;
+      if (openTbody) {
+        if (!positions.length) {
+          openTbody.innerHTML = '<tr><td colspan="8" class="empty-row">No open positions. Select a strike to trade.</td></tr>';
         } else {
-          alertBtn.classList.add('hidden');
+          openTbody.innerHTML = '';
+          positions.forEach(p => {
+            const sym = p.symbol || p.trdSym || '—';
+            const side = (p.side || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+            const qty = Math.abs(Number(p.quantity || p.qty || 0));
+            const avg = Number(p.average_price || p.avgPrc || 0);
+            const ltp = Number(p.ltp || avg);
+            const m2m = Number(p.m2m || (side === 'BUY' ? (ltp - avg) * qty : (avg - ltp) * qty));
+            const isPos = m2m >= 0;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><b>${sym}</b></td>
+              <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
+              <td>${p.product || 'NRML'}</td>
+              <td>${qty}</td>
+              <td>₹${avg.toFixed(2)}</td>
+              <td>₹${ltp.toFixed(2)}</td>
+              <td style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">
+                ${isPos ? '+' : ''}₹${m2m.toFixed(2)}
+              </td>
+              <td>
+                <button type="button" class="pos-action-btn danger btn-pos-exit" data-sym="${sym}">Exit</button>
+              </td>
+            `;
+
+            tr.querySelector('.btn-pos-exit').addEventListener('click', async () => {
+              try {
+                toast(`Exiting position ${sym}...`);
+                const res = await api(`/api/positions/${encodeURIComponent(sym)}/exit`, {
+                  method: 'POST',
+                  body: JSON.stringify({ percentage: 100 }),
+                });
+                if (res.ok) {
+                  toast(`✅ Position ${sym} closed!`);
+                  fetchPositionsAndOrders();
+                }
+              } catch (e) {
+                toast(`❌ ${e.message}`);
+              }
+            });
+
+            openTbody.appendChild(tr);
+          });
         }
       }
 
-      // 4. Sync Scalper Position
-      syncScalperPosition();
-    } catch (err) {
-      console.warn('Failed to update positions:', err);
+      // Update Footer Equity & PnL
+      const fundsData = await api('/api/funds').catch(() => ({}));
+      if (fundsData && fundsData.available_margin !== undefined) {
+        const eqEl = $('f-equity');
+        const fmEl = $('f-free-margin');
+        const muEl = $('f-margin-used');
+        const accBal = $('ex-acc-balance');
+
+        const avail = Number(fundsData.available_margin || 1000000);
+        const used = Number(fundsData.used_margin || 0);
+        const equity = Number(fundsData.total_equity || (avail + used));
+
+        if (eqEl) eqEl.textContent = `₹${equity.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        if (fmEl) fmEl.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        if (muEl) muEl.textContent = `₹${used.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        if (accBal) accBal.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+      }
+
+      // Orders report
+      const ordersData = await api('/api/orders').catch(() => []);
+      const pendingTbody = $('pending-orders-tbody');
+      const pendingCount = $('pending-orders-count');
+      const closedTbody = $('closed-trades-tbody');
+      const closedCount = $('closed-trades-count');
+
+      const allOrders = Array.isArray(ordersData) ? ordersData : [];
+      const pendingList = allOrders.filter(o => o.status === 'pending');
+      const closedList = allOrders.filter(o => o.status === 'completed' || o.status === 'simulated');
+
+      if (pendingCount) pendingCount.textContent = pendingList.length;
+      if (closedCount) closedCount.textContent = closedList.length;
+
+      if (pendingTbody) {
+        if (!pendingList.length) {
+          pendingTbody.innerHTML = '<tr><td colspan="8" class="empty-row">No pending limit or trigger orders.</td></tr>';
+        } else {
+          pendingTbody.innerHTML = '';
+          pendingList.forEach(o => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>${o.symbol}</td>
+              <td>${o.id}</td>
+              <td>${o.order_type}</td>
+              <td><span class="side-badge ${(o.side || 'BUY').toLowerCase()}">${o.side}</span></td>
+              <td>${o.quantity}</td>
+              <td>₹${Number(o.price || 0).toFixed(2)}</td>
+              <td><span class="tag-pending">Pending</span></td>
+              <td><button type="button" class="pos-action-btn danger">Cancel</button></td>
+            `;
+            pendingTbody.appendChild(tr);
+          });
+        }
+      }
+
+      if (closedTbody) {
+        if (!closedList.length) {
+          closedTbody.innerHTML = '<tr><td colspan="7" class="empty-row">Showing closed trades for today.</td></tr>';
+        } else {
+          closedTbody.innerHTML = '';
+          closedList.forEach(o => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><b>${o.symbol}</b></td>
+              <td><span class="side-badge ${(o.side || 'BUY').toLowerCase()}">${o.side}</span></td>
+              <td>${o.quantity}</td>
+              <td>₹${Number(o.price || 0).toFixed(2)}</td>
+              <td>₹${Number(o.price || 0).toFixed(2)}</td>
+              <td class="text-green">+₹0.00</td>
+              <td>${o.created_at ? o.created_at.split('T')[1] || o.created_at : 'Today'}</td>
+            `;
+            closedTbody.appendChild(tr);
+          });
+        }
+      }
+    } catch (e) {
+      // quiet
     }
   }
 
-  function syncScalperPosition() {
-    const activePane = panes[activePaneIdx];
-    const activeSym = activePane?.sym;
-    const matchPos = openPositions.find(p => p.symbol === activeSym);
-
-    const posSection = $('sc-position-section');
-    const posBadge = $('sc-pos-badge');
-    const posSum = $('sc-pos-summary');
-    const posPnl = $('sc-pos-pnl');
-    const scalperPnlEl = $('val-scalper-pnl');
-
-    if (matchPos && Math.abs(matchPos.quantity || 0) > 0) {
-      if (posSection) posSection.classList.remove('hidden');
-      if (posBadge) {
-        posBadge.textContent = `${matchPos.quantity > 0 ? 'LONG' : 'SHORT'} ${Math.abs(matchPos.quantity)} Qty`;
-        posBadge.style.color = matchPos.quantity > 0 ? '#34d399' : '#f87171';
-      }
-      const lotSize = matchPos.lot_size || (activePane.isOption ? 65 : 1);
-      const lots = Math.max(1, Math.round(Math.abs(matchPos.quantity) / lotSize));
-      if (posSum) {
-        posSum.textContent = `Position: ${Math.abs(matchPos.quantity)} units (${lots} Lot) @ Avg ₹${Number(matchPos.avg_price || 0).toFixed(2)}`;
-      }
-      const ltp = activePane.lastLtp || matchPos.ltp || matchPos.avg_price;
-      const runningPnl = (ltp - matchPos.avg_price) * matchPos.quantity;
-      if (posPnl) {
-        const isPos = runningPnl >= 0;
-        posPnl.className = `sc-pnl-pill ${isPos ? 'pos' : 'neg'}`;
-        posPnl.textContent = `P&L: ${isPos ? '+' : ''}₹${runningPnl.toFixed(2)}`;
-      }
-      if (scalperPnlEl) {
-        const isPos = runningPnl >= 0;
-        scalperPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
-        scalperPnlEl.textContent = `${isPos ? '+' : ''}₹${runningPnl.toFixed(2)}`;
-      }
-    } else {
-      if (scalperPnlEl) {
-        scalperPnlEl.className = 'pnl-num';
-        scalperPnlEl.textContent = '₹0.00';
-      }
-      if (posBadge) {
-        posBadge.textContent = 'No Position';
-        posBadge.style.color = 'var(--text-muted)';
-      }
-
-      if (openPositions.length > 0) {
-        if (posSection) posSection.classList.remove('hidden');
-        if (posSum) {
-          posSum.textContent = `${openPositions.length} other position(s) active in account`;
-        }
-        if (posPnl) {
-          posPnl.className = 'sc-pnl-pill';
-          posPnl.textContent = 'Click Alert to View';
-        }
-      } else {
-        if (posSection) posSection.classList.add('hidden');
-      }
-    }
-  }
-
-  // --- Scalper Form & Window Controls ---
-  function updateScalperContract(pane) {
-    const title = $('sc-contract-title');
-    if (title) title.textContent = pane.sym;
-    const ltpEl = $('sc-ltp');
-    if (ltpEl && pane.lastLtp) ltpEl.textContent = Number(pane.lastLtp).toFixed(2);
-    syncScalperPosition();
-  }
-
-  function setupScalperDrag() {
-    const box = $('floating-scalper');
-    const handle = $('scalper-drag-handle');
-    if (!box || !handle) return;
-
-    let isDragging = false;
-    let startX = 0;
-    let startY = 0;
-    let initLeft = 0;
-    let initTop = 0;
-
-    handle.addEventListener('mousedown', e => {
-      if (e.target.tagName === 'BUTTON') return;
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = box.getBoundingClientRect();
-      initLeft = rect.left;
-      initTop = rect.top;
-      box.style.bottom = 'auto';
-      box.style.right = 'auto';
-      box.style.left = `${initLeft}px`;
-      box.style.top = `${initTop}px`;
-    });
-
-    window.addEventListener('mousemove', e => {
-      if (!isDragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      box.style.left = `${Math.max(10, Math.min(window.innerWidth - box.offsetWidth - 10, initLeft + dx))}px`;
-      box.style.top = `${Math.max(40, Math.min(window.innerHeight - box.offsetHeight - 10, initTop + dy))}px`;
-    });
-
-    window.addEventListener('mouseup', () => { isDragging = false; });
-
-    // Close button
-    const closeBtn = $('scalper-close-btn');
-    if (closeBtn) closeBtn.addEventListener('click', () => box.classList.add('hidden'));
-
-    // Toggle button in toolbar
-    const toggleBtn = $('scalper-mode-toggle');
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        box.classList.toggle('hidden');
-        toggleBtn.classList.toggle('active', !box.classList.contains('hidden'));
-      });
-    }
-
-    // Header Open Positions Alert Pill: Click to switch to most losing position!
-    $('open-positions-alert')?.addEventListener('click', () => {
-      if (!openPositions || !openPositions.length) return;
-
-      // Sort ascending by P&L (worst losing / lowest P&L position first)
-      const sorted = [...openPositions].sort((a, b) => (a.pnl || 0) - (b.pnl || 0));
-      const target = sorted[0];
-
-      const pane = panes[activePaneIdx];
-      pane.sym = target.symbol;
-      pane.token = target.token || '';
-      pane.isOption = /(CE|PE)$/i.test(target.symbol);
-      loadPaneData(pane);
-      updateScalperContract(pane);
-      syncWebSocketSubscriptions();
-
-      const searchIn = $('symbol-search-input');
-      if (searchIn) searchIn.value = target.symbol;
-
-      if (openPositions.length === 1) {
-        toast(`📍 Switched to active position: ${target.symbol} (P&L: ${target.pnl >= 0 ? '+' : ''}₹${Number(target.pnl || 0).toFixed(2)})`, 3500);
-      } else {
-        const others = openPositions.length - 1;
-        toast(`⚠️ Priority: Opened lowest P&L position ${target.symbol} (${target.pnl >= 0 ? '+' : ''}₹${Number(target.pnl || 0).toFixed(2)}). ${others} other open position${others > 1 ? 's' : ''} running — manage or click Exit All!`, 5500);
-      }
-    });
-
-    // Lots Stepper
-    const lotInput = $('sc-lots');
-    $('lot-up')?.addEventListener('click', () => {
-      if (lotInput) lotInput.value = Math.min(200, parseInt(lotInput.value || '1', 10) + 1);
-    });
-    $('lot-down')?.addEventListener('click', () => {
-      if (lotInput) lotInput.value = Math.max(1, parseInt(lotInput.value || '1', 10) - 1);
-    });
-
-    // Buy & Sell execution
-    const executeOrder = async (side) => {
-      const pane = panes[activePaneIdx];
-      const lots = parseInt(lotInput?.value || '1', 10);
-      try {
-        await api('/api/orders', {
-          method: 'POST',
-          body: JSON.stringify({
-            symbol: pane.sym,
-            exchange_segment: pane.isOption ? 'nse_fo' : 'nse_cm',
-            product: 'MIS',
-            side: side,
-            lots: lots,
-            lot_size: pane.isOption ? 65 : 1,
-            order_type: 'MKT',
-            price: 0,
-            trigger_price: 0,
-            validity: 'DAY',
-          }),
-        });
-        toast(`⚡ Dispatched ${side} ${lots} lot(s) for ${pane.sym}`, 3000);
-        setTimeout(updatePositionsReport, 600);
-      } catch (err) {
-        toast(`Order Failed: ${err.message}`, 4000);
-      }
-    };
-
-    $('sc-buy-btn')?.addEventListener('click', () => executeOrder('BUY'));
-    $('sc-sell-btn')?.addEventListener('click', () => executeOrder('SELL'));
-    $('tb-quick-buy')?.addEventListener('click', () => executeOrder('BUY'));
-    $('tb-quick-sell')?.addEventListener('click', () => executeOrder('SELL'));
-
-    // Quick Action 1: Trail SL to Cost
-    $('sc-trail-cost-btn')?.addEventListener('click', async () => {
-      const pane = panes[activePaneIdx];
-      const matchPos = openPositions.find(p => p.symbol === pane.sym) || openPositions[0];
-      const sym = matchPos ? matchPos.symbol : pane.sym;
-      try {
-        const res = await api('/api/positions/trail-to-cost', {
-          method: 'POST',
-          body: JSON.stringify({ symbol: sym }),
-        });
-        toast(res.message || `🛡️ SL Trailed to Cost Price for ${sym}!`, 3500);
-      } catch (err) {
-        toast(`Trail SL Failed: ${err.message}`, 4000);
-      }
-    });
-
-    // Quick Action 2: Exit 50%
-    $('sc-exit-50-btn')?.addEventListener('click', async () => {
-      const pane = panes[activePaneIdx];
-      const matchPos = openPositions.find(p => p.symbol === pane.sym) || openPositions[0];
-      const sym = matchPos ? matchPos.symbol : pane.sym;
-      try {
-        const res = await api('/api/positions/exit-partial', {
-          method: 'POST',
-          body: JSON.stringify({ symbol: sym, percentage: 50 }),
-        });
-        toast(res.message || `½ Closed 50% Position for ${sym}!`, 3500);
-        setTimeout(updatePositionsReport, 600);
-      } catch (err) {
-        toast(`Exit 50% Failed: ${err.message}`, 4000);
-      }
-    });
-
-    // Quick Action 3: Exit All
-    $('sc-exit-all-btn')?.addEventListener('click', async () => {
-      try {
-        const res = await api('/api/positions/exit-all', { method: 'POST' });
-        toast(`🚨 Emergency Exit Complete: ${res.closed_positions || 0} positions closed!`, 4000);
-        setTimeout(updatePositionsReport, 600);
-      } catch (err) {
-        toast(`Exit All Failed: ${err.message}`, 4000);
-      }
-    });
-
-    // Quick Action 3: Exit All
-    $('sc-exit-all-btn')?.addEventListener('click', async () => {
-      try {
-        const res = await api('/api/positions/exit-all', { method: 'POST' });
-        toast(`🚨 Emergency Exit Complete: ${res.closed_positions || 0} positions closed!`, 4000);
-      } catch (err) {
-        toast(`Exit All Failed: ${err.message}`, 4000);
-      }
-    });
-  }
-
-  // --- Smart Search with Autocomplete Dropdown ---
-  function setupSearch() {
-    const input = $('symbol-search-input');
-    const dropdown = $('search-dropdown');
-    if (!input || !dropdown) return;
-
-    let debounceTimer = null;
-
-    input.addEventListener('input', () => {
-      const q = input.value.trim();
-      clearTimeout(debounceTimer);
-      if (!q) {
-        dropdown.classList.add('hidden');
-        return;
-      }
-
-      debounceTimer = setTimeout(async () => {
-        try {
-          const res = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
-          if (res.results && res.results.length) {
-            renderSearchDropdown(res.results);
-          } else {
-            dropdown.innerHTML = `<div class="search-item"><span class="item-name">No matches for "${q}"</span></div>`;
-            dropdown.classList.remove('hidden');
-          }
-        } catch (_) {}
-      }, 150);
-    });
-
-    function renderSearchDropdown(items) {
-      dropdown.innerHTML = items.map(item => `
-        <div class="search-item" data-sym="${item.symbol}" data-token="${item.token || ''}">
-          <div class="item-left">
-            <span class="item-sym">${item.symbol}</span>
-            <span class="item-name">${item.name || ''}</span>
-          </div>
-          <span class="item-badge ${item.type.toLowerCase().includes('ce') ? 'ce' : (item.type.toLowerCase().includes('pe') ? 'pe' : 'index')}">${item.type}</span>
-        </div>
-      `).join('');
-
-      dropdown.classList.remove('hidden');
-
-      dropdown.querySelectorAll('.search-item').forEach(el => {
-        el.addEventListener('click', () => {
-          const sym = el.dataset.sym;
-          const tok = el.dataset.token;
-          if (sym) {
-            const pane = panes[activePaneIdx];
-            pane.sym = sym;
-            pane.token = tok;
-            pane.isOption = /(CE|PE)$/i.test(sym);
-            loadPaneData(pane);
-            updateScalperContract(pane);
-            syncWebSocketSubscriptions();
-            input.value = sym;
-            dropdown.classList.add('hidden');
-          }
-        });
-      });
-    }
-
-    // Hide dropdown on click outside
-    document.addEventListener('click', e => {
-      if (!e.target.closest('#search-wrap')) {
-        dropdown.classList.add('hidden');
-      }
-    });
-  }
-
-  // --- Layout Selector & Event Handlers ---
-  function setupLayoutSelector() {
-    const btn = $('layout-toggle-btn');
-    const dropdown = $('layout-dropdown');
-    const stage = $('chart-stage');
-    const label = $('current-layout-label');
-
-    btn?.addEventListener('click', () => dropdown?.classList.toggle('hidden'));
-
-    dropdown?.querySelectorAll('.layout-opt').forEach(opt => {
-      opt.addEventListener('click', () => {
-        dropdown.querySelectorAll('.layout-opt').forEach(o => o.classList.remove('active'));
-        opt.classList.add('active');
-        const l = parseInt(opt.dataset.layout, 10);
-        activeLayout = l;
-        dropdown.classList.add('hidden');
-
-        stage.className = `chart-stage layout-${l}`;
-        if (label) {
-          label.textContent = l === 1 ? '1 CHART' : (l === 2 ? '2 CHARTS' : '3 CHARTS');
-        }
-        syncWebSocketSubscriptions();
-
-        // Trigger resize on visible charts
-        setTimeout(handleResize, 100);
-      });
-    });
-
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.layout-selector-wrap')) {
-        dropdown?.classList.add('hidden');
-      }
-    });
-  }
-
-  // --- Timeframe Buttons ---
-  function setupTimeframeButtons() {
-    document.querySelectorAll('.tf-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tf-pill').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tf = btn.dataset.tf;
-        const pane = panes[activePaneIdx];
-        if (pane) {
-          pane.tf = tf;
-          loadPaneData(pane);
-        }
-      });
-    });
-  }
-
-  // --- TradingView Technical Indicators Dropdown Menu ---
-  function setupIndicatorsMenu() {
-    const btn = $('btn-indicators-dropdown');
-    const menu = $('indicators-menu');
-    if (!btn || !menu) return;
-
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      menu.classList.toggle('hidden');
-    });
-
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.indicators-wrap')) {
-        menu.classList.add('hidden');
-      }
-    });
-
-    const bindChk = (id, key) => {
-      const el = $(id);
-      if (!el) return;
-      el.checked = !!indicators[key];
-      el.addEventListener('change', () => {
-        indicators[key] = el.checked;
-        panes.forEach(p => applyPaneIndicators(p));
-      });
-    };
-
-    bindChk('chk-ind-ema9', 'showEma9');
-    bindChk('chk-ind-ema21', 'showEma21');
-    bindChk('chk-ind-vwap', 'showVwap');
-    bindChk('chk-ind-supertrend', 'showSupertrend');
-    bindChk('chk-ind-vpvr', 'showVpvr');
-    bindChk('chk-ind-vol', 'showVol');
-    bindChk('chk-ind-bb', 'showBb');
-    bindChk('chk-ind-ema50', 'showEma50');
-    bindChk('chk-ind-ema200', 'showEma200');
-  }
-
-  // --- Real-time Option Chain Modal (Matches Upstox TV) ---
-  let activeOcUnderlying = 'NIFTY';
-  let activeOcExpiry = '';
-
+  // --- Option Chain Modal (Matching Upstox TV) ---
   function setupOptionChainModal() {
-    const btn = $('btn-option-chain');
     const modal = $('option-chain-modal');
+    const openBtn = $('btn-chart-opt-chain');
+    const railBtn = $('rail-btn-option-chain');
     const closeBtn = $('close-oc-modal');
     const expirySelect = $('oc-expiry-select');
-    const tableBody = $('oc-table-body');
     const spotBadge = $('oc-spot-badge');
+    const tbody = $('oc-table-body');
 
-    if (!btn || !modal) return;
+    let currentUnd = 'NIFTY';
 
-    btn.addEventListener('click', () => {
-      const curSym = panes[activePaneIdx].sym.toUpperCase();
-      if (curSym.includes('BANK')) activeOcUnderlying = 'BANKNIFTY';
-      else if (curSym.includes('FIN')) activeOcUnderlying = 'FINNIFTY';
-      else if (curSym.includes('SENSEX')) activeOcUnderlying = 'SENSEX';
-      else activeOcUnderlying = 'NIFTY';
-
+    function openModal() {
+      if (!modal) return;
       modal.classList.remove('hidden');
-      updateOcUnderlyingButtons();
-      loadOptionChainData();
-    });
+      loadOptionChain(currentUnd);
+    }
 
-    closeBtn?.addEventListener('click', () => modal.classList.add('hidden'));
+    function closeModal() {
+      if (!modal) return;
+      modal.classList.add('hidden');
+    }
 
-    // Underlying tabs
-    modal.querySelectorAll('.oc-und-btn').forEach(b => {
-      b.addEventListener('click', () => {
-        activeOcUnderlying = b.dataset.und;
-        activeOcExpiry = '';
-        updateOcUnderlyingButtons();
-        loadOptionChainData();
+    if (openBtn) openBtn.addEventListener('click', openModal);
+    if (railBtn) railBtn.addEventListener('click', openModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    document.querySelectorAll('.oc-und-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.oc-und-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentUnd = btn.dataset.und;
+        loadOptionChain(currentUnd);
       });
     });
 
-    expirySelect?.addEventListener('change', () => {
-      activeOcExpiry = expirySelect.value;
-      loadOptionChainData();
-    });
-
-    function updateOcUnderlyingButtons() {
-      modal.querySelectorAll('.oc-und-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.und === activeOcUnderlying);
+    if (expirySelect) {
+      expirySelect.addEventListener('change', () => {
+        loadOptionChain(currentUnd, expirySelect.value);
       });
     }
 
-    async function loadOptionChainData() {
-      if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" class="oc-loading">Fetching real-time option chain…</td></tr>';
-      try {
-        const query = `/api/chart/option-chain?symbol=${activeOcUnderlying}${activeOcExpiry ? `&expiry=${activeOcExpiry}` : ''}`;
-        const data = await api(query);
+    async function loadOptionChain(underlying, expiry = '') {
+      if (!tbody) return;
+      tbody.innerHTML = '<tr><td colspan="7" class="oc-loading" style="text-align:center; padding:30px; color:#8b95a5;">Loading real-time option chain…</td></tr>';
 
-        if (!data.ok || !data.rows || !data.rows.length) {
-          if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" class="oc-loading">No option strikes available for this expiry.</td></tr>';
+      try {
+        const qUrl = `/api/chart/option-chain?symbol=${encodeURIComponent(underlying)}${expiry ? `&expiry=${encodeURIComponent(expiry)}` : ''}`;
+        const data = await api(qUrl);
+
+        if (!data || !data.ok) {
+          tbody.innerHTML = `<tr><td colspan="7" class="oc-loading" style="text-align:center; padding:20px; color:#ff4757;">Failed loading option chain: ${data.message || 'Error'}</td></tr>`;
           return;
         }
 
         if (spotBadge) {
-          spotBadge.textContent = `Spot: ₹${Number(data.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const diff = Number(data.spot_change || 0);
+          spotBadge.textContent = `Spot: ₹${Number(data.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${diff >= 0 ? '+' : ''}${diff.toFixed(2)})`;
         }
 
-        // Populate expiries dropdown if not populated or underlying changed
         if (expirySelect && data.expiries && data.expiries.length) {
-          expirySelect.innerHTML = data.expiries.map(e => `<option value="${e}" ${e === data.selected_expiry ? 'selected' : ''}>${e}</option>`).join('');
-          activeOcExpiry = data.selected_expiry;
+          expirySelect.innerHTML = '';
+          data.expiries.forEach(exp => {
+            const opt = document.createElement('option');
+            opt.value = exp;
+            opt.textContent = exp;
+            if (exp === data.selected_expiry) opt.selected = true;
+            expirySelect.appendChild(opt);
+          });
         }
 
-        // Render strikes table
-        renderOptionChainTable(data.rows, data.spot_price);
+        tbody.innerHTML = '';
+        data.chain.forEach(row => {
+          const tr = document.createElement('tr');
+          tr.className = `oc-strike-row ${row.is_atm ? 'atm-row' : ''}`;
+          tr.innerHTML = `
+            <td class="col-oi">${row.call_oi ? row.call_oi.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-vol">${row.call_vol ? row.call_vol.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-ltp">
+              <button type="button" class="oc-ltp-btn call-ltp" data-sym="${row.call_symbol}" data-tok="${row.call_token}">
+                ${row.call_ltp ? Number(row.call_ltp).toFixed(2) : '—'}
+              </button>
+            </td>
+            <td class="col-strike">
+              <b>${row.strike}</b>
+              ${row.is_atm ? '<span style="font-size:9px; color:#ffb703; display:block;">ATM</span>' : ''}
+            </td>
+            <td class="col-ltp">
+              <button type="button" class="oc-ltp-btn put-ltp" data-sym="${row.put_symbol}" data-tok="${row.put_token}">
+                ${row.put_ltp ? Number(row.put_ltp).toFixed(2) : '—'}
+              </button>
+            </td>
+            <td class="col-vol">${row.put_vol ? row.put_vol.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-oi">${row.put_oi ? row.put_oi.toLocaleString('en-IN') : '—'}</td>
+          `;
+
+          // Click Call LTP
+          const callBtn = tr.querySelector('.call-ltp');
+          if (callBtn) {
+            callBtn.addEventListener('click', () => {
+              addSymbolTab(row.call_symbol, row.call_token);
+              closeModal();
+              toast(`Loaded ${row.call_symbol} chart & ticket`);
+            });
+          }
+
+          // Click Put LTP
+          const putBtn = tr.querySelector('.put-ltp');
+          if (putBtn) {
+            putBtn.addEventListener('click', () => {
+              addSymbolTab(row.put_symbol, row.put_token);
+              closeModal();
+              toast(`Loaded ${row.put_symbol} chart & ticket`);
+            });
+          }
+
+          tbody.appendChild(tr);
+        });
       } catch (err) {
-        if (tableBody) tableBody.innerHTML = `<tr class="oc-loading"><td colspan="7">Failed to load chain: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="oc-loading" style="text-align:center; padding:20px; color:#ff4757;">Error loading chain: ${err.message}</td></tr>`;
+      }
+    }
+  }
+
+  // --- Gatekeeper & Owner Auth ---
+  function setupGatekeeper() {
+    const gateModal = $('modal-gatekeeper');
+    const btnEnterGuest = $('btn-enter-guest');
+    const btnOwnerSubmit = $('btn-owner-login-submit');
+    const ownerTotp = $('owner-totp-input');
+    const ownerMpin = $('owner-mpin-input');
+
+    const accBtn = $('ex-account-btn');
+    const accMenu = $('ex-account-menu');
+    const btnOpenOwner = $('btn-open-owner-login');
+    const btnResetDemo = $('btn-reset-demo');
+    const btnLogout = $('btn-logout');
+    const sessionBadge = $('session-timer-badge');
+    const sessionTimerText = $('session-timer-text');
+
+    // Toggle Account Menu
+    if (accBtn && accMenu) {
+      accBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        accMenu.classList.toggle('hidden');
+      });
+      document.addEventListener('click', () => {
+        accMenu.classList.add('hidden');
+      });
+    }
+
+    if (btnOpenOwner) {
+      btnOpenOwner.addEventListener('click', () => {
+        if (gateModal) gateModal.classList.remove('hidden');
+      });
+    }
+
+    if (btnResetDemo) {
+      btnResetDemo.addEventListener('click', () => {
+        toast('Demo paper balance reset to ₹10,00,000.00');
+        fetchPositionsAndOrders();
+      });
+    }
+
+    if (btnLogout) {
+      btnLogout.addEventListener('click', async () => {
+        await api('/api/auth/owner-logout', { method: 'POST' }).catch(() => ({}));
+        localStorage.removeItem('neo_owner_token');
+        ownerToken = '';
+        isOwner = false;
+        updateAuthModeUI(false);
+        toast('Logged out. Switched to Guest Demo Mode.');
+        if (gateModal) gateModal.classList.remove('hidden');
+      });
+    }
+
+    // Guest Entry
+    if (btnEnterGuest) {
+      btnEnterGuest.addEventListener('click', () => {
+        gateModal.classList.add('hidden');
+        localStorage.setItem('neo_visited_as_guest', 'true');
+        updateAuthModeUI(false);
+        toast('Welcome! You are trading in Guest Demo Mode with ₹10,00,000 virtual balance.');
+      });
+    }
+
+    // Owner Login Submit
+    if (btnOwnerSubmit) {
+      btnOwnerSubmit.addEventListener('click', async () => {
+        const totp = (ownerTotp ? ownerTotp.value : '').trim();
+        const mpin = (ownerMpin ? ownerMpin.value : '').trim();
+        if (!mpin) {
+          toast('Please enter your 6-digit MPIN');
+          return;
+        }
+
+        try {
+          toast('Verifying credentials...');
+          const res = await api('/api/auth/owner-login', {
+            method: 'POST',
+            body: JSON.stringify({ totp, mpin }),
+          });
+
+          if (res.ok && res.token) {
+            ownerToken = res.token;
+            localStorage.setItem('neo_owner_token', ownerToken);
+            recordUserActivity();
+            isOwner = true;
+            updateAuthModeUI(true);
+            gateModal.classList.add('hidden');
+            toast('✅ Authenticated as Owner! Live Kotak 0-Brokerage Active.');
+            fetchPositionsAndOrders();
+          }
+        } catch (err) {
+          toast(`❌ Authentication failed: ${err.message}`);
+        }
+      });
+    }
+
+    // Check Initial Session
+    async function checkSession() {
+      try {
+        const st = await api('/api/auth/session-status');
+        if (st.authenticated) {
+          isOwner = true;
+          updateAuthModeUI(true);
+        } else {
+          isOwner = false;
+          updateAuthModeUI(false);
+          const hasVisited = localStorage.getItem('neo_visited_as_guest');
+          if (!hasVisited && gateModal) {
+            gateModal.classList.remove('hidden');
+          }
+        }
+      } catch (e) {
+        updateAuthModeUI(false);
       }
     }
 
-    function renderOptionChainTable(rows, spotPrice) {
-      if (!tableBody) return;
-      tableBody.innerHTML = rows.map(r => {
-        const isATM = Math.abs(r.strike - spotPrice) <= 50;
-        const callITM = r.strike < spotPrice;
-        const putITM = r.strike > spotPrice;
+    function updateAuthModeUI(ownerActive) {
+      const pill = $('ex-acc-pill');
+      const idEl = $('ex-acc-id');
+      const modeBadge = $('op-mode-badge');
+      const btnLogoutEl = $('btn-logout');
+      const btnOwnerLoginEl = $('btn-open-owner-login');
+      const menuTitle = $('menu-mode-title');
+      const menuSub = $('menu-mode-sub');
 
-        const c = r.call || {};
-        const p = r.put || {};
+      if (ownerActive) {
+        if (pill) { pill.className = 'ex-acc-pill live'; pill.textContent = 'Live'; }
+        if (idEl) idEl.textContent = '#KOTAK-LIVE';
+        if (modeBadge) { modeBadge.textContent = 'Kotak Live (0 Brokerage)'; modeBadge.className = 'text-green'; }
+        if (btnLogoutEl) btnLogoutEl.classList.remove('hidden');
+        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.add('hidden');
+        if (menuTitle) menuTitle.textContent = 'Kotak Live Account';
+        if (menuSub) menuSub.textContent = '0 Brokerage F&O Enabled';
+        if (sessionBadge) sessionBadge.classList.remove('hidden');
+      } else {
+        if (pill) { pill.className = 'ex-acc-pill demo'; pill.textContent = 'Demo'; }
+        if (idEl) idEl.textContent = '#GUEST-8842';
+        if (modeBadge) { modeBadge.textContent = 'Demo Paper Trading'; modeBadge.className = 'mode-badge-demo'; }
+        if (btnLogoutEl) btnLogoutEl.classList.add('hidden');
+        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.remove('hidden');
+        if (menuTitle) menuTitle.textContent = 'Guest Demo Mode';
+        if (menuSub) menuSub.textContent = 'Virtual paper trading active';
+        if (sessionBadge) sessionBadge.classList.add('hidden');
+      }
+    }
 
-        return `
-          <tr class="${isATM ? 'atm-row' : ''}">
-            <td class="col-oi ${callITM ? 'call-itm' : ''}">${c.oi ? c.oi.toLocaleString() : '—'}</td>
-            <td class="col-vol ${callITM ? 'call-itm' : ''}">${c.volume ? c.volume.toLocaleString() : '—'}</td>
-            <td class="col-ltp ${callITM ? 'call-itm' : ''}">
-              <button type="button" class="oc-ltp-btn call" data-sym="${c.symbol}" data-key="${c.instrument_key}" data-ltp="${c.ltp}">
-                ₹${Number(c.ltp || 0).toFixed(2)}
-              </button>
-            </td>
-            <td class="cell-strike">${Number(r.strike).toFixed(0)}</td>
-            <td class="col-ltp ${putITM ? 'put-itm' : ''}">
-              <button type="button" class="oc-ltp-btn put" data-sym="${p.symbol}" data-key="${p.instrument_key}" data-ltp="${p.ltp}">
-                ₹${Number(p.ltp || 0).toFixed(2)}
-              </button>
-            </td>
-            <td class="col-vol ${putITM ? 'put-itm' : ''}">${p.volume ? p.volume.toLocaleString() : '—'}</td>
-            <td class="col-oi ${putITM ? 'put-itm' : ''}">${p.oi ? p.oi.toLocaleString() : '—'}</td>
-          </tr>
-        `;
-      }).join('');
+    // 5-minute Inactivity Timer Interval
+    clearInterval(inactivityTimerInterval);
+    inactivityTimerInterval = setInterval(() => {
+      if (!isOwner) return;
+      const elapsed = Date.now() - lastUserActivity;
+      const remainingMs = INACTIVITY_TIMEOUT_MS - elapsed;
 
-      tableBody.querySelectorAll('.oc-ltp-btn').forEach(btn => {
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          const sym = btn.dataset.sym;
-          const key = btn.dataset.key;
-          const ltp = btn.dataset.ltp;
-          if (!sym || !key) return;
+      if (remainingMs <= 0) {
+        // Auto-logout
+        ownerToken = '';
+        localStorage.removeItem('neo_owner_token');
+        isOwner = false;
+        updateAuthModeUI(false);
+        toast('Session expired due to 5 minutes of inactivity. Switched to Guest Demo Mode.');
+        if (gateModal) gateModal.classList.remove('hidden');
+      } else if (sessionTimerText) {
+        const totalSec = Math.floor(remainingMs / 1000);
+        const mins = Math.floor(totalSec / 60);
+        const secs = totalSec % 60;
+        sessionTimerText.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+      }
+    }, 1000);
 
-          const pane = panes[activePaneIdx];
-          pane.sym = sym;
-          pane.token = key;
-          pane.isOption = true;
+    checkSession();
+  }
 
-          const searchIn = $('symbol-search-input');
-          if (searchIn) searchIn.value = sym;
+  // --- Setup Guide Modal ---
+  function setupGuideModal() {
+    const guideModal = $('modal-setup-guide');
+    const openBtn = $('btn-setup-guide');
+    const railBtn = $('rail-btn-guide');
+    const menuBtn = $('btn-open-guide-from-menu');
+    const closeBtn = $('btn-close-guide');
 
-          loadPaneData(pane);
-          updateScalperContract(pane);
-          syncWebSocketSubscriptions();
+    function openGuide() {
+      if (guideModal) guideModal.classList.remove('hidden');
+    }
+    function closeGuide() {
+      if (guideModal) guideModal.classList.add('hidden');
+    }
 
-          modal.classList.add('hidden');
-          toast(`⚡ Loaded ${sym} (₹${ltp}) on chart!`, 3500);
+    if (openBtn) openBtn.addEventListener('click', openGuide);
+    if (railBtn) railBtn.addEventListener('click', openGuide);
+    if (menuBtn) menuBtn.addEventListener('click', openGuide);
+    if (closeBtn) closeBtn.addEventListener('click', closeGuide);
+  }
+
+  // --- Indicators Dropdown & Layout Switcher ---
+  function setupIndicatorsMenu() {
+    const btn = $('btn-indicators-dropdown');
+    const railBtn = $('rail-btn-indicators');
+    const menu = $('indicators-menu');
+
+    function toggleMenu(e) {
+      if (e) e.stopPropagation();
+      menu.classList.toggle('hidden');
+    }
+
+    if (btn && menu) btn.addEventListener('click', toggleMenu);
+    if (railBtn && menu) railBtn.addEventListener('click', toggleMenu);
+
+    document.addEventListener('click', e => {
+      if (menu && !menu.contains(e.target) && e.target !== btn && e.target !== railBtn) {
+        menu.classList.add('hidden');
+      }
+    });
+
+    const mapping = [
+      { id: 'chk-ind-ema9', key: 'showEma9' },
+      { id: 'chk-ind-ema21', key: 'showEma21' },
+      { id: 'chk-ind-vwap', key: 'showVwap' },
+      { id: 'chk-ind-supertrend', key: 'showSupertrend' },
+      { id: 'chk-ind-vpvr', key: 'showVpvr' },
+      { id: 'chk-ind-vol', key: 'showVol' },
+      { id: 'chk-ind-bb', key: 'showBb' },
+      { id: 'chk-ind-ema50', key: 'showEma50' },
+      { id: 'chk-ind-ema200', key: 'showEma200' },
+    ];
+
+    mapping.forEach(({ id, key }) => {
+      const el = $(id);
+      if (el) {
+        el.checked = indicators[key];
+        el.addEventListener('change', () => {
+          indicators[key] = el.checked;
+          panes.forEach(applyPaneIndicators);
+        });
+      }
+    });
+
+    // Timeframe Buttons
+    document.querySelectorAll('.ex-tf-btn').forEach(tfBtn => {
+      tfBtn.addEventListener('click', () => {
+        document.querySelectorAll('.ex-tf-btn').forEach(b => b.classList.remove('active'));
+        tfBtn.classList.add('active');
+        panes[0].tf = tfBtn.dataset.tf;
+        loadCandles(panes[0]);
+      });
+    });
+
+    // Layout Dropdown
+    const lBtn = $('layout-toggle-btn');
+    const lDrop = $('layout-dropdown');
+    const lLbl = $('current-layout-label');
+    const stage = $('chart-stage');
+
+    if (lBtn && lDrop) {
+      lBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        lDrop.classList.toggle('hidden');
+      });
+      document.addEventListener('click', () => lDrop.classList.add('hidden'));
+
+      document.querySelectorAll('.layout-opt').forEach(opt => {
+        opt.addEventListener('click', () => {
+          document.querySelectorAll('.layout-opt').forEach(o => o.classList.remove('active'));
+          opt.classList.add('active');
+          const lay = parseInt(opt.dataset.layout) || 1;
+          activeLayout = lay;
+          stage.className = `ex-chart-stage layout-${lay}`;
+          if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
+
+          // Initialize pane charts if not yet done
+          if (lay >= 2 && !panes[1].chart) {
+            initChartPane(panes[1]);
+            loadCandles(panes[1]);
+          }
+          if (lay === 3 && !panes[2].chart) {
+            initChartPane(panes[2]);
+            loadCandles(panes[2]);
+          }
+
+          panes.forEach(p => {
+            if (p.chart) p.chart.timeScale().fitContent();
+          });
         });
       });
     }
   }
 
-  // --- Window Resize Handler ---
-  function handleResize() {
-    panes.forEach(pane => {
-      const container = $(`p${pane.idx + 1}-chart-container`);
-      if (pane.chart && container) {
-        pane.chart.applyOptions({
-          width: container.clientWidth,
-          height: container.clientHeight,
-        });
-      }
-      if (pane.vpvrCanvas && container) {
-        pane.vpvrCanvas.width = 160;
-        pane.vpvrCanvas.height = container.clientHeight;
-        drawPaneVPVR(pane);
-      }
-    });
-  }
-
-  // --- Upstox Token Dialog ---
+  // --- Upstox Token Setup Modal ---
   function setupTokenModal() {
-    const tokenBtn = $('chart-token-btn');
     const modal = $('token-modal');
+    const openBtn = $('chart-token-btn');
     const closeBtn = $('close-token-modal');
     const saveBtn = $('save-token-submit');
+    const input = $('upstox-token-val');
+    const statusPill = $('token-status-pill');
 
-    tokenBtn?.addEventListener('click', async () => {
-      modal?.classList.remove('hidden');
-      const pill = $('token-status-pill');
-      try {
-        const res = await api('/api/chart/upstox-status');
-        if (pill) {
-          pill.textContent = res.token_configured ? `Active (${res.token_preview})` : 'Not Configured (Free Historical Active)';
-          pill.style.color = res.token_configured ? '#34d399' : '#94a3b8';
+    if (openBtn) {
+      openBtn.addEventListener('click', async () => {
+        modal.classList.remove('hidden');
+        const st = await api('/api/chart/upstox-status').catch(() => ({}));
+        if (statusPill) {
+          statusPill.textContent = st.token_configured ? `Active (${st.token_preview})` : 'No Token Configured';
+          statusPill.className = `token-status-pill ${st.token_configured ? 'active' : ''}`;
         }
-      } catch (_) {}
-    });
+      });
+    }
 
-    closeBtn?.addEventListener('click', () => modal?.classList.add('hidden'));
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => modal.classList.add('hidden'));
+    }
 
-    saveBtn?.addEventListener('click', async () => {
-      const val = $('upstox-token-val')?.value.trim() || '';
-      try {
-        const res = await api('/api/chart/upstox-token', {
-          method: 'POST',
-          body: JSON.stringify({ token: val }),
-        });
-        toast(res.message || 'Upstox Token Saved!', 3000);
-        modal?.classList.add('hidden');
-        panes.forEach(p => loadPaneData(p));
-      } catch (err) {
-        toast(`Error: ${err.message}`, 4000);
-      }
-    });
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const tokenVal = input.value.trim();
+        if (!tokenVal) {
+          toast('Please enter a valid Upstox Access Token');
+          return;
+        }
+        try {
+          const res = await api('/api/chart/upstox-token', {
+            method: 'POST',
+            body: JSON.stringify({ token: tokenVal }),
+          });
+          if (res.ok) {
+            toast('✅ Upstox token saved successfully!');
+            modal.classList.add('hidden');
+            loadCandles(panes[0]);
+          }
+        } catch (e) {
+          toast(`❌ ${e.message}`);
+        }
+      });
+    }
   }
 
-  // --- Initial Boot ---
+  // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
-    panes.forEach(pane => {
-      initChartPane(pane);
-    });
-
-    setupLayoutSelector();
-    setupTimeframeButtons();
-    setupIndicatorsMenu();
+    initChartPane(panes[0]);
+    renderSymbolTabs();
+    setupOrderPanelInteractions();
+    setupLeftDrawer();
+    setupBottomPanel();
     setupOptionChainModal();
-    setupSearch();
-    setupScalperDrag();
+    setupGatekeeper();
+    setupGuideModal();
+    setupIndicatorsMenu();
     setupTokenModal();
 
-    window.addEventListener('resize', handleResize);
+    loadCandles(panes[0]);
+    startQuotesPolling();
+    fetchPositionsAndOrders();
 
-    // Initial Data Fetch for all panes
-    panes.forEach(pane => {
-      loadPaneData(pane);
-    });
-
-    setActivePane(activePaneIdx);
-
-    // Start fast real-time tick loop
-    startRealtimeTickLoop();
+    // Regular position refresh
+    setInterval(fetchPositionsAndOrders, 4000);
   });
 })();

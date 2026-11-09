@@ -12,7 +12,8 @@
   "rewrites": [
     { "source": "/api/:path*", "destination": "http://92.4.87.82:8000/api/:path*" },
     { "source": "/chart", "destination": "/app/static/chart.html" },
-    { "source": "/", "destination": "/app/static/index.html" },
+    { "source": "/ticket", "destination": "/app/static/index.html" },
+    { "source": "/", "destination": "/app/static/chart.html" },
     { "source": "/static/:path*", "destination": "/app/static/:path*" }
   ],
   "headers": [

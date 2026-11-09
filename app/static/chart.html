@@ -3,327 +3,729 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Neo PIP — Trade From Charts (Pro)</title>
+  <title>Neo PIP — Exness Pro Trading Terminal</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261109-2">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness">
 </head>
-<body class="neo-chart-body">
-  <!-- Topmost Brand & Indices Navbar (Kotak Neo style) -->
-  <header class="neo-topbar">
-    <div class="topbar-left">
-      <a href="/" class="neo-brand-link" title="Back to Terminal">
-        <span class="neo-logo-badge">neo</span>
-        <span class="neo-brand-sub">Trade from charts</span>
+<body class="ex-theme-dark">
+  <!-- Top Navigation Header (Exness WebTrading Style) -->
+  <header class="ex-header">
+    <div class="ex-header-left">
+      <!-- Exness-styled Neo Logo -->
+      <a href="/chart" class="ex-brand" title="Neo PIP Exness Terminal">
+        <span class="ex-logo-mark">neo</span>
+        <span class="ex-logo-name">PIP</span>
       </a>
-      <div class="v-sep"></div>
-      <div class="indices-ticker" id="indices-ticker">
-        <div class="ticker-item" id="ticker-nifty">
-          <span class="t-name">NIFTY</span>
-          <span class="t-ltp">24,923.25</span>
-          <span class="t-chg neg">-0.25%</span>
-        </div>
-        <div class="ticker-item" id="ticker-sensex">
-          <span class="t-name">SENSEX</span>
-          <span class="t-ltp">80,797.68</span>
-          <span class="t-chg neg">-0.25%</span>
-        </div>
-        <div class="ticker-item" id="ticker-banknifty">
-          <span class="t-name">BANKNIFTY</span>
-          <span class="t-ltp">59,283.95</span>
-          <span class="t-chg pos">+0.74%</span>
-        </div>
-      </div>
+
+      <div class="ex-header-sep"></div>
+
+      <!-- Exness Symbol Tabs Bar -->
+      <nav class="ex-tabs-bar" id="ex-tabs-bar" aria-label="Open Symbol Tabs">
+        <!-- Rendered dynamically via JS -->
+      </nav>
+      <button type="button" id="btn-add-tab" class="ex-tab-add-btn" title="Add Chart Tab (Search Symbol)">+</button>
     </div>
 
-    <div class="topbar-right">
-      <!-- Active Open Positions Alert Pill (Click to open most losing position) -->
-      <button id="open-positions-alert" class="open-pos-pill hidden" type="button" title="Click to open running position chart">
-        <span class="pulse-dot"></span>
-        <span id="open-pos-alert-text">0 Open Positions</span>
-      </button>
-
-      <!-- 3 P&L Boxes (Positions Gross P&L, Net P&L After Charges, Contract Scalper P&L) -->
-      <div class="pnl-header-container">
-        <div class="pnl-box" id="box-pos-pnl" title="Kotak Neo Realized + MTM Positions P&L (Gross)">
-          <span class="pnl-sub">POSITIONS P&L</span>
-          <span class="pnl-num" id="val-pos-pnl">—</span>
-        </div>
-        <div class="pnl-box" id="box-net-pnl" title="Net P&L after estimated charges">
-          <span class="pnl-sub">NET (AFTER CHARGES)</span>
-          <span class="pnl-num" id="val-net-pnl">—</span>
-        </div>
-        <div class="pnl-box" id="box-scalper-pnl" title="Active Contract Running P&L">
-          <span class="pnl-sub">CONTRACT P&L</span>
-          <span class="pnl-num" id="val-scalper-pnl">₹0.00</span>
+    <div class="ex-header-right">
+      <!-- Account Badge (Guest Demo vs Live Kotak) -->
+      <div class="ex-account-badge-wrap">
+        <button type="button" id="ex-account-btn" class="ex-account-btn" title="Click to view Account Mode / Switch">
+          <span class="ex-acc-pill demo" id="ex-acc-pill">Demo</span>
+          <span class="ex-acc-id" id="ex-acc-id">#GUEST-8842</span>
+          <span class="ex-acc-balance" id="ex-acc-balance">₹10,00,000.00</span>
+          <span class="ex-acc-caret">▼</span>
+        </button>
+        <div id="ex-account-menu" class="ex-account-menu hidden">
+          <div class="acc-menu-header">Trading Account</div>
+          <div class="acc-menu-mode-info">
+            <span id="menu-mode-title">Guest Demo Mode</span>
+            <small id="menu-mode-sub">Virtual paper trading active</small>
+          </div>
+          <div class="acc-menu-divider"></div>
+          <button type="button" id="btn-open-owner-login" class="acc-menu-item">
+            <span class="acc-item-icon">🔐</span>
+            <span>Owner Login (TOTP & MPIN)</span>
+          </button>
+          <button type="button" id="btn-reset-demo" class="acc-menu-item">
+            <span class="acc-item-icon">🔄</span>
+            <span>Reset Demo Balance (₹10L)</span>
+          </button>
+          <button type="button" id="btn-open-guide-from-menu" class="acc-menu-item">
+            <span class="acc-item-icon">📖</span>
+            <span>Setup Guide (Run on Your System)</span>
+          </button>
+          <button type="button" id="btn-logout" class="acc-menu-item hidden">
+            <span class="acc-item-icon">🚪</span>
+            <span>Logout Session</span>
+          </button>
         </div>
       </div>
 
-      <div class="v-sep"></div>
-      <button id="chart-token-btn" class="icon-action-btn" type="button" title="Upstox API Token">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      <!-- Run on Your System Guide Button -->
+      <button type="button" id="btn-setup-guide" class="ex-btn-guide" title="How to run on your system with Kotak Neo & Upstox">
+        <span class="guide-icon">🚀</span>
+        <span>Run on Your System</span>
       </button>
-      <a href="/" class="terminal-back-btn" title="Back to Terminal">Terminal</a>
+
+      <!-- Upstox Token Setup Button -->
+      <button id="chart-token-btn" class="ex-icon-btn" type="button" title="Configure Upstox Token">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </button>
+
+      <!-- Inactivity Timeout Pill (Owner only) -->
+      <div id="session-timer-badge" class="session-timer-badge hidden" title="Inactivity timer (Auto-logout after 5 mins of idle)">
+        <span class="timer-dot"></span>
+        <span id="session-timer-text">5:00</span>
+      </div>
     </div>
   </header>
 
-  <!-- Secondary Interactive Toolbar -->
-  <nav class="neo-toolbar">
-    <div class="tb-left">
-      <!-- Search Input with Live Autocomplete Dropdown -->
-      <div class="search-wrap" id="search-wrap">
-        <span class="search-icon">🔍</span>
-        <input id="symbol-search-input" type="text" placeholder="Search scrip, strike (e.g. 24900 CE)" autocomplete="off" spellcheck="false">
-        <div class="search-dropdown hidden" id="search-dropdown"></div>
-      </div>
-
-      <div class="v-sep"></div>
-
-      <!-- Timeframe Buttons -->
-      <div class="tf-pill-group" id="tf-pill-group" role="group" aria-label="Timeframes">
-        <button type="button" class="tf-pill" data-tf="5s">5s</button>
-        <button type="button" class="tf-pill" data-tf="15s">15s</button>
-        <button type="button" class="tf-pill active" data-tf="1m">1m</button>
-        <button type="button" class="tf-pill" data-tf="3m">3m</button>
-        <button type="button" class="tf-pill" data-tf="5m">5m</button>
-        <button type="button" class="tf-pill" data-tf="15m">15m</button>
-        <button type="button" class="tf-pill" data-tf="1h">1h</button>
-        <button type="button" class="tf-pill" data-tf="1d">1D</button>
-      </div>
-
-      <div class="v-sep"></div>
-
-      <!-- Option Chain Button (Matching Upstox TV) -->
-      <button type="button" id="btn-option-chain" class="tb-btn opt-chain-btn" title="Open Real-Time Option Chain">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-        <span>Option Chain</span>
-      </button>
-
-      <div class="v-sep"></div>
-
-      <!-- TradingView Technical Indicators Dropdown -->
-      <div class="indicators-wrap">
-        <button type="button" id="btn-indicators-dropdown" class="tb-btn fx-btn" title="TradingView Technical Indicators">
-          <span class="fx-icon">ƒx</span> Indicators
-          <span class="caret">▼</span>
+  <!-- Main Workspace (Flex 3-column Layout) -->
+  <div class="ex-workspace">
+    <!-- LEFT SIDEBAR: Narrow Rail + Collapsible Instruments Drawer (Exness style) -->
+    <aside class="ex-left-panel" id="ex-left-panel">
+      <!-- Narrow Icon Rail -->
+      <div class="ex-rail">
+        <button type="button" id="rail-btn-instruments" class="ex-rail-btn active" title="Toggle Instruments Watchlist">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+          <span class="rail-label">Watch</span>
         </button>
-        <div id="indicators-menu" class="indicators-menu hidden">
-          <div class="ind-menu-header">TradingView Indicators</div>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-ema9" checked>
-            <span class="dot-ind blue"></span>
-            <span>EMA 9 (Blue)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-ema21" checked>
-            <span class="dot-ind orange"></span>
-            <span>EMA 21 (Orange)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-vwap" checked>
-            <span class="dot-ind cyan"></span>
-            <span>VWAP (Volume Weighted Avg)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-supertrend" checked>
-            <span class="dot-ind green"></span>
-            <span>Supertrend (10, 3)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-vpvr" checked>
-            <span class="dot-ind yellow"></span>
-            <span>VPVR (Volume Profile POC)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-vol" checked>
-            <span class="dot-ind gray"></span>
-            <span>Volume Histogram</span>
-          </label>
-          <div class="ind-menu-divider"></div>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-bb">
-            <span class="dot-ind purple"></span>
-            <span>Bollinger Bands (20, 2)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-ema50">
-            <span class="dot-ind purple"></span>
-            <span>EMA 50 (Trend)</span>
-          </label>
-          <label class="ind-menu-item">
-            <input type="checkbox" id="chk-ind-ema200">
-            <span class="dot-ind yellow"></span>
-            <span>EMA 200 (Macro)</span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <div class="tb-right">
-      <!-- Auto Layout Selector (Screenshot 2 match) -->
-      <div class="layout-selector-wrap">
-        <button id="layout-toggle-btn" class="layout-btn" type="button" title="Select Layout">
-          <span class="layout-icon">◫</span>
-          <span id="current-layout-label">3 CHARTS</span>
-          <span class="caret">▼</span>
+        <button type="button" id="rail-btn-option-chain" class="ex-rail-btn" title="Open Real-time Option Chain">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          <span class="rail-label">Chain</span>
         </button>
-        <div id="layout-dropdown" class="layout-dropdown hidden">
-          <div class="layout-opt" data-layout="1">
-            <span class="opt-icon">🔲</span>
-            <span class="opt-text">1 Chart (Full)</span>
+        <button type="button" id="rail-btn-indicators" class="ex-rail-btn" title="Technical Indicators">
+          <span class="rail-fx">ƒx</span>
+          <span class="rail-label">Ind</span>
+        </button>
+        <button type="button" id="rail-btn-guide" class="ex-rail-btn" title="Setup Guide">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15z"/></svg>
+          <span class="rail-label">Docs</span>
+        </button>
+        <button type="button" id="rail-btn-settings" class="ex-rail-btn" title="Settings">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="rail-label">Config</span>
+        </button>
+      </div>
+
+      <!-- Collapsible Instruments Drawer -->
+      <div class="ex-drawer" id="ex-instruments-drawer">
+        <div class="ex-drawer-header">
+          <span class="drawer-title">INSTRUMENTS</span>
+          <button type="button" id="btn-collapse-drawer" class="drawer-toggle-btn" title="Collapse Watchlist (Full Width Chart)">◀</button>
+        </div>
+
+        <div class="ex-drawer-search">
+          <input type="text" id="ex-inst-search" placeholder="Search scrip, strike (e.g. 25000 CE)" autocomplete="off">
+          <div id="ex-inst-search-results" class="ex-inst-search-results hidden"></div>
+        </div>
+
+        <div class="ex-drawer-filter">
+          <select id="ex-inst-category" class="ex-category-select">
+            <option value="favorites">⭐ Favorites</option>
+            <option value="indices">📈 Indices (NIFTY / BANK / SENSEX)</option>
+            <option value="nifty_options">⚡ NIFTY Options (ATM Strikes)</option>
+            <option value="bank_options">⚡ BANKNIFTY Options</option>
+            <option value="stocks">🏢 Top F&O Stocks</option>
+          </select>
+        </div>
+
+        <!-- Instruments List Table (Symbol, Signal, Bid, Ask) -->
+        <div class="ex-table-wrap">
+          <table class="ex-instruments-table">
+            <thead>
+              <tr>
+                <th class="th-sym">Symbol</th>
+                <th class="th-sig">Signal</th>
+                <th class="th-bid">Bid</th>
+                <th class="th-ask">Ask</th>
+              </tr>
+            </thead>
+            <tbody id="ex-instruments-body">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER AREA: Advanced Chart (TradingView Lightweight Charts) -->
+    <main class="ex-center-area" id="ex-center-area">
+      <!-- Top Chart Toolbar -->
+      <div class="ex-chart-topbar">
+        <div class="tb-left">
+          <!-- Active Symbol Header & OHLC -->
+          <div class="chart-active-sym-wrap">
+            <span class="active-sym-name" id="chart-active-sym">NIFTY 25000 CE</span>
+            <span class="active-sym-seg" id="chart-active-seg">NSE F&O</span>
+            <span class="active-ohlc" id="chart-active-ohlc">
+              O: <b id="c-open">—</b> H: <b id="c-high">—</b> L: <b id="c-low">—</b> C: <b id="c-close">—</b>
+            </span>
           </div>
-          <div class="layout-opt" data-layout="2">
-            <span class="opt-icon">⬛⬛</span>
-            <span class="opt-text">2 Charts (Dual Split)</span>
+
+          <div class="v-sep"></div>
+
+          <!-- Timeframe Buttons -->
+          <div class="ex-tf-group" id="ex-tf-group">
+            <button type="button" class="ex-tf-btn" data-tf="5s">5s</button>
+            <button type="button" class="ex-tf-btn" data-tf="15s">15s</button>
+            <button type="button" class="ex-tf-btn active" data-tf="1m">1m</button>
+            <button type="button" class="ex-tf-btn" data-tf="3m">3m</button>
+            <button type="button" class="ex-tf-btn" data-tf="5m">5m</button>
+            <button type="button" class="ex-tf-btn" data-tf="15m">15m</button>
+            <button type="button" class="ex-tf-btn" data-tf="1h">1h</button>
+            <button type="button" class="ex-tf-btn" data-tf="1d">1D</button>
           </div>
-          <div class="layout-opt active" data-layout="3">
-            <span class="opt-icon">◫</span>
-            <span class="opt-text">3 Charts (Spot + CE + PE)</span>
-          </div>
-        </div>
-      </div>
 
-      <div class="v-sep"></div>
+          <div class="v-sep"></div>
 
-      <!-- Scalper Mode Button -->
-      <button id="scalper-mode-toggle" class="scalper-mode-btn active" type="button" title="Toggle Floating Scalper Window">
-        <span class="scalper-mode-dot"></span>
-        <span>Scalper Mode</span>
-      </button>
-
-      <!-- Quick 1-Click Order Buttons -->
-      <button id="tb-quick-buy" class="tb-action-buy" type="button" title="Quick Market BUY">Buy</button>
-      <button id="tb-quick-sell" class="tb-action-sell" type="button" title="Quick Market SELL">Sell</button>
-    </div>
-  </nav>
-
-  <!-- Main Multi-Pane Chart Canvas Area -->
-  <main class="chart-stage layout-3" id="chart-stage">
-    <!-- Pane 1 (Primary / Spot Index) -->
-    <section class="chart-pane active" id="pane-1" data-pane-idx="0">
-      <div class="pane-header">
-        <div class="pane-title-wrap">
-          <span class="pane-sym" id="p1-sym">NIFTY</span>
-          <span class="pane-tf" id="p1-tf">5m</span>
-          <span class="pane-seg">NSE</span>
-          <span class="pane-quote-pill" id="p1-quote-pill">
-            O: <b id="p1-o">—</b> H: <b id="p1-h">—</b> L: <b id="p1-l">—</b> C: <b id="p1-c">—</b>
-          </span>
-        </div>
-        <div class="pane-status-wrap">
-          <span class="pane-ltp" id="p1-ltp">—</span>
-          <span class="pane-chg pos" id="p1-chg">—</span>
-        </div>
-      </div>
-      <div class="pane-chart-wrap" id="p1-canvas-wrap">
-        <div id="p1-chart-container" class="chart-canvas-view"></div>
-        <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
-      </div>
-    </section>
-
-    <!-- Pane 2 (Call Option Contract) -->
-    <section class="chart-pane" id="pane-2" data-pane-idx="1">
-      <div class="pane-header">
-        <div class="pane-title-wrap">
-          <span class="pane-sym" id="p2-sym">NIFTY26N0924900CE</span>
-          <span class="pane-tf" id="p2-tf">3m</span>
-          <span class="pane-seg">NSE F&O</span>
-          <span class="pane-quote-pill" id="p2-quote-pill">
-            O: <b id="p2-o">—</b> H: <b id="p2-h">—</b> L: <b id="p2-l">—</b> C: <b id="p2-c">—</b>
-          </span>
-        </div>
-        <div class="pane-status-wrap">
-          <span class="pane-ltp" id="p2-ltp">—</span>
-          <span class="pane-chg pos" id="p2-chg">—</span>
-        </div>
-      </div>
-      <div class="pane-chart-wrap" id="p2-canvas-wrap">
-        <div id="p2-chart-container" class="chart-canvas-view"></div>
-        <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
-      </div>
-    </section>
-
-    <!-- Pane 3 (Put Option Contract) -->
-    <section class="chart-pane" id="pane-3" data-pane-idx="2">
-      <div class="pane-header">
-        <div class="pane-title-wrap">
-          <span class="pane-sym" id="p3-sym">NIFTY26N0924900PE</span>
-          <span class="pane-tf" id="p3-tf">1m</span>
-          <span class="pane-seg">NSE F&O</span>
-          <span class="pane-quote-pill" id="p3-quote-pill">
-            O: <b id="p3-o">—</b> H: <b id="p3-h">—</b> L: <b id="p3-l">—</b> C: <b id="p3-c">—</b>
-          </span>
-        </div>
-        <div class="pane-status-wrap">
-          <span class="pane-ltp" id="p3-ltp">—</span>
-          <span class="pane-chg neg" id="p3-chg">—</span>
-        </div>
-      </div>
-      <div class="pane-chart-wrap" id="p3-canvas-wrap">
-        <div id="p3-chart-container" class="chart-canvas-view"></div>
-        <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
-      </div>
-    </section>
-  </main>
-
-  <!-- Floating Draggable Scalper Window (Screenshot 3 match) -->
-  <aside id="floating-scalper" class="scalper-floating-box">
-    <div class="scalper-handle" id="scalper-drag-handle">
-      <div class="handle-title">
-        <button id="scalper-close-btn" class="handle-close" type="button" title="Close Scalper Window">✕</button>
-        <span id="sc-contract-title" class="contract-title">NIFTY 24900 CALL 09 NOV</span>
-      </div>
-      <span class="mkt-badge">MARKET ORDER</span>
-    </div>
-
-    <div class="scalper-body">
-      <!-- Price & Change Line -->
-      <div class="sc-price-row">
-        <div class="sc-ltp-box">
-          <span id="sc-ltp" class="sc-ltp">82.50</span>
-          <span id="sc-chg" class="sc-chg neg">▲ -120.50 (-59.36%)</span>
-        </div>
-        <div class="sc-pos-badge" id="sc-pos-badge">No Position</div>
-      </div>
-
-      <!-- Execution Form -->
-      <div class="sc-exec-row">
-        <button id="sc-buy-btn" class="sc-btn sc-buy" type="button">Buy</button>
-        <div class="sc-lot-picker">
-          <input id="sc-lots" type="number" value="1" min="1" max="200" title="Number of Lots">
-          <div class="lot-stepper">
-            <button type="button" id="lot-up" class="step-btn">▲</button>
-            <button type="button" id="lot-down" class="step-btn">▼</button>
-          </div>
-          <span class="lot-label">Lot</span>
-        </div>
-        <button id="sc-sell-btn" class="sc-btn sc-sell" type="button">Sell</button>
-      </div>
-
-      <!-- Active Position & Quick Action Controls (Only shown when a position is running!) -->
-      <div id="sc-position-section" class="sc-position-section hidden">
-        <div class="sc-pos-info">
-          <span id="sc-pos-summary">No Open Position</span>
-          <span id="sc-pos-pnl" class="sc-pnl-pill">—</span>
-        </div>
-        <div class="sc-quick-actions" id="sc-quick-actions">
-          <button id="sc-trail-cost-btn" class="action-pill trail-btn" type="button" title="Trail Stop Loss to Cost (Breakeven)">
-            🛡️ TRAIL SL TO COST
+          <!-- Option Chain Modal Trigger -->
+          <button type="button" id="btn-chart-opt-chain" class="ex-toolbar-btn" title="Real-Time Option Chain">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <span>Option Chain</span>
           </button>
-          <button id="sc-exit-50-btn" class="action-pill half-btn" type="button" title="Square off 50% lots immediately">
-            ½ EXIT 50%
-          </button>
-          <button id="sc-exit-all-btn" class="action-pill exit-all-btn" type="button" title="Panic Square off 100% open positions">
-            🚨 EXIT ALL
+
+          <!-- Technical Indicators Dropdown -->
+          <div class="indicators-wrap">
+            <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn" title="TradingView Indicators">
+              <span class="fx-icon">ƒx</span> Indicators
+              <span class="caret">▼</span>
+            </button>
+            <div id="indicators-menu" class="indicators-menu hidden">
+              <div class="ind-menu-header">TradingView Technical Indicators</div>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-ema9" checked>
+                <span class="dot-ind cyan"></span>
+                <span>EMA 9 (Fast Trend)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-ema21" checked>
+                <span class="dot-ind orange"></span>
+                <span>EMA 21 (Pullback Trend)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-vwap" checked>
+                <span class="dot-ind purple"></span>
+                <span>VWAP (Volume Weighted Avg)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-supertrend" checked>
+                <span class="dot-ind green"></span>
+                <span>Supertrend (10, 3)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-vpvr" checked>
+                <span class="dot-ind yellow"></span>
+                <span>VPVR (Volume Profile POC)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-vol" checked>
+                <span class="dot-ind gray"></span>
+                <span>Volume Histogram</span>
+              </label>
+              <div class="ind-menu-divider"></div>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-bb">
+                <span class="dot-ind blue"></span>
+                <span>Bollinger Bands (20, 2)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-ema50">
+                <span class="dot-ind purple"></span>
+                <span>EMA 50 (Major Support)</span>
+              </label>
+              <label class="ind-menu-item">
+                <input type="checkbox" id="chk-ind-ema200">
+                <span class="dot-ind yellow"></span>
+                <span>EMA 200 (Macro Bull/Bear)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="tb-right">
+          <!-- Auto Layout Selector (1, 2, 3 Charts) -->
+          <div class="layout-selector-wrap">
+            <button id="layout-toggle-btn" class="ex-toolbar-btn" type="button" title="Select Multi-Chart Layout">
+              <span class="layout-icon">◫</span>
+              <span id="current-layout-label">1 CHART</span>
+              <span class="caret">▼</span>
+            </button>
+            <div id="layout-dropdown" class="layout-dropdown hidden">
+              <div class="layout-opt active" data-layout="1">
+                <span class="opt-icon">🔲</span>
+                <span class="opt-text">1 Chart (Exness View)</span>
+              </div>
+              <div class="layout-opt" data-layout="2">
+                <span class="opt-icon">⬛⬛</span>
+                <span class="opt-text">2 Charts (Dual Split)</span>
+              </div>
+              <div class="layout-opt" data-layout="3">
+                <span class="opt-icon">◫</span>
+                <span class="opt-text">3 Charts (Spot + CE + PE)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Toggle for Order Panel -->
+          <button type="button" id="btn-toggle-order-panel" class="ex-toolbar-btn" title="Toggle Order Panel">
+            <span>Ticket</span>
           </button>
         </div>
       </div>
-    </div>
-  </aside>
 
-  <!-- Real-time Option Chain Modal (Matches Upstox TV) -->
+      <!-- Multi-Pane Chart Canvas Stage -->
+      <div class="ex-chart-stage layout-1" id="chart-stage">
+        <!-- Pane 1 (Primary Chart) -->
+        <section class="chart-pane active" id="pane-1" data-pane-idx="0">
+          <div class="pane-header">
+            <div class="pane-title-wrap">
+              <span class="pane-sym" id="p1-sym">NIFTY 25000 CE</span>
+              <span class="pane-tf" id="p1-tf">1m</span>
+              <span class="pane-seg">NSE F&O</span>
+              <span class="pane-quote-pill" id="p1-quote-pill">
+                O: <b id="p1-o">—</b> H: <b id="p1-h">—</b> L: <b id="p1-l">—</b> C: <b id="p1-c">—</b>
+              </span>
+            </div>
+            <div class="pane-status-wrap">
+              <span class="pane-ltp" id="p1-ltp">—</span>
+              <span class="pane-chg pos" id="p1-chg">—</span>
+            </div>
+          </div>
+          <div class="pane-chart-wrap" id="p1-canvas-wrap">
+            <div id="p1-chart-container" class="chart-canvas-view"></div>
+            <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+          </div>
+        </section>
+
+        <!-- Pane 2 (Optional Split Pane) -->
+        <section class="chart-pane" id="pane-2" data-pane-idx="1">
+          <div class="pane-header">
+            <div class="pane-title-wrap">
+              <span class="pane-sym" id="p2-sym">NIFTY 25000 PE</span>
+              <span class="pane-tf" id="p2-tf">1m</span>
+              <span class="pane-seg">NSE F&O</span>
+              <span class="pane-quote-pill" id="p2-quote-pill">
+                O: <b id="p2-o">—</b> H: <b id="p2-h">—</b> L: <b id="p2-l">—</b> C: <b id="p2-c">—</b>
+              </span>
+            </div>
+            <div class="pane-status-wrap">
+              <span class="pane-ltp" id="p2-ltp">—</span>
+              <span class="pane-chg pos" id="p2-chg">—</span>
+            </div>
+          </div>
+          <div class="pane-chart-wrap" id="p2-canvas-wrap">
+            <div id="p2-chart-container" class="chart-canvas-view"></div>
+            <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+          </div>
+        </section>
+
+        <!-- Pane 3 (Optional Third Pane) -->
+        <section class="chart-pane" id="pane-3" data-pane-idx="2">
+          <div class="pane-header">
+            <div class="pane-title-wrap">
+              <span class="pane-sym" id="p3-sym">NIFTY 50</span>
+              <span class="pane-tf" id="p3-tf">5m</span>
+              <span class="pane-seg">NSE INDEX</span>
+              <span class="pane-quote-pill" id="p3-quote-pill">
+                O: <b id="p3-o">—</b> H: <b id="p3-h">—</b> L: <b id="p3-l">—</b> C: <b id="p3-c">—</b>
+              </span>
+            </div>
+            <div class="pane-status-wrap">
+              <span class="pane-ltp" id="p3-ltp">—</span>
+              <span class="pane-chg pos" id="p3-chg">—</span>
+            </div>
+          </div>
+          <div class="pane-chart-wrap" id="p3-canvas-wrap">
+            <div id="p3-chart-container" class="chart-canvas-view"></div>
+            <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+          </div>
+        </section>
+      </div>
+
+      <!-- Bottom Chart Timeframe Bar (Exness bottom) -->
+      <div class="ex-chart-bottom-bar">
+        <div class="range-shortcuts">
+          <button type="button" class="range-btn active" data-range="1d">1D</button>
+          <button type="button" class="range-btn" data-range="5d">5D</button>
+          <button type="button" class="range-btn" data-range="1m">1M</button>
+          <button type="button" class="range-btn" data-range="3m">3M</button>
+          <button type="button" class="range-btn" data-range="6m">6M</button>
+          <button type="button" class="range-btn" data-range="1y">1Y</button>
+        </div>
+        <div class="chart-meta-right">
+          <span class="tz-badge">UTC+5:30 (IST)</span>
+          <span class="feed-badge" id="feed-status-badge">● Sub-30ms Live</span>
+        </div>
+      </div>
+
+      <!-- DOCKED BOTTOM PANEL: Positions & Orders (Exness Screenshots 1, 2, 3) -->
+      <section class="ex-bottom-panel" id="ex-bottom-panel">
+        <div class="ex-panel-header">
+          <div class="panel-tabs">
+            <button type="button" class="ex-panel-tab active" data-tab="open" id="tab-btn-open">
+              Open <span class="tab-badge" id="open-pos-count">0</span>
+            </button>
+            <button type="button" class="ex-panel-tab" data-tab="pending" id="tab-btn-pending">
+              Pending <span class="tab-badge" id="pending-orders-count">0</span>
+            </button>
+            <button type="button" class="ex-panel-tab" data-tab="closed" id="tab-btn-closed">
+              Closed <span class="tab-badge" id="closed-trades-count">0</span>
+            </button>
+          </div>
+
+          <div class="panel-header-actions">
+            <!-- EXIT ALL Emergency Square-off Button -->
+            <button type="button" id="btn-dock-exit-all" class="ex-btn-exit-all" title="Square off ALL active positions immediately">
+              🚨 EXIT ALL
+            </button>
+            <button type="button" id="btn-toggle-dock" class="dock-toggle-btn" title="Minimize / Expand Positions Panel">_</button>
+          </div>
+        </div>
+
+        <div class="ex-panel-content" id="ex-panel-content">
+          <!-- Open Positions Tab Content -->
+          <div class="panel-view active" id="view-open-positions">
+            <table class="ex-data-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Product</th>
+                  <th>Lots / Qty</th>
+                  <th>Avg Price</th>
+                  <th>Current LTP</th>
+                  <th>P&amp;L (₹ / %)</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="open-positions-tbody">
+                <tr><td colspan="8" class="empty-row">No open positions. Select a strike to trade.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pending Orders Tab Content -->
+          <div class="panel-view hidden" id="view-pending-orders">
+            <table class="ex-data-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Order ID</th>
+                  <th>Type</th>
+                  <th>Side</th>
+                  <th>Quantity</th>
+                  <th>Price / Trigger</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="pending-orders-tbody">
+                <tr><td colspan="8" class="empty-row">No pending limit or trigger orders.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Closed Positions / History Tab Content -->
+          <div class="panel-view hidden" id="view-closed-trades">
+            <table class="ex-data-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Quantity</th>
+                  <th>Open Price</th>
+                  <th>Close Price</th>
+                  <th>Realized P&amp;L</th>
+                  <th>Execution Time</th>
+                </tr>
+              </thead>
+              <tbody id="closed-trades-tbody">
+                <tr><td colspan="7" class="empty-row">Showing closed trades for today.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- RIGHT SIDEBAR: Order Entry Form (Exness "One-Click Form" Screenshots 1 & 3) -->
+    <aside class="ex-order-panel" id="ex-order-panel">
+      <div class="order-panel-header">
+        <div class="op-title-wrap">
+          <span class="op-sym-icon">🪙</span>
+          <span class="op-sym-name" id="op-sym-name">NIFTY 25000 CE</span>
+        </div>
+        <button type="button" id="btn-close-order-panel" class="op-close-btn" title="Close Ticket">✕</button>
+      </div>
+
+      <div class="order-panel-body">
+        <!-- Product Type Selector (User Requirement: Default NRML, 1-click toggle to MIS) -->
+        <div class="op-product-toggle-wrap">
+          <label class="op-section-label">Product Type</label>
+          <div class="op-product-toggle" id="op-product-toggle">
+            <button type="button" class="product-opt active" data-product="NRML" id="btn-prod-nrml" title="Carry Forward overnight (Default)">
+              NRML (Carry Forward)
+            </button>
+            <button type="button" class="product-opt" data-product="MIS" id="btn-prod-mis" title="Intraday (Square-off at 3:15 PM)">
+              MIS (Intraday)
+            </button>
+          </div>
+        </div>
+
+        <!-- Order Type Tabs: Market | Limit | SL-Limit (Exness Screenshot 1 & 3) -->
+        <div class="op-type-tabs" id="op-type-tabs">
+          <button type="button" class="op-type-tab active" data-type="MKT">Market</button>
+          <button type="button" class="op-type-tab" data-type="L">Limit</button>
+          <button type="button" class="op-type-tab" data-type="SL">SL-Limit</button>
+        </div>
+
+        <!-- Limit Price Input (Shown for Limit & SL-Limit) -->
+        <div class="op-field hidden" id="field-limit-price">
+          <div class="op-field-header">
+            <span>Open Price</span>
+            <span class="field-sub">INR (₹)</span>
+          </div>
+          <div class="op-numeric-stepper">
+            <button type="button" class="stepper-btn" id="btn-price-minus">-</button>
+            <input type="number" id="input-limit-price" step="0.05" value="44.50">
+            <button type="button" class="stepper-btn" id="btn-price-plus">+</button>
+          </div>
+        </div>
+
+        <!-- Trigger Price Input (Shown for SL-Limit) -->
+        <div class="op-field hidden" id="field-trigger-price">
+          <div class="op-field-header">
+            <span>Trigger Price</span>
+            <span class="field-sub">INR (₹)</span>
+          </div>
+          <div class="op-numeric-stepper">
+            <button type="button" class="stepper-btn" id="btn-trigger-minus">-</button>
+            <input type="number" id="input-trigger-price" step="0.05" value="44.00">
+            <button type="button" class="stepper-btn" id="btn-trigger-plus">+</button>
+          </div>
+        </div>
+
+        <!-- Volume / Lots Input (Exness Screenshot 1) -->
+        <div class="op-field">
+          <div class="op-field-header">
+            <span>Volume (Lots)</span>
+            <span class="field-sub" id="op-units-sub">25 units (1 Lot)</span>
+          </div>
+          <div class="op-numeric-stepper">
+            <button type="button" class="stepper-btn" id="btn-lots-minus">-</button>
+            <input type="number" id="input-lots" min="1" max="100" value="1">
+            <button type="button" class="stepper-btn" id="btn-lots-plus">+</button>
+          </div>
+        </div>
+
+        <!-- Dual Buy / Sell Color Coded Action Buttons (Exness Red & Blue) -->
+        <div class="op-action-grid">
+          <!-- SELL BUTTON (RED) -->
+          <button type="button" id="btn-order-sell" class="op-btn-sell">
+            <span class="action-caption" id="lbl-sell-action">Sell</span>
+            <span class="action-price" id="lbl-sell-price">44.50</span>
+          </button>
+
+          <!-- BUY BUTTON (BLUE) -->
+          <button type="button" id="btn-order-buy" class="op-btn-buy">
+            <span class="action-caption" id="lbl-buy-action">Buy</span>
+            <span class="action-price" id="lbl-buy-price">44.75</span>
+          </button>
+        </div>
+
+        <!-- Live Spread & Buyer/Seller Sentiment Ratio Bar -->
+        <div class="op-spread-sentiment-wrap">
+          <div class="spread-indicator" id="op-spread-text">0.25 Spread</div>
+          <div class="sentiment-bar-track">
+            <div class="sentiment-bar-sell" id="sentiment-sell" style="width: 51%;">51%</div>
+            <div class="sentiment-bar-buy" id="sentiment-buy" style="width: 49%;">49%</div>
+          </div>
+        </div>
+
+        <!-- Fee & Margin Breakdown Card -->
+        <div class="op-summary-card">
+          <div class="summary-row">
+            <span>Brokerage:</span>
+            <b class="text-green">₹0.00 (Kotak Neo Free F&amp;O)</b>
+          </div>
+          <div class="summary-row">
+            <span>Required Margin:</span>
+            <b id="op-margin-req">₹1,118.75</b>
+          </div>
+          <div class="summary-row">
+            <span>Execution Speed:</span>
+            <span class="text-gold">Sub-30ms Instant</span>
+          </div>
+          <div class="summary-row">
+            <span>Account Mode:</span>
+            <span id="op-mode-badge" class="mode-badge-demo">Demo Paper Trading</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- BOTTOM STATUS FOOTER (Exness Bottom Status Bar) -->
+  <footer class="ex-footer">
+    <div class="footer-stat">
+      <span class="stat-lbl">Equity:</span>
+      <b class="stat-val" id="f-equity">₹10,00,000.00</b>
+    </div>
+    <div class="footer-stat">
+      <span class="stat-lbl">Free Margin:</span>
+      <b class="stat-val" id="f-free-margin">₹10,00,000.00</b>
+    </div>
+    <div class="footer-stat">
+      <span class="stat-lbl">Margin Used:</span>
+      <b class="stat-val" id="f-margin-used">₹0.00</b>
+    </div>
+    <div class="footer-stat">
+      <span class="stat-lbl">Realized P&amp;L:</span>
+      <b class="stat-val" id="f-realized-pnl">₹0.00</b>
+    </div>
+    <div class="footer-stat">
+      <span class="stat-lbl">Kotak Zero Brokerage:</span>
+      <b class="stat-val text-green">ACTIVE</b>
+    </div>
+    <div class="footer-right">
+      <span class="latency-stat">Latency: <b id="stat-latency">24ms</b></span>
+    </div>
+  </footer>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- 1. GATEKEEPER / AUTH MODAL (Guest vs Owner Login) -->
+  <div id="modal-gatekeeper" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card gatekeeper-card">
+      <div class="modal-brand">
+        <span class="ex-logo-mark">neo</span>
+        <h2>Welcome to Neo PIP Terminal</h2>
+      </div>
+      <p class="modal-tagline">
+        Zero-brokerage Kotak Neo F&amp;O ticket with sub-second Upstox live streaming charts.
+      </p>
+
+      <div class="gatekeeper-choices">
+        <!-- Choice A: Enter as Guest -->
+        <div class="choice-card guest-choice">
+          <div class="choice-icon">🚀</div>
+          <div class="choice-body">
+            <h3>See as Guest (Demo Mode)</h3>
+            <p>Instant access with ₹10,00,000 virtual balance. Experience live sub-second option charts and simulated execution with 0 risk.</p>
+            <button type="button" id="btn-enter-guest" class="btn-primary-choice">
+              Enter as Guest →
+            </button>
+          </div>
+        </div>
+
+        <div class="or-sep"><span>OR</span></div>
+
+        <!-- Choice B: Owner Login -->
+        <div class="choice-card owner-choice">
+          <div class="choice-icon">🔐</div>
+          <div class="choice-body">
+            <h3>Already a PIP User? (Owner Login)</h3>
+            <p>Enter your Kotak Neo Authenticator TOTP and MPIN to unlock your live 0-brokerage trading session.</p>
+            <div class="owner-login-form">
+              <div class="input-row">
+                <input type="text" id="owner-totp-input" maxlength="6" placeholder="Kotak TOTP (6-digit)" autocomplete="one-time-code">
+                <input type="password" id="owner-mpin-input" maxlength="8" placeholder="Kotak MPIN (6-digit)">
+              </div>
+              <button type="button" id="btn-owner-login-submit" class="btn-owner-submit">
+                Login as Owner (Live Account)
+              </button>
+              <small class="login-security-note">🔒 Auto-logout after 5 minutes of inactivity.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. "RUN ON YOUR SYSTEM" SETUP GUIDE MODAL -->
+  <div id="modal-setup-guide" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card guide-card">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge">Self-Hosted</span>
+          <h3>How to Run Your Own Neo PIP Terminal</h3>
+        </div>
+        <button type="button" id="btn-close-guide" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="guide-content">
+        <p class="guide-intro">
+          Neo PIP Terminal is completely open source! You can run it on your own Mac/PC or cloud VPS with <b>Zero Brokerage</b> on Kotak Neo and <b>Sub-30ms Live Charts</b> on Upstox.
+        </p>
+
+        <!-- Step 1: GitHub -->
+        <div class="guide-step">
+          <div class="step-num">1</div>
+          <div class="step-details">
+            <h4>Clone the GitHub Repository</h4>
+            <p>Clone the source code to your machine:</p>
+            <pre><code>git clone https://github.com/thatsaiiff/neo-pip-terminal.git
+cd neo-pip-terminal
+pip install -r requirements.txt</code></pre>
+            <a href="https://github.com/thatsaiiff/neo-pip-terminal" target="_blank" rel="noopener" class="guide-link">
+              View on GitHub ↗
+            </a>
+          </div>
+        </div>
+
+        <!-- Step 2: Kotak Neo Setup -->
+        <div class="guide-step">
+          <div class="step-num">2</div>
+          <div class="step-details">
+            <h4>Kotak Neo Setup (0 Brokerage F&amp;O)</h4>
+            <ol>
+              <li>Log in to <a href="https://trade.kotakneo.com/tapi-trade-api/tapi-app-details" target="_blank" rel="noopener">Kotak Neo Developer Portal</a>.</li>
+              <li>Copy your <b>Consumer Key</b> and <b>Consumer Secret</b>.</li>
+              <li><b>Important:</b> Add your machine / server public IP in the <b>Primary IP</b> whitelist.</li>
+              <li>Fill in your registered mobile number and UCC.</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- Step 3: Upstox API Setup -->
+        <div class="guide-step">
+          <div class="step-num">3</div>
+          <div class="step-details">
+            <h4>Upstox Setup (Sub-Second Live Data &amp; Option Chain)</h4>
+            <ol>
+              <li>Create a free account on <a href="https://developer.upstox.com" target="_blank" rel="noopener">Upstox Developer Portal</a>.</li>
+              <li>Create an app to generate your daily <b>Access Token</b>.</li>
+              <li>Paste the token into the terminal or set <code>UPSTOX_ACCESS_TOKEN</code> in <code>.env</code>.</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- Step 4: Environment & Launch -->
+        <div class="guide-step">
+          <div class="step-num">4</div>
+          <div class="step-details">
+            <h4>Configure .env &amp; Launch</h4>
+            <pre><code># In .env:
+LIVE_TRADING_ENABLED=true
+NEO_CONSUMER_KEY=your_consumer_key
+NEO_MOBILE_NUMBER=+91xxxxxxxxxx
+NEO_UCC=your_ucc
+UPSTOX_ACCESS_TOKEN=your_upstox_token
+OWNER_PIN=2026
+
+# Start server:
+uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. REAL-TIME OPTION CHAIN MODAL (Matches Upstox TV) -->
   <div id="option-chain-modal" class="oc-modal-backdrop hidden">
     <div class="oc-modal-card">
       <div class="oc-header">
@@ -368,12 +770,12 @@
       </div>
 
       <div class="oc-footer">
-        <span class="oc-hint">⚡ Click any <b>Call or Put LTP</b> to immediately load that option chart & ready Scalper Mode!</span>
+        <span class="oc-hint">⚡ Click any <b>Call or Put LTP</b> to instantly load that option chart &amp; prep the order form!</span>
       </div>
     </div>
   </div>
 
-  <!-- Upstox Token Setup Modal -->
+  <!-- 4. UPSTOX TOKEN SETUP MODAL -->
   <div id="token-modal" class="token-modal-backdrop hidden">
     <div class="token-modal-card">
       <div class="token-modal-header">
@@ -381,7 +783,7 @@
         <button id="close-token-modal" class="modal-close-btn" type="button">×</button>
       </div>
       <p class="token-modal-desc">
-        Historical & intraday candles work 24/7 without authentication. For live sub-second market streaming, paste your token from <a href="https://developer.upstox.com" target="_blank" rel="noopener">developer.upstox.com</a>.
+        Historical &amp; intraday candles work 24/7 without authentication. For live sub-second market streaming, paste your token from <a href="https://developer.upstox.com" target="_blank" rel="noopener">developer.upstox.com</a>.
       </p>
       <div class="token-status-pill" id="token-status-pill">Checking status…</div>
       <label class="token-input-field">
@@ -400,7 +802,6 @@
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261109-3"></script>
-  <link rel="stylesheet" href="/static/chart.css?v=20261109-3">
+  <script src="/static/chart.js?v=20261110-exness"></script>
 </body>
 </html>

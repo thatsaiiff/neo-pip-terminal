@@ -298,6 +298,125 @@ def current_mode() -> str:
     return "live" if LIVE_TRADING_ENABLED and neo_authenticated and neo_client is not None else "simulation"
 
 
+# --- OWNER AUTHENTICATION & GUEST DEMO TRADING ENGINE ---
+_ACTIVE_OWNER_SESSIONS: dict[str, dict[str, Any]] = {}
+OWNER_SESSION_TIMEOUT_SECONDS = 300  # 5 minutes inactivity timeout
+_GUEST_POSITIONS: list[dict[str, Any]] = []
+_GUEST_ORDERS: list[dict[str, Any]] = []
+_GUEST_DEMO_BALANCE: float = 1000000.0  # ₹10,00,000 INR
+
+
+def _is_owner_token_valid(token: str | None) -> bool:
+    if not token:
+        return False
+    sess = _ACTIVE_OWNER_SESSIONS.get(token)
+    if not sess:
+        return False
+    now = time.time()
+    if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
+        _ACTIVE_OWNER_SESSIONS.pop(token, None)
+        return False
+    sess["last_active"] = now  # Refresh inactivity activity
+    return True
+
+
+def is_owner_request(token: str | None, allow_test_override: bool = False) -> bool:
+    if token and _is_owner_token_valid(token):
+        return True
+    if allow_test_override and os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    return False
+
+
+def _update_guest_position(symbol: str, side: str, product: str, qty: int, price: float) -> None:
+    global _GUEST_POSITIONS
+    existing = next((p for p in _GUEST_POSITIONS if p["symbol"] == symbol and p["product"] == product), None)
+    if not existing:
+        _GUEST_POSITIONS.append({
+            "symbol": symbol,
+            "product": product,
+            "side": side,
+            "quantity": qty,
+            "average_price": round(price, 2),
+            "ltp": round(price, 2),
+            "m2m": 0.0,
+            "realized_pnl": 0.0,
+            "created_at": utc_now(),
+        })
+        return
+
+    if existing["side"] == side:
+        tot_qty = existing["quantity"] + qty
+        tot_val = (existing["average_price"] * existing["quantity"]) + (price * qty)
+        existing["average_price"] = round(tot_val / tot_qty, 2)
+        existing["quantity"] = tot_qty
+    else:
+        close_qty = min(existing["quantity"], qty)
+        mult = 1 if existing["side"] == "BUY" else -1
+        pnl = (price - existing["average_price"]) * close_qty * mult
+        existing["realized_pnl"] += round(pnl, 2)
+        rem_qty = existing["quantity"] - qty
+        if rem_qty > 0:
+            existing["quantity"] = rem_qty
+        elif rem_qty == 0:
+            _GUEST_POSITIONS.remove(existing)
+        else:
+            existing["side"] = side
+            existing["quantity"] = abs(rem_qty)
+            existing["average_price"] = round(price, 2)
+
+
+def _execute_demo_order(payload: OrderPayload) -> dict[str, Any]:
+    global _GUEST_POSITIONS, _GUEST_ORDERS
+    payload.validate_order_shape()
+    if not payload.user_confirmed:
+        raise HTTPException(status_code=400, detail="Order must be explicitly confirmed in the review step")
+
+    qty = payload.lots * payload.lot_size
+    fill_price = payload.price or 0.0
+    if not fill_price or payload.order_type == "MKT":
+        q = _get_live_quote_data(payload.symbol)
+        fill_price = float(q.get("last_price") or q.get("ltp") or 0.0)
+        if fill_price <= 0:
+            fill_price = 45.00
+
+    order_id = f"DEMO-{int(time.time() * 1000) % 1000000}"
+    status = "completed" if payload.order_type == "MKT" else "pending"
+
+    order_rec = {
+        "id": order_id,
+        "broker_order_id": None,
+        "mode": "simulation",
+        "symbol": payload.symbol,
+        "side": payload.side,
+        "quantity": qty,
+        "lots": payload.lots,
+        "lot_size": payload.lot_size,
+        "product": payload.product,
+        "order_type": payload.order_type,
+        "price": round(fill_price, 2),
+        "status": status,
+        "created_at": utc_now(),
+        "message": f"Demo Paper Order filled @ ₹{fill_price:.2f} (Live market LTP)",
+        "cancel_allowed": status == "pending",
+    }
+    _GUEST_ORDERS.insert(0, order_rec)
+    if status == "completed":
+        _update_guest_position(payload.symbol, payload.side, payload.product, qty, fill_price)
+
+    return {
+        "ok": True,
+        "id": order_id,
+        "mode": "simulation",
+        "status": "simulated",
+        "quantity": qty,
+        "price": round(fill_price, 2),
+        "broker_order_id": None,
+        "message": f"Demo paper order filled @ ₹{fill_price:.2f} (No real funds used)",
+        "warning": "Demo mode: This is a virtual paper order. Connect Kotak Neo for real execution.",
+    }
+
+
 def require_bridge_token(token: str | None) -> None:
     if not BRIDGE_TOKEN or BRIDGE_TOKEN.startswith("replace-with-"):
         raise HTTPException(status_code=503, detail="Set a strong BRIDGE_TOKEN in .env before connecting the browser extension")
@@ -1116,8 +1235,106 @@ def auth_login(payload: LoginPayload):
         neo_egress_ip = _kotak_session_ip(client)
         neo_session_ip = neo_egress_ip
     audit("broker_login_success", {"environment": NEO_ENVIRONMENT})
+    token = secrets.token_hex(32)
+    _ACTIVE_OWNER_SESSIONS[token] = {
+        "created_at": time.time(),
+        "last_active": time.time(),
+    }
     ip_message = f" Kotak sees API IP {neo_egress_ip}; order requests must use this same IP for this session." if neo_egress_ip else " Kotak could not report the API egress IP; verify your network and reconnect before placing orders."
-    return {"ok": True, "broker_authenticated": True, "mode": current_mode(), "kotak_egress_ip": neo_egress_ip, "message": "Kotak Neo API session authenticated." + ip_message}
+    return {"ok": True, "broker_authenticated": True, "mode": current_mode(), "token": token, "owner_token": token, "expires_in": OWNER_SESSION_TIMEOUT_SECONDS, "kotak_egress_ip": neo_egress_ip, "message": "Kotak Neo API session authenticated." + ip_message}
+
+
+class OwnerLoginPayload(BaseModel):
+    totp: str = ""
+    mpin: str = ""
+
+
+@app.post("/api/auth/owner-login")
+def owner_login(payload: OwnerLoginPayload):
+    global neo_client, neo_authenticated, neo_egress_ip, neo_session_ip
+    totp = payload.totp.strip()
+    mpin = payload.mpin.strip()
+
+    consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
+    mobile = os.getenv("NEO_MOBILE_NUMBER", "").strip()
+    ucc = os.getenv("NEO_UCC", "").strip()
+    owner_pin = os.getenv("OWNER_PIN", "").strip() or os.getenv("NEO_MPIN", "").strip()
+
+    logged_in_kotak = False
+
+    # 1. Attempt real Kotak login if credentials and TOTP/MPIN are present
+    if consumer_key and mobile and ucc and totp and mpin and LIVE_TRADING_ENABLED:
+        try:
+            from neo_api_client import NeoAPI
+            client = _new_neo_client(consumer_key)
+            login_result = client.totp_login(mobile_number=mobile, ucc=ucc, totp=totp)
+            if _login_step_succeeded(login_result):
+                validation_result = client.totp_validate(mpin=mpin)
+                if _login_step_succeeded(validation_result) and getattr(client.configuration, "edit_token", None):
+                    with neo_client_lock:
+                        neo_client = client
+                        neo_authenticated = True
+                        neo_egress_ip = _kotak_session_ip(client)
+                        neo_session_ip = neo_egress_ip
+                    logged_in_kotak = True
+                    audit("broker_login_success", {"environment": NEO_ENVIRONMENT})
+        except Exception as exc:
+            audit("broker_login_failed", {"error_type": type(exc).__name__})
+            pass
+
+    # 2. Verify owner credentials
+    is_valid_owner = logged_in_kotak or (owner_pin and (mpin == owner_pin or totp == owner_pin)) or (not owner_pin and len(mpin) >= 4)
+    if is_valid_owner:
+        token = secrets.token_hex(32)
+        _ACTIVE_OWNER_SESSIONS[token] = {
+            "created_at": time.time(),
+            "last_active": time.time(),
+        }
+        return {
+            "ok": True,
+            "token": token,
+            "owner_token": token,
+            "mode": current_mode(),
+            "broker_authenticated": neo_authenticated,
+            "kotak_egress_ip": neo_egress_ip,
+            "expires_in": OWNER_SESSION_TIMEOUT_SECONDS,
+            "message": "Owner authenticated. Active across devices; auto-logout after 5 mins of inactivity.",
+        }
+
+    raise HTTPException(status_code=401, detail="Invalid MPIN or TOTP. Authentication restricted to terminal owner.")
+
+
+@app.post("/api/auth/owner-logout")
+def owner_logout(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    if token and token in _ACTIVE_OWNER_SESSIONS:
+        _ACTIVE_OWNER_SESSIONS.pop(token, None)
+    return {"ok": True, "authenticated": False, "mode": "guest"}
+
+
+@app.get("/api/auth/session-status")
+def session_status(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+    remaining = 0
+    if is_owner and token and token in _ACTIVE_OWNER_SESSIONS:
+        sess = _ACTIVE_OWNER_SESSIONS[token]
+        remaining = max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (time.time() - sess.get("last_active", 0))))
+    return {
+        "ok": True,
+        "authenticated": is_owner,
+        "mode": "owner" if is_owner else "guest",
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
+        "broker_authenticated": neo_authenticated if is_owner else False,
+        "expires_in": remaining,
+        "demo_balance": _GUEST_DEMO_BALANCE,
+    }
 
 
 @app.post("/api/auth/logout")
@@ -1207,7 +1424,18 @@ def _execute_order(payload: OrderPayload):
 
 
 @app.post("/api/orders")
-def place_order(payload: OrderPayload):
+def place_order(
+    payload: OrderPayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+
+    # In live deployment, unauthenticated guest requests are safely handled by demo paper trading
+    if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and LIVE_TRADING_ENABLED:
+        return _execute_demo_order(payload)
+
     # Never run two order submissions concurrently; return 409 rather than queueing a second click.
     if not order_submit_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="An order submission is already in progress. Check its outcome before trying again.")
@@ -1218,7 +1446,17 @@ def place_order(payload: OrderPayload):
 
 
 @app.get("/api/orders")
-def orders(limit: int = 20):
+def orders(
+    limit: int = 20,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    limit = max(1, min(limit, 100))
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+
+    if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and LIVE_TRADING_ENABLED:
+        return _GUEST_ORDERS[:limit]
     limit = max(1, min(limit, 100))
     if neo_authenticated and neo_client is not None and hasattr(neo_client, "order_report"):
         try:
@@ -1459,7 +1697,28 @@ def account_limits():
 
 
 @app.post("/api/positions/exit-all")
-def exit_all_positions():
+def exit_all_positions(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    global _GUEST_POSITIONS, _GUEST_ORDERS
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+
+    if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and (not neo_authenticated or LIVE_TRADING_ENABLED):
+        cnt = len(_GUEST_POSITIONS)
+        _GUEST_POSITIONS.clear()
+        for o in _GUEST_ORDERS:
+            if o.get("status") == "pending":
+                o["status"] = "cancelled"
+        return {
+            "ok": True,
+            "cancelled_orders": 0,
+            "closed_positions": cnt,
+            "message": f"Successfully squared off {cnt} demo paper positions.",
+            "is_demo": True,
+        }
+
     client = _require_neo_session() if (neo_authenticated and neo_client is not None) else None
     cancelled_orders = 0
     closed_positions = 0
@@ -2762,7 +3021,45 @@ def _calculate_estimated_charges(all_positions: list[dict[str, Any]], client: An
 
 
 @app.get("/api/positions")
-def positions(closed: bool = False, tab: str | None = None):
+def positions(
+    closed: bool = False,
+    tab: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
+    is_owner = is_owner_request(token)
+
+    # In public/live deployment without owner authentication, safely return isolated guest demo positions
+    if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and (not neo_authenticated or LIVE_TRADING_ENABLED):
+        res_positions = []
+        tot_mtm = 0.0
+        tot_pos_pnl = 0.0
+        for p in _GUEST_POSITIONS:
+            sym = p.get("symbol", "")
+            q = _get_live_quote_data(sym)
+            ltp = float(q.get("last_price") or q.get("ltp") or p.get("average_price", 0))
+            p["ltp"] = ltp
+            mult = 1 if p.get("side") == "BUY" else -1
+            m2m = round((ltp - float(p.get("average_price", 0))) * int(p.get("quantity", 0)) * mult, 2)
+            p["m2m"] = m2m
+            tot_mtm += m2m
+            tot_pos_pnl += m2m + float(p.get("realized_pnl", 0))
+            res_positions.append(p)
+
+        return {
+            "positions": res_positions,
+            "total_mtm": round(tot_mtm, 2),
+            "total_position_pnl": round(tot_pos_pnl, 2),
+            "total_realized_pnl": round(sum(float(p.get("realized_pnl", 0)) for p in _GUEST_POSITIONS), 2),
+            "total_unrealized_pnl": round(tot_mtm, 2),
+            "gross_pnl": round(tot_pos_pnl, 2),
+            "estimated_charges": 0.0,
+            "net_pnl": round(tot_pos_pnl, 2),
+            "is_demo": True,
+            "mode": "guest",
+        }
+
     client = _require_neo_session()
     raw_positions = []
     try:

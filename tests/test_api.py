@@ -561,6 +561,38 @@ def test_chart_search_endpoint(client):
     assert any("24900" in s for s in symbols)
 
 
+def test_owner_auth_and_session_status(client, monkeypatch):
+    monkeypatch.setenv("OWNER_PIN", "1234")
+    # Wrong PIN
+    res_bad = client.post("/api/auth/owner-login", json={"mpin": "9999", "totp": ""})
+    assert res_bad.status_code == 401
+
+    # Correct PIN
+    res_ok = client.post("/api/auth/owner-login", json={"mpin": "1234", "totp": ""})
+    assert res_ok.status_code == 200
+    token = res_ok.json()["token"]
+    assert len(token) == 64
+
+    # Check status with token
+    st = client.get("/api/auth/session-status", headers={"X-Owner-Token": token})
+    assert st.status_code == 200
+    assert st.json()["authenticated"] is True
+    assert st.json()["mode"] in {"owner", "live"}
+
+    # Logout
+    logout_res = client.post("/api/auth/owner-logout", headers={"X-Owner-Token": token})
+    assert logout_res.status_code == 200
+    assert logout_res.json()["authenticated"] is False
+
+
+def test_guest_demo_mode_isolation(client):
+    # Unauthenticated session status
+    st = client.get("/api/auth/session-status")
+    assert st.status_code == 200
+    assert st.json()["mode"] == "guest"
+    assert st.json()["demo_balance"] == 1000000.0
+
+
 
 
 
