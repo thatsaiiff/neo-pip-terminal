@@ -3,119 +3,268 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Neo PIP — Advanced Pro Chart</title>
+  <title>Neo PIP — Trade From Charts (Pro)</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261109-1">
+  <link rel="stylesheet" href="/static/chart.css?v=20261109-2">
 </head>
-<body class="chart-body">
-  <header class="chart-navbar">
-    <div class="nav-left">
-      <a href="/" class="nav-back-link" title="Back to Neo PIP Terminal">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        <span class="nav-back-text">Terminal</span>
+<body class="neo-chart-body">
+  <!-- Topmost Brand & Indices Navbar (Kotak Neo style) -->
+  <header class="neo-topbar">
+    <div class="topbar-left">
+      <a href="/" class="neo-brand-link" title="Back to Terminal">
+        <span class="neo-logo-badge">neo</span>
+        <span class="neo-brand-sub">Trade from charts</span>
       </a>
-      <div class="nav-divider"></div>
-      <div class="symbol-box">
-        <input id="chart-symbol-input" type="text" value="NIFTY" spellcheck="false" autocomplete="off" title="Type symbol and hit Enter">
-        <button id="chart-symbol-apply" type="button" title="Apply symbol">↵</button>
-      </div>
-      <div class="symbol-chips">
-        <button class="sym-chip active" data-sym="NIFTY">NIFTY</button>
-        <button class="sym-chip" data-sym="BANKNIFTY">BANKNIFTY</button>
-        <button class="sym-chip" data-sym="FINNIFTY">FINNIFTY</button>
-        <button class="sym-chip" data-sym="SENSEX">SENSEX</button>
-      </div>
-      <div id="chart-quote-badge" class="quote-badge">
-        <span id="chart-ltp" class="quote-ltp">—</span>
-        <span id="chart-chg" class="quote-chg">—</span>
+      <div class="v-sep"></div>
+      <div class="indices-ticker" id="indices-ticker">
+        <div class="ticker-item" id="ticker-nifty">
+          <span class="t-name">NIFTY</span>
+          <span class="t-ltp">24,923.25</span>
+          <span class="t-chg neg">-0.25%</span>
+        </div>
+        <div class="ticker-item" id="ticker-sensex">
+          <span class="t-name">SENSEX</span>
+          <span class="t-ltp">80,797.68</span>
+          <span class="t-chg neg">-0.25%</span>
+        </div>
+        <div class="ticker-item" id="ticker-banknifty">
+          <span class="t-name">BANKNIFTY</span>
+          <span class="t-ltp">59,283.95</span>
+          <span class="t-chg pos">+0.74%</span>
+        </div>
       </div>
     </div>
 
-    <div class="nav-center">
-      <div class="tf-group" role="group" aria-label="Timeframes">
-        <button type="button" class="tf-btn active" data-tf="5s" title="5-second scalper">5s</button>
-        <button type="button" class="tf-btn" data-tf="15s" title="15-second scalper">15s</button>
-        <button type="button" class="tf-btn" data-tf="1m" title="1-minute candles">1m</button>
-        <button type="button" class="tf-btn" data-tf="5m" title="5-minute candles">5m</button>
-        <button type="button" class="tf-btn" data-tf="15m" title="15-minute candles">15m</button>
-        <button type="button" class="tf-btn" data-tf="1h" title="1-hour candles">1h</button>
-        <button type="button" class="tf-btn" data-tf="1d" title="Daily candles">1D</button>
+    <div class="topbar-right">
+      <div class="pnl-header-badge" id="header-pnl-badge">
+        <span class="pnl-lbl">Profit/Loss</span>
+        <span class="pnl-val pos" id="header-pnl-val">+₹0.00</span>
+      </div>
+      <div class="v-sep"></div>
+      <button id="chart-token-btn" class="icon-action-btn" type="button" title="Upstox API Token">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </button>
+      <a href="/" class="terminal-back-btn" title="Back to Terminal">Terminal</a>
+    </div>
+  </header>
+
+  <!-- Secondary Interactive Toolbar -->
+  <nav class="neo-toolbar">
+    <div class="tb-left">
+      <!-- Search Input with Live Autocomplete Dropdown -->
+      <div class="search-wrap" id="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input id="symbol-search-input" type="text" placeholder="Search scrip, strike (e.g. 24900 CE)" autocomplete="off" spellcheck="false">
+        <div class="search-dropdown hidden" id="search-dropdown"></div>
       </div>
 
-      <div class="nav-divider"></div>
+      <div class="v-sep"></div>
 
-      <div class="indicator-group" role="group" aria-label="Indicators">
-        <button type="button" id="toggle-ema9" class="ind-btn active" title="Toggle 9 EMA (Blue)">
-          <span class="ind-dot ema9-dot"></span> EMA 9
+      <!-- Timeframe Buttons -->
+      <div class="tf-pill-group" id="tf-pill-group" role="group" aria-label="Timeframes">
+        <button type="button" class="tf-pill" data-tf="5s">5s</button>
+        <button type="button" class="tf-pill" data-tf="15s">15s</button>
+        <button type="button" class="tf-pill active" data-tf="1m">1m</button>
+        <button type="button" class="tf-pill" data-tf="3m">3m</button>
+        <button type="button" class="tf-pill" data-tf="5m">5m</button>
+        <button type="button" class="tf-pill" data-tf="15m">15m</button>
+        <button type="button" class="tf-pill" data-tf="1h">1h</button>
+        <button type="button" class="tf-pill" data-tf="1d">1D</button>
+      </div>
+
+      <div class="v-sep"></div>
+
+      <!-- Indicators Toggles -->
+      <div class="ind-pill-group">
+        <button type="button" id="btn-ind-ema9" class="tb-btn active" title="Toggle EMA 9 (Blue)">
+          <span class="dot-ind blue"></span> EMA 9
         </button>
-        <button type="button" id="toggle-ema21" class="ind-btn active" title="Toggle 21 EMA (Orange)">
-          <span class="ind-dot ema21-dot"></span> EMA 21
+        <button type="button" id="btn-ind-ema21" class="tb-btn active" title="Toggle EMA 21 (Orange)">
+          <span class="dot-ind orange"></span> EMA 21
         </button>
-        <button type="button" id="toggle-vpvr" class="ind-btn active" title="Toggle Volume Profile Visible Range (VPVR) with Point of Control">
-          <span class="ind-icon">📊</span> VPVR
+        <button type="button" id="btn-ind-vpvr" class="tb-btn active" title="Toggle Volume Profile Visible Range (VPVR)">
+          <span class="dot-ind yellow"></span> VPVR
         </button>
-        <button type="button" id="toggle-vol" class="ind-btn active" title="Toggle Volume Histogram">
+        <button type="button" id="btn-ind-vol" class="tb-btn active" title="Toggle Volume Histogram">
           Vol
         </button>
       </div>
     </div>
 
-    <div class="nav-right">
-      <div id="ema-cross-badge" class="cross-badge neutral" title="EMA 9 / 21 Cross Status">
-        <span class="cross-dot"></span>
-        <span id="ema-cross-text">EMA Cross: Neutral</span>
+    <div class="tb-right">
+      <!-- Auto Layout Selector (Screenshot 2 match) -->
+      <div class="layout-selector-wrap">
+        <button id="layout-toggle-btn" class="layout-btn" type="button" title="Select Layout">
+          <span class="layout-icon">◫</span>
+          <span id="current-layout-label">3 CHARTS</span>
+          <span class="caret">▼</span>
+        </button>
+        <div id="layout-dropdown" class="layout-dropdown hidden">
+          <div class="layout-opt" data-layout="1">
+            <span class="opt-icon">🔲</span>
+            <span class="opt-text">1 Chart (Full)</span>
+          </div>
+          <div class="layout-opt" data-layout="2">
+            <span class="opt-icon">⬛⬛</span>
+            <span class="opt-text">2 Charts (Dual Split)</span>
+          </div>
+          <div class="layout-opt active" data-layout="3">
+            <span class="opt-icon">◫</span>
+            <span class="opt-text">3 Charts (Spot + CE + PE)</span>
+          </div>
+        </div>
       </div>
-      <div class="nav-divider"></div>
-      <div class="scalper-mini">
-        <span class="mini-label">Lots:</span>
-        <input id="chart-lots-input" type="number" value="1" min="1" max="500">
-        <button id="chart-buy-btn" class="chart-buy-btn" type="button" title="1-Click Buy Market">BUY MKT</button>
-        <button id="chart-exit-btn" class="chart-exit-btn" type="button" title="Panic Exit All Positions">EXIT ALL</button>
-      </div>
-      <button id="chart-token-btn" class="token-icon-btn" type="button" title="Upstox API Token Status">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+
+      <div class="v-sep"></div>
+
+      <!-- Scalper Mode Button -->
+      <button id="scalper-mode-toggle" class="scalper-mode-btn active" type="button" title="Toggle Floating Scalper Window">
+        <span class="scalper-mode-dot"></span>
+        <span>Scalper Mode</span>
       </button>
-    </div>
-  </header>
 
-  <!-- Legend & Status Strip -->
-  <div class="chart-subbar">
-    <div class="legend-wrap">
-      <span class="legend-sym" id="leg-symbol">NSE:NIFTY</span>
-      <span class="leg-val">O: <b id="leg-o">—</b></span>
-      <span class="leg-val">H: <b id="leg-h">—</b></span>
-      <span class="leg-val">L: <b id="leg-l">—</b></span>
-      <span class="leg-val">C: <b id="leg-c">—</b></span>
-      <span class="leg-val">Vol: <b id="leg-v">—</b></span>
-      <span class="legend-sep">|</span>
-      <span class="legend-ema ema9-val">EMA 9: <b id="leg-ema9">—</b></span>
-      <span class="legend-ema ema21-val">EMA 21: <b id="leg-ema21">—</b></span>
-      <span class="legend-sep">|</span>
-      <span class="legend-poc">POC (VPVR): <b id="leg-poc">—</b></span>
+      <!-- Quick 1-Click Order Buttons -->
+      <button id="tb-quick-buy" class="tb-action-buy" type="button" title="Quick Market BUY">Buy</button>
+      <button id="tb-quick-sell" class="tb-action-sell" type="button" title="Quick Market SELL">Sell</button>
     </div>
-    <div class="status-wrap">
-      <span id="chart-feed-status" class="feed-status">Connecting to Upstox feed…</span>
-    </div>
-  </div>
+  </nav>
 
-  <!-- Chart Main Canvas -->
-  <main class="chart-container-wrap">
-    <div id="chart-canvas" class="chart-canvas"></div>
-    <canvas id="vpvr-canvas" class="vpvr-overlay"></canvas>
+  <!-- Main Multi-Pane Chart Canvas Area -->
+  <main class="chart-stage layout-3" id="chart-stage">
+    <!-- Pane 1 (Primary / Spot Index) -->
+    <section class="chart-pane active" id="pane-1" data-pane-idx="0">
+      <div class="pane-header">
+        <div class="pane-title-wrap">
+          <span class="pane-sym" id="p1-sym">NIFTY</span>
+          <span class="pane-tf" id="p1-tf">5m</span>
+          <span class="pane-seg">NSE</span>
+          <span class="pane-quote-pill" id="p1-quote-pill">
+            O: <b id="p1-o">—</b> H: <b id="p1-h">—</b> L: <b id="p1-l">—</b> C: <b id="p1-c">—</b>
+          </span>
+        </div>
+        <div class="pane-status-wrap">
+          <span class="pane-ltp" id="p1-ltp">—</span>
+          <span class="pane-chg pos" id="p1-chg">—</span>
+        </div>
+      </div>
+      <div class="pane-chart-wrap" id="p1-canvas-wrap">
+        <div id="p1-chart-container" class="chart-canvas-view"></div>
+        <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+      </div>
+    </section>
+
+    <!-- Pane 2 (Call Option Contract) -->
+    <section class="chart-pane" id="pane-2" data-pane-idx="1">
+      <div class="pane-header">
+        <div class="pane-title-wrap">
+          <span class="pane-sym" id="p2-sym">NIFTY26N0924900CE</span>
+          <span class="pane-tf" id="p2-tf">3m</span>
+          <span class="pane-seg">NSE F&O</span>
+          <span class="pane-quote-pill" id="p2-quote-pill">
+            O: <b id="p2-o">—</b> H: <b id="p2-h">—</b> L: <b id="p2-l">—</b> C: <b id="p2-c">—</b>
+          </span>
+        </div>
+        <div class="pane-status-wrap">
+          <span class="pane-ltp" id="p2-ltp">—</span>
+          <span class="pane-chg pos" id="p2-chg">—</span>
+        </div>
+      </div>
+      <div class="pane-chart-wrap" id="p2-canvas-wrap">
+        <div id="p2-chart-container" class="chart-canvas-view"></div>
+        <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+      </div>
+    </section>
+
+    <!-- Pane 3 (Put Option Contract) -->
+    <section class="chart-pane" id="pane-3" data-pane-idx="2">
+      <div class="pane-header">
+        <div class="pane-title-wrap">
+          <span class="pane-sym" id="p3-sym">NIFTY26N0924900PE</span>
+          <span class="pane-tf" id="p3-tf">1m</span>
+          <span class="pane-seg">NSE F&O</span>
+          <span class="pane-quote-pill" id="p3-quote-pill">
+            O: <b id="p3-o">—</b> H: <b id="p3-h">—</b> L: <b id="p3-l">—</b> C: <b id="p3-c">—</b>
+          </span>
+        </div>
+        <div class="pane-status-wrap">
+          <span class="pane-ltp" id="p3-ltp">—</span>
+          <span class="pane-chg neg" id="p3-chg">—</span>
+        </div>
+      </div>
+      <div class="pane-chart-wrap" id="p3-canvas-wrap">
+        <div id="p3-chart-container" class="chart-canvas-view"></div>
+        <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+      </div>
+    </section>
   </main>
 
-  <!-- Quick Upstox Token Modal -->
+  <!-- Floating Draggable Scalper Window (Screenshot 3 match) -->
+  <aside id="floating-scalper" class="scalper-floating-box">
+    <div class="scalper-handle" id="scalper-drag-handle">
+      <div class="handle-title">
+        <button id="scalper-close-btn" class="handle-close" type="button" title="Close Scalper Window">✕</button>
+        <span id="sc-contract-title" class="contract-title">NIFTY 24900 CALL 09 NOV</span>
+      </div>
+      <span class="mkt-badge">MARKET ORDER</span>
+    </div>
+
+    <div class="scalper-body">
+      <!-- Price & Change Line -->
+      <div class="sc-price-row">
+        <div class="sc-ltp-box">
+          <span id="sc-ltp" class="sc-ltp">82.50</span>
+          <span id="sc-chg" class="sc-chg neg">▲ -120.50 (-59.36%)</span>
+        </div>
+        <div class="sc-pos-badge" id="sc-pos-badge">No Position</div>
+      </div>
+
+      <!-- Execution Form -->
+      <div class="sc-exec-row">
+        <button id="sc-buy-btn" class="sc-btn sc-buy" type="button">Buy</button>
+        <div class="sc-lot-picker">
+          <input id="sc-lots" type="number" value="1" min="1" max="200" title="Number of Lots">
+          <div class="lot-stepper">
+            <button type="button" id="lot-up" class="step-btn">▲</button>
+            <button type="button" id="lot-down" class="step-btn">▼</button>
+          </div>
+          <span class="lot-label">Lot</span>
+        </div>
+        <button id="sc-sell-btn" class="sc-btn sc-sell" type="button">Sell</button>
+      </div>
+
+      <!-- Active Position & Quick Action Controls -->
+      <div id="sc-position-section" class="sc-position-section">
+        <div class="sc-pos-info">
+          <span id="sc-pos-summary">Position: 65 units (1 Lot) @ Avg ₹80.00</span>
+          <span id="sc-pos-pnl" class="sc-pnl-pill pos">P&L: +₹162.50</span>
+        </div>
+        <div class="sc-quick-actions">
+          <button id="sc-trail-cost-btn" class="action-pill trail-btn" type="button" title="Trail Stop Loss to Cost (Breakeven)">
+            🛡️ TRAIL SL TO COST
+          </button>
+          <button id="sc-exit-50-btn" class="action-pill half-btn" type="button" title="Square off 50% lots immediately">
+            ½ EXIT 50%
+          </button>
+          <button id="sc-exit-all-btn" class="action-pill exit-all-btn" type="button" title="Panic Square off 100% open positions">
+            🚨 EXIT ALL
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Upstox Token Setup Modal -->
   <div id="token-modal" class="token-modal-backdrop hidden">
     <div class="token-modal-card">
       <div class="token-modal-header">
-        <h3>Upstox API Feed Setup</h3>
+        <h3>Upstox Feed Settings</h3>
         <button id="close-token-modal" class="modal-close-btn" type="button">×</button>
       </div>
       <p class="token-modal-desc">
-        Upstox provides free sub-minute and historical chart candles. For live streaming during active market hours (09:15–15:30), paste your token from <a href="https://developer.upstox.com" target="_blank" rel="noopener">developer.upstox.com</a>.
+        Historical & intraday candles work 24/7 without authentication. For live sub-second market streaming, paste your token from <a href="https://developer.upstox.com" target="_blank" rel="noopener">developer.upstox.com</a>.
       </p>
       <div class="token-status-pill" id="token-status-pill">Checking status…</div>
       <label class="token-input-field">
@@ -134,6 +283,6 @@
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261109-1"></script>
+  <script src="/static/chart.js?v=20261109-2"></script>
 </body>
 </html>

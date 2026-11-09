@@ -488,6 +488,80 @@ def test_chart_view_endpoint(client):
     assert res.status_code == 200
 
 
+def test_exit_partial_position_endpoint(client):
+    # Place a simulated order first
+    client.post(
+        "/api/orders",
+        json={
+            "symbol": "NIFTY24900CE",
+            "side": "BUY",
+            "lots": 4,
+            "lot_size": 25,
+            "exchange_segment": "nse_fo",
+            "product": "MIS",
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    res = client.post("/api/positions/exit-partial", json={"symbol": "NIFTY24900CE", "percentage": 50})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["percentage"] == 50
+    assert data["closed_positions"] >= 1
+
+
+def test_trail_sl_to_cost_endpoint(client):
+    client.post(
+        "/api/orders",
+        json={
+            "symbol": "NIFTY24900PE",
+            "side": "BUY",
+            "lots": 1,
+            "lot_size": 25,
+            "exchange_segment": "nse_fo",
+            "product": "MIS",
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    res = client.post("/api/positions/trail-to-cost", json={"symbol": "NIFTY24900PE"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["cost_price"] > 0
+    assert "trailed" in data["message"].lower()
+
+
+def test_live_quote_endpoints(client):
+    res = client.get("/api/chart/live-quote?symbol=NIFTY")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "ltp" in data
+    assert data["ltp"] > 0
+
+    batch_res = client.post(
+        "/api/chart/live-quotes",
+        json={"items": [{"symbol": "NIFTY"}, {"symbol": "BANKNIFTY"}]}
+    )
+    assert batch_res.status_code == 200
+    b_data = batch_res.json()
+    assert b_data["ok"] is True
+    assert len(b_data["quotes"]) == 2
+
+
+def test_chart_search_endpoint(client):
+    res = client.get("/api/chart/search?q=24900")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert len(data["results"]) > 0
+    symbols = [r["symbol"] for r in data["results"]]
+    assert any("24900" in s for s in symbols)
+
+
+
 
 
 

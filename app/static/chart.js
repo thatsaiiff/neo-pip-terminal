@@ -1,41 +1,105 @@
-// Neo PIP Advanced Pro Chart Engine
-// Upstox Feed + Lightweight Charts + EMA 9/21 Cross + Volume Profile (Visible Range)
+// Neo PIP — Trade From Charts (Kotak Neo Dark Engine)
+// Multi-Pane Lightweight Charts + Fast Sub-Second Quotes + Scalper Window + VPVR
 (function () {
   'use strict';
 
   const $ = id => document.getElementById(id);
 
-  // Parse URL Parameters
-  const urlParams = new URLSearchParams(window.location.search);
-  let currentSymbol = (urlParams.get('symbol') || 'NIFTY').toUpperCase().trim();
-  let currentToken = urlParams.get('token') || '';
-  let currentTf = (urlParams.get('interval') || '5s').toLowerCase();
-
   // Indicators State
-  const state = {
+  const indicators = {
     showEma9: true,
     showEma21: true,
     showVpvr: true,
     showVol: true,
-    candles: [],
-    volumes: [],
-    ema9Data: [],
-    ema21Data: [],
-    vpvrData: { bins: [], pocPrice: null },
-    lastTickPrice: null,
-    activeBar: null,
-    isOption: false,
-    pollTimer: null,
   };
 
-  // Lightweight Charts Instances
-  let chart = null;
-  let candleSeries = null;
-  let volumeSeries = null;
-  let ema9Series = null;
-  let ema21Series = null;
-  let vpvrCanvas = null;
-  let vpvrCtx = null;
+  let activeLayout = 3; // 1, 2, or 3
+  let activePaneIdx = 0; // 0, 1, or 2
+
+  // Pane configurations
+  const panes = [
+    {
+      idx: 0,
+      id: 'pane-1',
+      sym: 'NIFTY',
+      token: '',
+      tf: '5m',
+      isOption: false,
+      candles: [],
+      volumes: [],
+      chart: null,
+      candleSeries: null,
+      volSeries: null,
+      ema9Series: null,
+      ema21Series: null,
+      vpvrCanvas: null,
+      vpvrCtx: null,
+      vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
+      activeBar: null,
+      lastLtp: null,
+    },
+    {
+      idx: 1,
+      id: 'pane-2',
+      sym: 'NIFTY26N0924900CE',
+      token: '40020',
+      tf: '3m',
+      isOption: true,
+      candles: [],
+      volumes: [],
+      chart: null,
+      candleSeries: null,
+      volSeries: null,
+      ema9Series: null,
+      ema21Series: null,
+      vpvrCanvas: null,
+      vpvrCtx: null,
+      vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
+      activeBar: null,
+      lastLtp: null,
+    },
+    {
+      idx: 2,
+      id: 'pane-3',
+      sym: 'NIFTY26N0924900PE',
+      token: '40021',
+      tf: '1m',
+      isOption: true,
+      candles: [],
+      volumes: [],
+      chart: null,
+      candleSeries: null,
+      volSeries: null,
+      ema9Series: null,
+      ema21Series: null,
+      vpvrCanvas: null,
+      vpvrCtx: null,
+      vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
+      activeBar: null,
+      lastLtp: null,
+    },
+  ];
+
+  // Read URL query params to initialize active symbol
+  const urlParams = new URLSearchParams(window.location.search);
+  const qSym = urlParams.get('symbol');
+  const qTok = urlParams.get('token');
+  const qTf = urlParams.get('interval');
+
+  if (qSym) {
+    const isOpt = /(CE|PE)$/i.test(qSym);
+    if (isOpt) {
+      panes[1].sym = qSym.toUpperCase();
+      panes[1].token = qTok || '';
+      if (qTf) panes[1].tf = qTf;
+      activePaneIdx = 1;
+    } else {
+      panes[0].sym = qSym.toUpperCase();
+      panes[0].token = qTok || '';
+      if (qTf) panes[0].tf = qTf;
+      activePaneIdx = 0;
+    }
+  }
 
   function toast(msg, duration = 3000) {
     const el = $('toast');
@@ -57,32 +121,23 @@
     return data;
   }
 
-  // --- Technical Indicators Math ---
+  // --- Technical Math (EMA) ---
   function calculateEMA(candles, period) {
     if (!candles || candles.length < period) return [];
     const k = 2 / (period + 1);
     const result = [];
-    
-    // First SMA
     let sum = 0;
-    for (let i = 0; i < period; i++) {
-      sum += candles[i].close;
-    }
+    for (let i = 0; i < period; i++) sum += candles[i].close;
     let ema = sum / period;
-    result.push({ time: candles[period - 1].time, value: round(ema, 2) });
-
+    result.push({ time: candles[period - 1].time, value: Math.round(ema * 100) / 100 });
     for (let i = period; i < candles.length; i++) {
       ema = (candles[i].close - ema) * k + ema;
-      result.push({ time: candles[i].time, value: round(ema, 2) });
+      result.push({ time: candles[i].time, value: Math.round(ema * 100) / 100 });
     }
     return result;
   }
 
-  function round(val, dec = 2) {
-    return Math.round(val * Math.pow(10, dec)) / Math.pow(10, dec);
-  }
-
-  // --- Volume Profile Visible Range (VPVR) Calculation ---
+  // --- VPVR Calculation & Rendering ---
   function computeVPVR(visibleCandles) {
     if (!visibleCandles || visibleCandles.length < 5) return { bins: [], pocPrice: null, maxVol: 0 };
     let minP = Infinity;
@@ -91,10 +146,9 @@
       if (c.low < minP) minP = c.low;
       if (c.high > maxP) maxP = c.high;
     });
-
     if (minP >= maxP) return { bins: [], pocPrice: null, maxVol: 0 };
 
-    const binCount = 36;
+    const binCount = 32;
     const binSize = (maxP - minP) / binCount;
     const bins = Array.from({ length: binCount }, (_, i) => ({
       priceLow: minP + i * binSize,
@@ -126,208 +180,220 @@
     return { bins, pocPrice, maxVol };
   }
 
-  function drawVPVR() {
-    if (!vpvrCanvas || !vpvrCtx || !chart || !state.showVpvr) {
-      if (vpvrCtx && vpvrCanvas) vpvrCtx.clearRect(0, 0, vpvrCanvas.width, vpvrCanvas.height);
+  function drawPaneVPVR(pane) {
+    if (!pane.vpvrCanvas || !pane.vpvrCtx || !pane.chart || !indicators.showVpvr) {
+      if (pane.vpvrCtx && pane.vpvrCanvas) pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
       return;
     }
 
-    const { bins, pocPrice, maxVol } = state.vpvrData;
-    vpvrCtx.clearRect(0, 0, vpvrCanvas.width, vpvrCanvas.height);
+    const { bins, pocPrice, maxVol } = pane.vpvrData;
+    const ctx = pane.vpvrCtx;
+    const w = pane.vpvrCanvas.width;
+    ctx.clearRect(0, 0, w, pane.vpvrCanvas.height);
     if (!bins.length || maxVol <= 0) return;
 
-    const w = vpvrCanvas.width;
-    const maxBarWidth = w * 0.85;
+    const maxBarW = w * 0.85;
 
     bins.forEach(b => {
-      const yTop = candleSeries.priceToCoordinate(b.priceHigh);
-      const yBottom = candleSeries.priceToCoordinate(b.priceLow);
+      const yTop = pane.candleSeries.priceToCoordinate(b.priceHigh);
+      const yBottom = pane.candleSeries.priceToCoordinate(b.priceLow);
       if (yTop == null || yBottom == null) return;
 
       const barH = Math.max(2, Math.abs(yBottom - yTop) - 1);
       const y = Math.min(yTop, yBottom);
 
-      const buyRatio = b.buyVol / maxVol;
-      const sellRatio = b.sellVol / maxVol;
+      const buyW = (b.buyVol / maxVol) * maxBarW;
+      const sellW = (b.sellVol / maxVol) * maxBarW;
 
-      const buyW = buyRatio * maxBarWidth;
-      const sellW = sellRatio * maxBarWidth;
+      // Buy Volume (Soft Cyan/Teal)
+      ctx.fillStyle = 'rgba(0, 188, 212, 0.45)';
+      ctx.fillRect(w - buyW - sellW, y, buyW, barH);
 
-      // Draw Buy Vol (Green)
-      vpvrCtx.fillStyle = 'rgba(16, 185, 129, 0.35)';
-      vpvrCtx.fillRect(w - buyW - sellW, y, buyW, barH);
-
-      // Draw Sell Vol (Red)
-      vpvrCtx.fillStyle = 'rgba(239, 68, 68, 0.35)';
-      vpvrCtx.fillRect(w - sellW, y, sellW, barH);
+      // Sell Volume (Soft Magenta/Red)
+      ctx.fillStyle = 'rgba(233, 30, 99, 0.45)';
+      ctx.fillRect(w - sellW, y, sellW, barH);
     });
 
-    // Draw Point of Control (POC Line)
+    // Draw POC Line (Yellow Dashed)
     if (pocPrice != null) {
-      const yPoc = candleSeries.priceToCoordinate(pocPrice);
+      const yPoc = pane.candleSeries.priceToCoordinate(pocPrice);
       if (yPoc != null) {
-        vpvrCtx.strokeStyle = '#fbbf24';
-        vpvrCtx.lineWidth = 1.8;
-        vpvrCtx.setLineDash([4, 4]);
-        vpvrCtx.beginPath();
-        vpvrCtx.moveTo(0, yPoc);
-        vpvrCtx.lineTo(w, yPoc);
-        vpvrCtx.stroke();
-        vpvrCtx.setLineDash([]);
+        ctx.strokeStyle = '#ffeb3b';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, yPoc);
+        ctx.lineTo(w, yPoc);
+        ctx.stroke();
+        ctx.setLineDash([]);
 
-        // POC Label
-        vpvrCtx.fillStyle = '#fbbf24';
-        vpvrCtx.font = 'bold 9px "DM Mono", monospace';
-        vpvrCtx.fillText(`POC: ${pocPrice.toFixed(2)}`, 8, yPoc - 4);
+        ctx.fillStyle = '#ffeb3b';
+        ctx.font = 'bold 9px "DM Mono", monospace';
+        ctx.fillText(`POC ${pocPrice.toFixed(2)}`, 6, yPoc - 4);
       }
     }
   }
 
-  // --- Initialize Chart Canvas ---
-  function initChart() {
-    const wrap = $('chart-canvas');
-    if (!wrap || !window.LightweightCharts) return;
+  function recalculatePaneVPVR(pane) {
+    if (!pane.chart || !pane.candles.length || !indicators.showVpvr) return;
+    const range = pane.chart.timeScale().getVisibleLogicalRange();
+    if (!range) return;
 
-    vpvrCanvas = $('vpvr-canvas');
-    if (vpvrCanvas) {
-      vpvrCtx = vpvrCanvas.getContext('2d');
-      vpvrCanvas.width = vpvrCanvas.clientWidth || 200;
-      vpvrCanvas.height = vpvrCanvas.clientHeight || wrap.clientHeight;
+    const from = Math.max(0, Math.floor(range.from));
+    const to = Math.min(pane.candles.length - 1, Math.ceil(range.to));
+    const visible = pane.candles.slice(from, to + 1);
+
+    pane.vpvrData = computeVPVR(visible);
+    drawPaneVPVR(pane);
+  }
+
+  // --- Initialize a Single Chart Pane ---
+  function initChartPane(pane) {
+    const wrap = $(`p${pane.idx + 1}-canvas-wrap`);
+    const container = $(`p${pane.idx + 1}-chart-container`);
+    const vpvrEl = $(`p${pane.idx + 1}-vpvr-canvas`);
+    if (!container || !window.LightweightCharts) return;
+
+    if (vpvrEl) {
+      pane.vpvrCanvas = vpvrEl;
+      pane.vpvrCtx = vpvrEl.getContext('2d');
+      vpvrEl.width = 160;
+      vpvrEl.height = wrap.clientHeight || 300;
     }
 
-    chart = window.LightweightCharts.createChart(wrap, {
-      width: wrap.clientWidth,
-      height: wrap.clientHeight,
+    pane.chart = window.LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
       layout: {
-        background: { type: 'solid', color: '#0f172a' },
+        background: { type: 'solid', color: '#131722' },
         textColor: '#94a3b8',
         fontFamily: "'DM Mono', monospace, -apple-system, sans-serif",
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(51, 65, 85, 0.35)' },
-        horzLines: { color: 'rgba(51, 65, 85, 0.35)' },
+        vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
       },
       crosshair: {
         mode: window.LightweightCharts.CrosshairMode.Normal,
       },
       rightPriceScale: {
-        borderColor: '#334155',
-        scaleMargins: { top: 0.08, bottom: 0.2 },
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        scaleMargins: { top: 0.08, bottom: 0.18 },
         autoScale: true,
       },
       timeScale: {
-        borderColor: '#334155',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
         timeVisible: true,
-        secondsVisible: true,
+        secondsVisible: false,
         visible: true,
-        fixLeftEdge: true,
-        fixRightEdge: true,
+        fixLeftEdge: false,
+        fixRightEdge: false, // CRITICAL: allows smooth right scrolling
+        rightOffset: 16,     // CRITICAL: gives 16 bars of empty space on right!
+        barSpacing: 9,       // comfortable candle spacing
       },
     });
 
-    // 1. Candlestick Series
-    candleSeries = chart.addCandlestickSeries({
-      upColor: '#10b981',
-      downColor: '#ef4444',
+    // 1. Candlestick Series (Kotak Neo colors: #089981 bull, #f23645 bear)
+    pane.candleSeries = pane.chart.addCandlestickSeries({
+      upColor: '#089981',
+      downColor: '#f23645',
       borderVisible: false,
-      wickUpColor: '#10b981',
-      wickDownColor: '#ef4444',
+      wickUpColor: '#089981',
+      wickDownColor: '#f23645',
     });
 
     // 2. Volume Series
-    volumeSeries = chart.addHistogramSeries({
-      color: '#475569',
+    pane.volSeries = pane.chart.addHistogramSeries({
+      color: '#334155',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
-    // 3. EMA 9 Series (Blue)
-    ema9Series = chart.addLineSeries({
-      color: '#3b82f6',
+    // 3. EMA 9 (Blue)
+    pane.ema9Series = pane.chart.addLineSeries({
+      color: '#2962ff',
       lineWidth: 2,
       priceLineVisible: false,
       title: 'EMA 9',
     });
 
-    // 4. EMA 21 Series (Orange)
-    ema21Series = chart.addLineSeries({
-      color: '#f59e0b',
+    // 4. EMA 21 (Orange)
+    pane.ema21Series = pane.chart.addLineSeries({
+      color: '#ff9800',
       lineWidth: 2,
       priceLineVisible: false,
       title: 'EMA 21',
     });
 
-    // Crosshair Subscriber
-    chart.subscribeCrosshairMove(param => {
+    // Crosshair info sync
+    pane.chart.subscribeCrosshairMove(param => {
       if (!param || !param.time || !param.seriesData) return;
-      const c = param.seriesData.get(candleSeries);
-      const v = param.seriesData.get(volumeSeries);
-      const e9 = param.seriesData.get(ema9Series);
-      const e21 = param.seriesData.get(ema21Series);
-
+      const c = param.seriesData.get(pane.candleSeries);
       if (c) {
-        if ($('leg-o')) $('leg-o').textContent = Number(c.open).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-        if ($('leg-h')) $('leg-h').textContent = Number(c.high).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-        if ($('leg-l')) $('leg-l').textContent = Number(c.low).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-        if ($('leg-c')) $('leg-c').textContent = Number(c.close).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-      }
-      if (v && $('leg-v')) $('leg-v').textContent = Number(v.value).toLocaleString('en-IN');
-      if (e9 && $('leg-ema9')) $('leg-ema9').textContent = Number(e9.value).toFixed(2);
-      if (e21 && $('leg-ema21')) $('leg-ema21').textContent = Number(e21.value).toFixed(2);
-    });
-
-    // Visible range subscriber for real-time VPVR recalculation
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-      recalculateVisibleVpvr();
-    });
-
-    window.addEventListener('resize', () => {
-      if (!chart || !wrap) return;
-      chart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
-      if (vpvrCanvas) {
-        vpvrCanvas.width = 180;
-        vpvrCanvas.height = wrap.clientHeight;
-        drawVPVR();
+        const idPrefix = `p${pane.idx + 1}`;
+        if ($(idPrefix + '-o')) $(idPrefix + '-o').textContent = Number(c.open).toFixed(2);
+        if ($(idPrefix + '-h')) $(idPrefix + '-h').textContent = Number(c.high).toFixed(2);
+        if ($(idPrefix + '-l')) $(idPrefix + '-l').textContent = Number(c.low).toFixed(2);
+        if ($(idPrefix + '-c')) $(idPrefix + '-c').textContent = Number(c.close).toFixed(2);
       }
     });
-  }
 
-  function recalculateVisibleVpvr() {
-    if (!chart || !state.candles.length || !state.showVpvr) return;
-    const range = chart.timeScale().getVisibleLogicalRange();
-    if (!range) return;
+    // Range subscriber for real-time VPVR
+    pane.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      recalculatePaneVPVR(pane);
+    });
 
-    const from = Math.max(0, Math.floor(range.from));
-    const to = Math.min(state.candles.length - 1, Math.ceil(range.to));
-    const visible = state.candles.slice(from, to + 1);
-
-    state.vpvrData = computeVPVR(visible);
-    if ($('leg-poc') && state.vpvrData.pocPrice) {
-      $('leg-poc').textContent = state.vpvrData.pocPrice.toFixed(2);
+    // Click pane to select it
+    const paneEl = $(pane.id);
+    if (paneEl) {
+      paneEl.addEventListener('click', () => {
+        setActivePane(pane.idx);
+      });
     }
-    drawVPVR();
   }
 
-  // --- Load Candles & Update Indicators ---
-  async function loadChartData() {
-    const statusEl = $('chart-feed-status');
-    if (statusEl) statusEl.textContent = `Fetching ${currentTf} data for ${currentSymbol}…`;
+  function setActivePane(idx) {
+    activePaneIdx = idx;
+    panes.forEach((p, i) => {
+      const el = $(p.id);
+      if (el) el.classList.toggle('active', i === idx);
+    });
+
+    const activePane = panes[idx];
+    if (activePane) {
+      // Sync topbar search & timeframe
+      const searchIn = $('symbol-search-input');
+      if (searchIn) searchIn.value = activePane.sym;
+
+      document.querySelectorAll('.tf-pill').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tf === activePane.tf);
+      });
+
+      // Sync floating scalper window to this contract
+      updateScalperContract(activePane);
+    }
+  }
+
+  // --- Load Candles for a Pane ---
+  async function loadPaneData(pane) {
+    const ltpEl = $(`p${pane.idx + 1}-ltp`);
+    const chgEl = $(`p${pane.idx + 1}-chg`);
+    const symEl = $(`p${pane.idx + 1}-sym`);
+    const tfEl = $(`p${pane.idx + 1}-tf`);
+
+    if (symEl) symEl.textContent = pane.sym;
+    if (tfEl) tfEl.textContent = pane.tf;
 
     try {
-      const url = `/api/chart/candles?symbol=${encodeURIComponent(currentSymbol)}&token=${encodeURIComponent(currentToken)}&interval=${encodeURIComponent(currentTf)}`;
+      const url = `/api/chart/candles?symbol=${encodeURIComponent(pane.sym)}&token=${encodeURIComponent(pane.token)}&interval=${encodeURIComponent(pane.tf)}`;
       const data = await api(url);
 
-      if (!data.candles || !data.candles.length) {
-        if (statusEl) statusEl.textContent = `No candle data found for ${currentSymbol}`;
-        return;
-      }
+      if (!data.candles || !data.candles.length) return;
 
-      state.isOption = !!data.is_option;
-      const rawCandles = data.candles;
-
-      state.candles = rawCandles.map(c => ({
+      pane.isOption = !!data.is_option;
+      pane.candles = data.candles.map(c => ({
         time: c.time,
         open: c.open,
         high: c.high,
@@ -336,302 +402,558 @@
         volume: c.volume || 100,
       }));
 
-      state.volumes = rawCandles.map(c => ({
+      pane.volumes = data.candles.map(c => ({
         time: c.time,
         value: c.volume || 100,
-        color: c.close >= c.open ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)',
+        color: c.close >= c.open ? 'rgba(8, 153, 129, 0.4)' : 'rgba(242, 54, 69, 0.4)',
       }));
 
-      candleSeries.setData(state.candles);
-      volumeSeries.setData(state.showVol ? state.volumes : []);
+      pane.candleSeries.setData(pane.candles);
+      pane.volSeries.setData(indicators.showVol ? pane.volumes : []);
 
-      // Calculate EMAs
-      state.ema9Data = calculateEMA(state.candles, 9);
-      state.ema21Data = calculateEMA(state.candles, 21);
+      const ema9 = calculateEMA(pane.candles, 9);
+      const ema21 = calculateEMA(pane.candles, 21);
+      pane.ema9Series.setData(indicators.showEma9 ? ema9 : []);
+      pane.ema21Series.setData(indicators.showEma21 ? ema21 : []);
 
-      if (ema9Series) ema9Series.setData(state.showEma9 ? state.ema9Data : []);
-      if (ema21Series) ema21Series.setData(state.showEma21 ? state.ema21Data : []);
+      // Fit content and restore spacious right margin
+      pane.chart.timeScale().applyOptions({
+        rightOffset: 16,
+        barSpacing: 9,
+      });
 
-      // Update EMA Cross Badge
-      updateEmaCrossBadge();
-
-      chart.timeScale().fitContent();
-
-      const last = state.candles[state.candles.length - 1];
+      const last = pane.candles[pane.candles.length - 1];
       if (last) {
-        state.activeBar = { ...last };
-        state.lastTickPrice = last.close;
-        updateHeaderQuote(last.close, state.candles[0]?.open || last.open);
+        pane.activeBar = { ...last };
+        pane.lastLtp = last.close;
+        const first = pane.candles[0];
+        updatePaneQuote(pane, last.close, first ? first.open : last.open);
       }
 
-      recalculateVisibleVpvr();
-      if (statusEl) statusEl.textContent = `⚡ Live Feed Active · ${data.date || 'Today'} · ${state.candles.length} bars`;
+      recalculatePaneVPVR(pane);
     } catch (err) {
-      if (statusEl) statusEl.textContent = `Error: ${err.message}`;
+      console.warn(`Load pane ${pane.idx} error:`, err);
     }
   }
 
-  function updateEmaCrossBadge() {
-    const badge = $('ema-cross-badge');
-    const text = $('ema-cross-text');
-    if (!badge || !text || !state.ema9Data.length || !state.ema21Data.length) return;
+  function updatePaneQuote(pane, ltp, refPrice) {
+    const ltpEl = $(`p${pane.idx + 1}-ltp`);
+    const chgEl = $(`p${pane.idx + 1}-chg`);
+    if (!ltpEl) return;
 
-    const last9 = state.ema9Data[state.ema9Data.length - 1]?.value;
-    const last21 = state.ema21Data[state.ema21Data.length - 1]?.value;
+    const oldLtp = pane.lastLtp;
+    pane.lastLtp = ltp;
 
-    badge.classList.remove('bullish', 'bearish', 'neutral');
-    if (last9 > last21) {
-      badge.classList.add('bullish');
-      text.textContent = `EMA Cross: Bullish (9 > 21)`;
-    } else if (last9 < last21) {
-      badge.classList.add('bearish');
-      text.textContent = `EMA Cross: Bearish (9 < 21)`;
-    } else {
-      badge.classList.add('neutral');
-      text.textContent = `EMA Cross: Neutral`;
+    ltpEl.textContent = `₹${Number(ltp).toFixed(2)}`;
+
+    // Subtle tick flash animation
+    if (oldLtp != null && ltp !== oldLtp) {
+      ltpEl.classList.remove('flash-up', 'flash-down');
+      void ltpEl.offsetWidth; // trigger reflow
+      ltpEl.classList.add(ltp > oldLtp ? 'flash-up' : 'flash-down');
+      setTimeout(() => ltpEl.classList.remove('flash-up', 'flash-down'), 400);
     }
-  }
-
-  function updateHeaderQuote(ltp, refPrice) {
-    const ltpEl = $('chart-ltp');
-    const chgEl = $('chart-chg');
-    if (ltpEl) ltpEl.textContent = `₹${Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
     if (chgEl && refPrice > 0) {
       const diff = ltp - refPrice;
       const pct = (diff / refPrice) * 100;
       const isPos = diff >= 0;
-      chgEl.className = `quote-chg ${isPos ? 'pos' : 'neg'}`;
+      chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
       chgEl.textContent = `${isPos ? '+' : ''}${diff.toFixed(2)} (${isPos ? '+' : ''}${pct.toFixed(2)}%)`;
     }
+
+    // Sync to scalper window if this pane is currently active
+    if (pane.idx === activePaneIdx) {
+      const scLtp = $('sc-ltp');
+      const scChg = $('sc-chg');
+      if (scLtp) scLtp.textContent = Number(ltp).toFixed(2);
+      if (scChg && refPrice > 0) {
+        const diff = ltp - refPrice;
+        const pct = (diff / refPrice) * 100;
+        const isPos = diff >= 0;
+        scChg.className = `sc-chg ${isPos ? 'pos' : 'neg'}`;
+        scChg.textContent = `${isPos ? '▲ +' : '▼ '}${diff.toFixed(2)} (${pct.toFixed(2)}%)`;
+      }
+    }
   }
 
-  // --- Real-Time Tick Update ---
-  function pushTick(ltp) {
-    if (!candleSeries || !ltp || ltp <= 0) return;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const intervalSec = currentTf === '15s' ? 15 : (currentTf === '1m' ? 60 : (currentTf === '5m' ? 300 : (currentTf === '15m' ? 900 : 5)));
-    const bucketTime = Math.floor(nowSec / intervalSec) * intervalSec;
+  // --- Real-Time Fast Tick Polling Loop (Sub-Second 750ms) ---
+  function startRealtimeTickLoop() {
+    setInterval(async () => {
+      // Determine which panes are active in current layout
+      const visiblePanes = activeLayout === 1 ? [panes[0]] : (activeLayout === 2 ? [panes[0], panes[1]] : panes);
+      const items = visiblePanes.map(p => ({ symbol: p.sym, token: p.token }));
 
-    if (!state.activeBar || bucketTime > state.activeBar.time) {
-      state.activeBar = {
-        time: bucketTime,
-        open: ltp,
-        high: ltp,
-        low: ltp,
-        close: ltp,
-        volume: 10,
-      };
-    } else {
-      state.activeBar.high = Math.max(state.activeBar.high, ltp);
-      state.activeBar.low = Math.min(state.activeBar.low, ltp);
-      state.activeBar.close = ltp;
-      state.activeBar.volume += 10;
-    }
+      try {
+        const data = await api('/api/chart/live-quotes', {
+          method: 'POST',
+          body: JSON.stringify({ items }),
+        });
 
-    try {
-      candleSeries.update(state.activeBar);
-      updateHeaderQuote(ltp, state.candles[0]?.open || ltp);
-      if ($('leg-c')) $('leg-c').textContent = Number(ltp).toFixed(2);
-    } catch (_) {}
-  }
+        if (data.quotes && Array.isArray(data.quotes)) {
+          data.quotes.forEach(q => {
+            const pane = visiblePanes.find(p => p.sym === q.symbol);
+            if (!pane || !pane.candleSeries || !q.ltp) return;
 
-  // --- Event Listeners & Wiring ---
-  function setupEvents() {
-    // 1. Symbol Search
-    const symInput = $('chart-symbol-input');
-    const symApply = $('chart-symbol-apply');
+            const ltp = q.ltp;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const tfSec = pane.tf === '15s' ? 15 : (pane.tf === '1m' ? 60 : (pane.tf === '3m' ? 180 : (pane.tf === '5m' ? 300 : (pane.tf === '15m' ? 900 : 5))));
+            const bucketTime = Math.floor(nowSec / tfSec) * tfSec;
 
-    const doApplySym = () => {
-      const s = symInput.value.trim().toUpperCase();
-      if (!s) return;
-      currentSymbol = s;
-      currentToken = '';
-      $('leg-symbol').textContent = s;
-      document.querySelectorAll('.sym-chip').forEach(c => c.classList.toggle('active', c.dataset.sym === s));
-      loadChartData();
-    };
+            if (!pane.activeBar || bucketTime > pane.activeBar.time) {
+              pane.activeBar = {
+                time: bucketTime,
+                open: ltp,
+                high: ltp,
+                low: ltp,
+                close: ltp,
+                volume: 10,
+              };
+            } else {
+              pane.activeBar.high = Math.max(pane.activeBar.high, ltp);
+              pane.activeBar.low = Math.min(pane.activeBar.low, ltp);
+              pane.activeBar.close = ltp;
+              pane.activeBar.volume += 10;
+            }
 
-    if (symApply) symApply.addEventListener('click', doApplySym);
-    if (symInput) symInput.addEventListener('keydown', e => { if (e.key === 'Enter') doApplySym(); });
-
-    // 2. Symbol Quick Chips
-    document.querySelectorAll('.sym-chip').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.sym-chip').forEach(c => c.classList.remove('active'));
-        btn.classList.add('active');
-        currentSymbol = btn.dataset.sym;
-        currentToken = '';
-        if (symInput) symInput.value = currentSymbol;
-        $('leg-symbol').textContent = currentSymbol;
-        loadChartData();
-      });
-    });
-
-    // 3. Timeframe Buttons
-    document.querySelectorAll('.tf-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentTf = btn.dataset.tf || '5s';
-        loadChartData();
-      });
-    });
-
-    // 4. Indicator Toggles
-    const tEma9 = $('toggle-ema9');
-    if (tEma9) {
-      tEma9.addEventListener('click', () => {
-        state.showEma9 = !state.showEma9;
-        tEma9.classList.toggle('active', state.showEma9);
-        if (ema9Series) ema9Series.setData(state.showEma9 ? state.ema9Data : []);
-      });
-    }
-
-    const tEma21 = $('toggle-ema21');
-    if (tEma21) {
-      tEma21.addEventListener('click', () => {
-        state.showEma21 = !state.showEma21;
-        tEma21.classList.toggle('active', state.showEma21);
-        if (ema21Series) ema21Series.setData(state.showEma21 ? state.ema21Data : []);
-      });
-    }
-
-    const tVpvr = $('toggle-vpvr');
-    if (tVpvr) {
-      tVpvr.addEventListener('click', () => {
-        state.showVpvr = !state.showVpvr;
-        tVpvr.classList.toggle('active', state.showVpvr);
-        if (state.showVpvr) recalculateVisibleVpvr();
-        else if (vpvrCtx && vpvrCanvas) vpvrCtx.clearRect(0, 0, vpvrCanvas.width, vpvrCanvas.height);
-      });
-    }
-
-    const tVol = $('toggle-vol');
-    if (tVol) {
-      tVol.addEventListener('click', () => {
-        state.showVol = !state.showVol;
-        tVol.classList.toggle('active', state.showVol);
-        if (volumeSeries) volumeSeries.setData(state.showVol ? state.volumes : []);
-      });
-    }
-
-    // 5. Scalper 1-Click Buy
-    const buyBtn = $('chart-buy-btn');
-    if (buyBtn) {
-      buyBtn.addEventListener('click', async () => {
-        const lots = parseInt($('chart-lots-input')?.value || '1', 10);
-        buyBtn.disabled = true;
-        buyBtn.textContent = 'Buying…';
-        try {
-          const res = await api('/api/orders', {
-            method: 'POST',
-            body: JSON.stringify({
-              symbol: currentSymbol,
-              exchange_segment: state.isOption ? 'nse_fo' : 'nse_cm',
-              product: 'MIS',
-              side: 'BUY',
-              lots: lots,
-              lot_size: state.isOption ? 65 : 1,
-              order_type: 'MKT',
-              price: 0,
-              trigger_price: 0,
-              validity: 'DAY',
-            })
+            try {
+              pane.candleSeries.update(pane.activeBar);
+              updatePaneQuote(pane, ltp, pane.candles[0]?.open || ltp);
+            } catch (_) {}
           });
-          toast(`⚡ Order Dispatched: BUY ${lots} lots of ${currentSymbol}`, 3500);
-        } catch (err) {
-          toast(`Order Failed: ${err.message}`, 4000);
-        } finally {
-          buyBtn.disabled = false;
-          buyBtn.textContent = 'BUY MKT';
         }
-      });
-    }
+      } catch (_) {}
+    }, 750);
 
-    // 6. Panic Exit All
-    const exitBtn = $('chart-exit-btn');
-    if (exitBtn) {
-      exitBtn.addEventListener('click', async () => {
-        exitBtn.disabled = true;
-        exitBtn.textContent = 'Exiting…';
-        try {
-          const res = await api('/api/positions/exit-all', { method: 'POST' });
-          toast(`🚨 Panic Exit Dispatched: ${res.closed_positions || 0} positions closed!`, 4000);
-        } catch (err) {
-          toast(`Exit Failed: ${err.message}`, 4000);
-        } finally {
-          exitBtn.disabled = false;
-          exitBtn.textContent = 'EXIT ALL';
-        }
-      });
-    }
-
-    // 7. Upstox Token Dialog
-    const tokenBtn = $('chart-token-btn');
-    const tokenModal = $('token-modal');
-    const closeTokenBtn = $('close-token-modal');
-    const saveTokenBtn = $('save-token-submit');
-
-    if (tokenBtn && tokenModal) {
-      tokenBtn.addEventListener('click', async () => {
-        tokenModal.classList.remove('hidden');
-        const stPill = $('token-status-pill');
-        try {
-          const res = await api('/api/chart/upstox-status');
-          if (stPill) {
-            stPill.textContent = res.token_configured ? `Status: Active (${res.token_preview})` : 'Status: Token Not Configured';
-            stPill.style.color = res.token_configured ? '#34d399' : '#f87171';
-          }
-        } catch (_) {}
-      });
-    }
-
-    if (closeTokenBtn && tokenModal) {
-      closeTokenBtn.addEventListener('click', () => tokenModal.classList.add('hidden'));
-    }
-
-    if (saveTokenBtn) {
-      saveTokenBtn.addEventListener('click', async () => {
-        const input = $('upstox-token-val');
-        const token = input ? input.value.trim() : '';
-        try {
-          const res = await api('/api/chart/upstox-token', {
-            method: 'POST',
-            body: JSON.stringify({ token })
-          });
-          toast(res.message || 'Token saved!', 3000);
-          if (tokenModal) tokenModal.classList.add('hidden');
-          loadChartData();
-        } catch (err) {
-          toast(`Error: ${err.message}`, 3500);
-        }
-      });
-    }
-  }
-
-  // Initial Boot
-  window.addEventListener('DOMContentLoaded', () => {
-    $('chart-symbol-input').value = currentSymbol;
-    $('leg-symbol').textContent = currentSymbol;
-    document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === currentTf));
-    document.querySelectorAll('.sym-chip').forEach(c => c.classList.toggle('active', c.dataset.sym === currentSymbol));
-
-    initChart();
-    setupEvents();
-    loadChartData();
-
-    // Background Poll for Latest Quote / Intraday Refresh every 3 seconds
+    // Indices Ticker & Position P&L update every 2.5 seconds
     setInterval(async () => {
       try {
-        const data = await api('/api/indices/quotes');
-        if (data.indices && Array.isArray(data.indices)) {
-          const match = data.indices.find(x => x.name === currentSymbol);
-          if (match && match.ltp) {
-            pushTick(match.ltp);
+        const idxData = await api('/api/indices/quotes');
+        if (idxData.indices && Array.isArray(idxData.indices)) {
+          idxData.indices.forEach(idx => {
+            const elId = `ticker-${idx.name.toLowerCase().replace(/[^a-z]/g, '')}`;
+            const el = $(elId);
+            if (el) {
+              const ltpEl = el.querySelector('.t-ltp');
+              const chgEl = el.querySelector('.t-chg');
+              if (ltpEl) ltpEl.textContent = Number(idx.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+              if (chgEl) {
+                const isPos = idx.change >= 0;
+                chgEl.className = `t-chg ${isPos ? 'pos' : 'neg'}`;
+                chgEl.textContent = `${isPos ? '+' : ''}${idx.change_percent.toFixed(2)}%`;
+              }
+            }
+          });
+        }
+
+        // Positions P&L
+        const posData = await api('/api/positions');
+        if (posData && Array.isArray(posData.positions)) {
+          const totalPnl = posData.total_pnl || 0;
+          const pnlEl = $('header-pnl-val');
+          if (pnlEl) {
+            const isPos = totalPnl >= 0;
+            pnlEl.className = `pnl-val ${isPos ? 'pos' : 'neg'}`;
+            pnlEl.textContent = `${isPos ? '+' : ''}₹${totalPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          }
+
+          // Scalper active position info
+          const activeSym = panes[activePaneIdx]?.sym;
+          const matchPos = posData.positions.find(p => p.symbol === activeSym);
+          const posSection = $('sc-position-section');
+          const posBadge = $('sc-pos-badge');
+          const posSum = $('sc-pos-summary');
+          const posPnl = $('sc-pos-pnl');
+
+          if (matchPos && Math.abs(matchPos.quantity || 0) > 0) {
+            if (posSection) posSection.style.display = 'flex';
+            if (posBadge) {
+              posBadge.textContent = `${matchPos.quantity > 0 ? 'LONG' : 'SHORT'} ${Math.abs(matchPos.quantity)} Qty`;
+              posBadge.style.color = '#38bdf8';
+            }
+            if (posSum) {
+              posSum.textContent = `Position: ${Math.abs(matchPos.quantity)} units @ Avg ₹${Number(matchPos.avg_price || 0).toFixed(2)}`;
+            }
+            if (posPnl) {
+              const pnl = matchPos.pnl || 0;
+              const isP = pnl >= 0;
+              posPnl.className = `sc-pnl-pill ${isP ? 'pos' : 'neg'}`;
+              posPnl.textContent = `P&L: ${isP ? '+' : ''}₹${pnl.toFixed(2)}`;
+            }
+          } else {
+            if (posBadge) {
+              posBadge.textContent = 'No Position';
+              posBadge.style.color = 'var(--text-dim)';
+            }
           }
         }
       } catch (_) {}
-    }, 2500);
+    }, 2000);
+  }
+
+  // --- Scalper Form & Window Controls ---
+  function updateScalperContract(pane) {
+    const title = $('sc-contract-title');
+    if (title) title.textContent = pane.sym;
+    const ltpEl = $('sc-ltp');
+    if (ltpEl && pane.lastLtp) ltpEl.textContent = Number(pane.lastLtp).toFixed(2);
+  }
+
+  function setupScalperDrag() {
+    const box = $('floating-scalper');
+    const handle = $('scalper-drag-handle');
+    if (!box || !handle) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initLeft = 0;
+    let initTop = 0;
+
+    handle.addEventListener('mousedown', e => {
+      if (e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = box.getBoundingClientRect();
+      initLeft = rect.left;
+      initTop = rect.top;
+      box.style.bottom = 'auto';
+      box.style.right = 'auto';
+      box.style.left = `${initLeft}px`;
+      box.style.top = `${initTop}px`;
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      box.style.left = `${Math.max(10, Math.min(window.innerWidth - box.offsetWidth - 10, initLeft + dx))}px`;
+      box.style.top = `${Math.max(40, Math.min(window.innerHeight - box.offsetHeight - 10, initTop + dy))}px`;
+    });
+
+    window.addEventListener('mouseup', () => { isDragging = false; });
+
+    // Close button
+    const closeBtn = $('scalper-close-btn');
+    if (closeBtn) closeBtn.addEventListener('click', () => box.classList.add('hidden'));
+
+    // Toggle button in toolbar
+    const toggleBtn = $('scalper-mode-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        box.classList.toggle('hidden');
+        toggleBtn.classList.toggle('active', !box.classList.contains('hidden'));
+      });
+    }
+
+    // Lots Stepper
+    const lotInput = $('sc-lots');
+    $('lot-up')?.addEventListener('click', () => {
+      if (lotInput) lotInput.value = Math.min(200, parseInt(lotInput.value || '1', 10) + 1);
+    });
+    $('lot-down')?.addEventListener('click', () => {
+      if (lotInput) lotInput.value = Math.max(1, parseInt(lotInput.value || '1', 10) - 1);
+    });
+
+    // Buy & Sell execution
+    const executeOrder = async (side) => {
+      const pane = panes[activePaneIdx];
+      const lots = parseInt(lotInput?.value || '1', 10);
+      try {
+        await api('/api/orders', {
+          method: 'POST',
+          body: JSON.stringify({
+            symbol: pane.sym,
+            exchange_segment: pane.isOption ? 'nse_fo' : 'nse_cm',
+            product: 'MIS',
+            side: side,
+            lots: lots,
+            lot_size: pane.isOption ? 65 : 1,
+            order_type: 'MKT',
+            price: 0,
+            trigger_price: 0,
+            validity: 'DAY',
+          }),
+        });
+        toast(`⚡ Dispatched ${side} ${lots} lot(s) for ${pane.sym}`, 3000);
+      } catch (err) {
+        toast(`Order Failed: ${err.message}`, 4000);
+      }
+    };
+
+    $('sc-buy-btn')?.addEventListener('click', () => executeOrder('BUY'));
+    $('sc-sell-btn')?.addEventListener('click', () => executeOrder('SELL'));
+    $('tb-quick-buy')?.addEventListener('click', () => executeOrder('BUY'));
+    $('tb-quick-sell')?.addEventListener('click', () => executeOrder('SELL'));
+
+    // Quick Action 1: Trail SL to Cost
+    $('sc-trail-cost-btn')?.addEventListener('click', async () => {
+      const pane = panes[activePaneIdx];
+      try {
+        const res = await api('/api/positions/trail-to-cost', {
+          method: 'POST',
+          body: JSON.stringify({ symbol: pane.sym }),
+        });
+        toast(res.message || '🛡️ SL Trailed to Cost Price!', 3500);
+      } catch (err) {
+        toast(`Trail SL Failed: ${err.message}`, 4000);
+      }
+    });
+
+    // Quick Action 2: Exit 50%
+    $('sc-exit-50-btn')?.addEventListener('click', async () => {
+      const pane = panes[activePaneIdx];
+      try {
+        const res = await api('/api/positions/exit-partial', {
+          method: 'POST',
+          body: JSON.stringify({ symbol: pane.sym, percentage: 50 }),
+        });
+        toast(res.message || '½ Closed 50% Position!', 3500);
+      } catch (err) {
+        toast(`Exit 50% Failed: ${err.message}`, 4000);
+      }
+    });
+
+    // Quick Action 3: Exit All
+    $('sc-exit-all-btn')?.addEventListener('click', async () => {
+      try {
+        const res = await api('/api/positions/exit-all', { method: 'POST' });
+        toast(`🚨 Emergency Exit Complete: ${res.closed_positions || 0} positions closed!`, 4000);
+      } catch (err) {
+        toast(`Exit All Failed: ${err.message}`, 4000);
+      }
+    });
+  }
+
+  // --- Smart Search with Autocomplete Dropdown ---
+  function setupSearch() {
+    const input = $('symbol-search-input');
+    const dropdown = $('search-dropdown');
+    if (!input || !dropdown) return;
+
+    let debounceTimer = null;
+
+    input.addEventListener('input', () => {
+      const q = input.value.trim();
+      clearTimeout(debounceTimer);
+      if (!q) {
+        dropdown.classList.add('hidden');
+        return;
+      }
+
+      debounceTimer = setTimeout(async () => {
+        try {
+          const res = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
+          if (res.results && res.results.length) {
+            renderSearchDropdown(res.results);
+          } else {
+            dropdown.innerHTML = `<div class="search-item"><span class="item-name">No matches for "${q}"</span></div>`;
+            dropdown.classList.remove('hidden');
+          }
+        } catch (_) {}
+      }, 150);
+    });
+
+    function renderSearchDropdown(items) {
+      dropdown.innerHTML = items.map(item => `
+        <div class="search-item" data-sym="${item.symbol}" data-token="${item.token || ''}">
+          <div class="item-left">
+            <span class="item-sym">${item.symbol}</span>
+            <span class="item-name">${item.name || ''}</span>
+          </div>
+          <span class="item-badge ${item.type.toLowerCase().includes('ce') ? 'ce' : (item.type.toLowerCase().includes('pe') ? 'pe' : 'index')}">${item.type}</span>
+        </div>
+      `).join('');
+
+      dropdown.classList.remove('hidden');
+
+      dropdown.querySelectorAll('.search-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const sym = el.dataset.sym;
+          const tok = el.dataset.token;
+          if (sym) {
+            const pane = panes[activePaneIdx];
+            pane.sym = sym;
+            pane.token = tok;
+            pane.isOption = /(CE|PE)$/i.test(sym);
+            loadPaneData(pane);
+            updateScalperContract(pane);
+            input.value = sym;
+            dropdown.classList.add('hidden');
+          }
+        });
+      });
+    }
+
+    // Hide dropdown on click outside
+    document.addEventListener('click', e => {
+      if (!e.target.closest('#search-wrap')) {
+        dropdown.classList.add('hidden');
+      }
+    });
+  }
+
+  // --- Layout Selector & Event Handlers ---
+  function setupLayoutSelector() {
+    const btn = $('layout-toggle-btn');
+    const dropdown = $('layout-dropdown');
+    const stage = $('chart-stage');
+    const label = $('current-layout-label');
+
+    btn?.addEventListener('click', () => dropdown?.classList.toggle('hidden'));
+
+    dropdown?.querySelectorAll('.layout-opt').forEach(opt => {
+      opt.addEventListener('click', () => {
+        dropdown.querySelectorAll('.layout-opt').forEach(o => o.classList.remove('active'));
+        opt.classList.add('active');
+        const l = parseInt(opt.dataset.layout, 10);
+        activeLayout = l;
+        dropdown.classList.add('hidden');
+
+        stage.className = `chart-stage layout-${l}`;
+        if (label) {
+          label.textContent = l === 1 ? '1 CHART' : (l === 2 ? '2 CHARTS' : '3 CHARTS');
+        }
+
+        // Trigger resize on visible charts
+        setTimeout(handleResize, 100);
+      });
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.layout-selector-wrap')) {
+        dropdown?.classList.add('hidden');
+      }
+    });
+  }
+
+  // --- Timeframe Buttons ---
+  function setupTimeframeButtons() {
+    document.querySelectorAll('.tf-pill').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tf-pill').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tf = btn.dataset.tf;
+        const pane = panes[activePaneIdx];
+        if (pane) {
+          pane.tf = tf;
+          loadPaneData(pane);
+        }
+      });
+    });
+  }
+
+  // --- Indicator Toggles ---
+  function setupIndicatorToggles() {
+    const toggleInd = (btnId, key, updater) => {
+      const btn = $(btnId);
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        indicators[key] = !indicators[key];
+        btn.classList.toggle('active', indicators[key]);
+        panes.forEach(p => updater(p, indicators[key]));
+      });
+    };
+
+    toggleInd('btn-ind-ema9', 'showEma9', (p, val) => {
+      const ema9 = calculateEMA(p.candles, 9);
+      if (p.ema9Series) p.ema9Series.setData(val ? ema9 : []);
+    });
+
+    toggleInd('btn-ind-ema21', 'showEma21', (p, val) => {
+      const ema21 = calculateEMA(p.candles, 21);
+      if (p.ema21Series) p.ema21Series.setData(val ? ema21 : []);
+    });
+
+    toggleInd('btn-ind-vol', 'showVol', (p, val) => {
+      if (p.volSeries) p.volSeries.setData(val ? p.volumes : []);
+    });
+
+    toggleInd('btn-ind-vpvr', 'showVpvr', (p, val) => {
+      if (val) recalculatePaneVPVR(p);
+      else if (p.vpvrCtx && p.vpvrCanvas) p.vpvrCtx.clearRect(0, 0, p.vpvrCanvas.width, p.vpvrCanvas.height);
+    });
+  }
+
+  // --- Window Resize Handler ---
+  function handleResize() {
+    panes.forEach(pane => {
+      const container = $(`p${pane.idx + 1}-chart-container`);
+      if (pane.chart && container) {
+        pane.chart.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
+      }
+      if (pane.vpvrCanvas && container) {
+        pane.vpvrCanvas.width = 160;
+        pane.vpvrCanvas.height = container.clientHeight;
+        drawPaneVPVR(pane);
+      }
+    });
+  }
+
+  // --- Upstox Token Dialog ---
+  function setupTokenModal() {
+    const tokenBtn = $('chart-token-btn');
+    const modal = $('token-modal');
+    const closeBtn = $('close-token-modal');
+    const saveBtn = $('save-token-submit');
+
+    tokenBtn?.addEventListener('click', async () => {
+      modal?.classList.remove('hidden');
+      const pill = $('token-status-pill');
+      try {
+        const res = await api('/api/chart/upstox-status');
+        if (pill) {
+          pill.textContent = res.token_configured ? `Active (${res.token_preview})` : 'Not Configured (Free Historical Active)';
+          pill.style.color = res.token_configured ? '#34d399' : '#94a3b8';
+        }
+      } catch (_) {}
+    });
+
+    closeBtn?.addEventListener('click', () => modal?.classList.add('hidden'));
+
+    saveBtn?.addEventListener('click', async () => {
+      const val = $('upstox-token-val')?.value.trim() || '';
+      try {
+        const res = await api('/api/chart/upstox-token', {
+          method: 'POST',
+          body: JSON.stringify({ token: val }),
+        });
+        toast(res.message || 'Upstox Token Saved!', 3000);
+        modal?.classList.add('hidden');
+        panes.forEach(p => loadPaneData(p));
+      } catch (err) {
+        toast(`Error: ${err.message}`, 4000);
+      }
+    });
+  }
+
+  // --- Initial Boot ---
+  window.addEventListener('DOMContentLoaded', () => {
+    panes.forEach(pane => {
+      initChartPane(pane);
+    });
+
+    setupLayoutSelector();
+    setupTimeframeButtons();
+    setupIndicatorToggles();
+    setupSearch();
+    setupScalperDrag();
+    setupTokenModal();
+
+    window.addEventListener('resize', handleResize);
+
+    // Initial Data Fetch for all panes
+    panes.forEach(pane => {
+      loadPaneData(pane);
+    });
+
+    setActivePane(activePaneIdx);
+
+    // Start fast real-time tick loop
+    startRealtimeTickLoop();
   });
 })();
