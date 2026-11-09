@@ -279,7 +279,7 @@
       },
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.08)',
-        scaleMargins: { top: 0.08, bottom: 0.18 },
+        scaleMargins: { top: 0.06, bottom: 0.16 },
         autoScale: true,
       },
       timeScale: {
@@ -288,9 +288,10 @@
         secondsVisible: false,
         visible: true,
         fixLeftEdge: false,
-        fixRightEdge: false, // CRITICAL: allows smooth right scrolling
-        rightOffset: 16,     // CRITICAL: gives 16 bars of empty space on right!
-        barSpacing: 9,       // comfortable candle spacing
+        fixRightEdge: false,
+        rightOffset: 12,
+        barSpacing: 9,
+        minBarSpacing: 0.5,
       },
     });
 
@@ -303,12 +304,16 @@
       wickDownColor: '#f23645',
     });
 
-    // 2. Volume Series
+    // 2. Volume Series (Dedicated 'vol' scale confined to bottom 12% so it never overlaps candles)
     pane.volSeries = pane.chart.addHistogramSeries({
-      color: '#334155',
       priceFormat: { type: 'volume' },
-      priceScaleId: '',
-      scaleMargins: { top: 0.82, bottom: 0 },
+      priceScaleId: 'vol',
+    });
+    pane.chart.priceScale('vol').applyOptions({
+      scaleMargins: {
+        top: 0.88,
+        bottom: 0,
+      },
     });
 
     // 3. EMA 9 (Blue)
@@ -404,12 +409,19 @@
 
       pane.volumes = data.candles.map(c => ({
         time: c.time,
-        value: c.volume || 100,
+        value: c.volume || 0,
         color: c.close >= c.open ? 'rgba(8, 153, 129, 0.4)' : 'rgba(242, 54, 69, 0.4)',
       }));
 
       pane.candleSeries.setData(pane.candles);
-      pane.volSeries.setData(indicators.showVol ? pane.volumes : []);
+
+      // Spot indices (NIFTY, BANKNIFTY, etc.) do NOT have real traded cash volume; hide volume for them
+      const isIndex = !pane.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(pane.sym);
+      if (isIndex || !indicators.showVol) {
+        pane.volSeries.setData([]);
+      } else {
+        pane.volSeries.setData(pane.volumes);
+      }
 
       const ema9 = calculateEMA(pane.candles, 9);
       const ema21 = calculateEMA(pane.candles, 21);
@@ -418,8 +430,9 @@
 
       // Fit content and restore spacious right margin
       pane.chart.timeScale().applyOptions({
-        rightOffset: 16,
+        rightOffset: 12,
         barSpacing: 9,
+        minBarSpacing: 0.5,
       });
 
       const last = pane.candles[pane.candles.length - 1];
@@ -477,10 +490,122 @@
     }
   }
 
-  // --- Real-Time Fast Tick Polling Loop (Sub-Second 750ms) ---
+  // --- Real-Time Market Data Engine (Ultra-Low Latency WebSocket + 350ms Fallback Polling) ---
+  let openPositions = [];
+  let allPositions = [];
+  let quoteWs = null;
+  let wsConnected = false;
+
+  function handleTick(q) {
+    if (!q || !q.symbol || !q.ltp) return;
+    const pane = panes.find(p => p.sym === q.symbol);
+    if (!pane || !pane.candleSeries) return;
+
+    const ltp = q.ltp;
+    pane.lastLtp = ltp;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const tfSec = pane.tf === '15s' ? 15 : (pane.tf === '1m' ? 60 : (pane.tf === '3m' ? 180 : (pane.tf === '5m' ? 300 : (pane.tf === '15m' ? 900 : (pane.tf === '1h' ? 3600 : (pane.tf === '1d' ? 86400 : 5))))));
+    const bucketTime = Math.floor(nowSec / tfSec) * tfSec;
+
+    if (!pane.activeBar || bucketTime > pane.activeBar.time) {
+      pane.activeBar = {
+        time: bucketTime,
+        open: ltp,
+        high: ltp,
+        low: ltp,
+        close: ltp,
+        volume: 10,
+      };
+    } else {
+      pane.activeBar.high = Math.max(pane.activeBar.high, ltp);
+      pane.activeBar.low = Math.min(pane.activeBar.low, ltp);
+      pane.activeBar.close = ltp;
+      pane.activeBar.volume += 10;
+    }
+
+    try {
+      pane.candleSeries.update(pane.activeBar);
+    } catch (_) {}
+
+    updatePaneQuote(pane, ltp, pane.candles[0]?.open || ltp);
+
+    // If this symbol has an open position, dynamically update running P&L with every tick
+    const matchPos = openPositions.find(p => p.symbol === q.symbol);
+    if (matchPos && pane.idx === activePaneIdx) {
+      const livePnl = (ltp - matchPos.avg_price) * matchPos.quantity;
+      const posPnl = $('sc-pos-pnl');
+      const scalperPnlEl = $('val-scalper-pnl');
+      const isPos = livePnl >= 0;
+      if (posPnl) {
+        posPnl.className = `sc-pnl-pill ${isPos ? 'pos' : 'neg'}`;
+        posPnl.textContent = `P&L: ${isPos ? '+' : ''}₹${livePnl.toFixed(2)}`;
+      }
+      if (scalperPnlEl) {
+        scalperPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
+        scalperPnlEl.textContent = `${isPos ? '+' : ''}₹${livePnl.toFixed(2)}`;
+      }
+    }
+  }
+
+  function getWsEndpoint() {
+    const loc = window.location;
+    if (loc.hostname === 'localhost' || loc.hostname === '127.0.0.1') {
+      return `ws://${loc.hostname}:8000/api/ws/quotes`;
+    }
+    if (loc.hostname === '92.4.87.82') {
+      return `ws://92.4.87.82:8000/api/ws/quotes`;
+    }
+    // Remote or Vercel
+    return `ws://92.4.87.82:8000/api/ws/quotes`;
+  }
+
+  function initWebSocket() {
+    try {
+      const wsUrl = getWsEndpoint();
+      quoteWs = new WebSocket(wsUrl);
+
+      quoteWs.onopen = () => {
+        wsConnected = true;
+        syncWebSocketSubscriptions();
+      };
+
+      quoteWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'ticks' && Array.isArray(msg.quotes)) {
+            msg.quotes.forEach(handleTick);
+          }
+        } catch (_) {}
+      };
+
+      quoteWs.onclose = () => {
+        wsConnected = false;
+        setTimeout(initWebSocket, 3000);
+      };
+
+      quoteWs.onerror = () => {
+        wsConnected = false;
+        try { quoteWs.close(); } catch (_) {}
+      };
+    } catch (_) {
+      wsConnected = false;
+    }
+  }
+
+  function syncWebSocketSubscriptions() {
+    if (!quoteWs || quoteWs.readyState !== WebSocket.OPEN) return;
+    const visiblePanes = activeLayout === 1 ? [panes[0]] : (activeLayout === 2 ? [panes[0], panes[1]] : panes);
+    const syms = visiblePanes.map(p => p.sym).filter(Boolean);
+    quoteWs.send(JSON.stringify({ action: 'subscribe', symbols: syms }));
+  }
+
+  // Fallback high-frequency polling when WS is offline
   function startRealtimeTickLoop() {
+    initWebSocket();
+
     setInterval(async () => {
-      // Determine which panes are active in current layout
+      if (wsConnected) return; // WebSocket is handling sub-30ms ticks
       const visiblePanes = activeLayout === 1 ? [panes[0]] : (activeLayout === 2 ? [panes[0], panes[1]] : panes);
       const items = visiblePanes.map(p => ({ symbol: p.sym, token: p.token }));
 
@@ -491,41 +616,12 @@
         });
 
         if (data.quotes && Array.isArray(data.quotes)) {
-          data.quotes.forEach(q => {
-            const pane = visiblePanes.find(p => p.sym === q.symbol);
-            if (!pane || !pane.candleSeries || !q.ltp) return;
-
-            const ltp = q.ltp;
-            const nowSec = Math.floor(Date.now() / 1000);
-            const tfSec = pane.tf === '15s' ? 15 : (pane.tf === '1m' ? 60 : (pane.tf === '3m' ? 180 : (pane.tf === '5m' ? 300 : (pane.tf === '15m' ? 900 : 5))));
-            const bucketTime = Math.floor(nowSec / tfSec) * tfSec;
-
-            if (!pane.activeBar || bucketTime > pane.activeBar.time) {
-              pane.activeBar = {
-                time: bucketTime,
-                open: ltp,
-                high: ltp,
-                low: ltp,
-                close: ltp,
-                volume: 10,
-              };
-            } else {
-              pane.activeBar.high = Math.max(pane.activeBar.high, ltp);
-              pane.activeBar.low = Math.min(pane.activeBar.low, ltp);
-              pane.activeBar.close = ltp;
-              pane.activeBar.volume += 10;
-            }
-
-            try {
-              pane.candleSeries.update(pane.activeBar);
-              updatePaneQuote(pane, ltp, pane.candles[0]?.open || ltp);
-            } catch (_) {}
-          });
+          data.quotes.forEach(handleTick);
         }
       } catch (_) {}
-    }, 750);
+    }, 350);
 
-    // Indices Ticker & Position P&L update every 2.5 seconds
+    // Indices Ticker & Position P&L update every 2.0 seconds
     setInterval(async () => {
       try {
         const idxData = await api('/api/indices/quotes');
@@ -546,49 +642,112 @@
           });
         }
 
-        // Positions P&L
-        const posData = await api('/api/positions');
-        if (posData && Array.isArray(posData.positions)) {
-          const totalPnl = posData.total_pnl || 0;
-          const pnlEl = $('header-pnl-val');
-          if (pnlEl) {
-            const isPos = totalPnl >= 0;
-            pnlEl.className = `pnl-val ${isPos ? 'pos' : 'neg'}`;
-            pnlEl.textContent = `${isPos ? '+' : ''}₹${totalPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-          }
-
-          // Scalper active position info
-          const activeSym = panes[activePaneIdx]?.sym;
-          const matchPos = posData.positions.find(p => p.symbol === activeSym);
-          const posSection = $('sc-position-section');
-          const posBadge = $('sc-pos-badge');
-          const posSum = $('sc-pos-summary');
-          const posPnl = $('sc-pos-pnl');
-
-          if (matchPos && Math.abs(matchPos.quantity || 0) > 0) {
-            if (posSection) posSection.style.display = 'flex';
-            if (posBadge) {
-              posBadge.textContent = `${matchPos.quantity > 0 ? 'LONG' : 'SHORT'} ${Math.abs(matchPos.quantity)} Qty`;
-              posBadge.style.color = '#38bdf8';
-            }
-            if (posSum) {
-              posSum.textContent = `Position: ${Math.abs(matchPos.quantity)} units @ Avg ₹${Number(matchPos.avg_price || 0).toFixed(2)}`;
-            }
-            if (posPnl) {
-              const pnl = matchPos.pnl || 0;
-              const isP = pnl >= 0;
-              posPnl.className = `sc-pnl-pill ${isP ? 'pos' : 'neg'}`;
-              posPnl.textContent = `P&L: ${isP ? '+' : ''}₹${pnl.toFixed(2)}`;
-            }
-          } else {
-            if (posBadge) {
-              posBadge.textContent = 'No Position';
-              posBadge.style.color = 'var(--text-dim)';
-            }
-          }
-        }
+        await updatePositionsReport();
       } catch (_) {}
     }, 2000);
+  }
+
+  // --- Real-time Positions, Charges, & Scalper Position Sync ---
+  async function updatePositionsReport() {
+    try {
+      const posData = await api('/api/positions?tab=open');
+      allPositions = posData.positions || [];
+      openPositions = allPositions.filter(p => Math.abs(p.quantity || 0) > 0);
+
+      // 1. POSITIONS P&L (Gross MTM + Realized)
+      const grossPnl = posData.total_today_pnl != null ? posData.total_today_pnl : (posData.total_pnl || 0);
+      const posPnlEl = $('val-pos-pnl');
+      if (posPnlEl) {
+        const isPos = grossPnl >= 0;
+        posPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
+        posPnlEl.textContent = `${isPos ? '+' : ''}₹${grossPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+
+      // 2. NET P&L (After Charges)
+      const netPnl = posData.total_net_pnl != null ? posData.total_net_pnl : (posData.net_pnl || grossPnl);
+      const netPnlEl = $('val-net-pnl');
+      if (netPnlEl) {
+        const isPos = netPnl >= 0;
+        netPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
+        netPnlEl.textContent = `${isPos ? '+' : ''}₹${netPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+
+      // 3. Open Positions Alert Pill in Header
+      const alertBtn = $('open-positions-alert');
+      const alertText = $('open-pos-alert-text');
+      if (alertBtn && alertText) {
+        if (openPositions.length > 0) {
+          alertBtn.classList.remove('hidden');
+          alertText.textContent = `${openPositions.length} Open Position${openPositions.length > 1 ? 's' : ''}`;
+        } else {
+          alertBtn.classList.add('hidden');
+        }
+      }
+
+      // 4. Sync Scalper Position
+      syncScalperPosition();
+    } catch (err) {
+      console.warn('Failed to update positions:', err);
+    }
+  }
+
+  function syncScalperPosition() {
+    const activePane = panes[activePaneIdx];
+    const activeSym = activePane?.sym;
+    const matchPos = openPositions.find(p => p.symbol === activeSym);
+
+    const posSection = $('sc-position-section');
+    const posBadge = $('sc-pos-badge');
+    const posSum = $('sc-pos-summary');
+    const posPnl = $('sc-pos-pnl');
+    const scalperPnlEl = $('val-scalper-pnl');
+
+    if (matchPos && Math.abs(matchPos.quantity || 0) > 0) {
+      if (posSection) posSection.classList.remove('hidden');
+      if (posBadge) {
+        posBadge.textContent = `${matchPos.quantity > 0 ? 'LONG' : 'SHORT'} ${Math.abs(matchPos.quantity)} Qty`;
+        posBadge.style.color = matchPos.quantity > 0 ? '#34d399' : '#f87171';
+      }
+      const lotSize = matchPos.lot_size || (activePane.isOption ? 65 : 1);
+      const lots = Math.max(1, Math.round(Math.abs(matchPos.quantity) / lotSize));
+      if (posSum) {
+        posSum.textContent = `Position: ${Math.abs(matchPos.quantity)} units (${lots} Lot) @ Avg ₹${Number(matchPos.avg_price || 0).toFixed(2)}`;
+      }
+      const ltp = activePane.lastLtp || matchPos.ltp || matchPos.avg_price;
+      const runningPnl = (ltp - matchPos.avg_price) * matchPos.quantity;
+      if (posPnl) {
+        const isPos = runningPnl >= 0;
+        posPnl.className = `sc-pnl-pill ${isPos ? 'pos' : 'neg'}`;
+        posPnl.textContent = `P&L: ${isPos ? '+' : ''}₹${runningPnl.toFixed(2)}`;
+      }
+      if (scalperPnlEl) {
+        const isPos = runningPnl >= 0;
+        scalperPnlEl.className = `pnl-num ${isPos ? 'pos' : 'neg'}`;
+        scalperPnlEl.textContent = `${isPos ? '+' : ''}₹${runningPnl.toFixed(2)}`;
+      }
+    } else {
+      if (scalperPnlEl) {
+        scalperPnlEl.className = 'pnl-num';
+        scalperPnlEl.textContent = '₹0.00';
+      }
+      if (posBadge) {
+        posBadge.textContent = 'No Position';
+        posBadge.style.color = 'var(--text-muted)';
+      }
+
+      if (openPositions.length > 0) {
+        if (posSection) posSection.classList.remove('hidden');
+        if (posSum) {
+          posSum.textContent = `${openPositions.length} other position(s) active in account`;
+        }
+        if (posPnl) {
+          posPnl.className = 'sc-pnl-pill';
+          posPnl.textContent = 'Click Alert to View';
+        }
+      } else {
+        if (posSection) posSection.classList.add('hidden');
+      }
+    }
   }
 
   // --- Scalper Form & Window Controls ---
@@ -597,6 +756,7 @@
     if (title) title.textContent = pane.sym;
     const ltpEl = $('sc-ltp');
     if (ltpEl && pane.lastLtp) ltpEl.textContent = Number(pane.lastLtp).toFixed(2);
+    syncScalperPosition();
   }
 
   function setupScalperDrag() {
@@ -647,6 +807,33 @@
       });
     }
 
+    // Header Open Positions Alert Pill: Click to switch to most losing position!
+    $('open-positions-alert')?.addEventListener('click', () => {
+      if (!openPositions || !openPositions.length) return;
+
+      // Sort ascending by P&L (worst losing / lowest P&L position first)
+      const sorted = [...openPositions].sort((a, b) => (a.pnl || 0) - (b.pnl || 0));
+      const target = sorted[0];
+
+      const pane = panes[activePaneIdx];
+      pane.sym = target.symbol;
+      pane.token = target.token || '';
+      pane.isOption = /(CE|PE)$/i.test(target.symbol);
+      loadPaneData(pane);
+      updateScalperContract(pane);
+      syncWebSocketSubscriptions();
+
+      const searchIn = $('symbol-search-input');
+      if (searchIn) searchIn.value = target.symbol;
+
+      if (openPositions.length === 1) {
+        toast(`📍 Switched to active position: ${target.symbol} (P&L: ${target.pnl >= 0 ? '+' : ''}₹${Number(target.pnl || 0).toFixed(2)})`, 3500);
+      } else {
+        const others = openPositions.length - 1;
+        toast(`⚠️ Priority: Opened lowest P&L position ${target.symbol} (${target.pnl >= 0 ? '+' : ''}₹${Number(target.pnl || 0).toFixed(2)}). ${others} other open position${others > 1 ? 's' : ''} running — manage or click Exit All!`, 5500);
+      }
+    });
+
     // Lots Stepper
     const lotInput = $('sc-lots');
     $('lot-up')?.addEventListener('click', () => {
@@ -677,6 +864,7 @@
           }),
         });
         toast(`⚡ Dispatched ${side} ${lots} lot(s) for ${pane.sym}`, 3000);
+        setTimeout(updatePositionsReport, 600);
       } catch (err) {
         toast(`Order Failed: ${err.message}`, 4000);
       }
@@ -690,12 +878,14 @@
     // Quick Action 1: Trail SL to Cost
     $('sc-trail-cost-btn')?.addEventListener('click', async () => {
       const pane = panes[activePaneIdx];
+      const matchPos = openPositions.find(p => p.symbol === pane.sym) || openPositions[0];
+      const sym = matchPos ? matchPos.symbol : pane.sym;
       try {
         const res = await api('/api/positions/trail-to-cost', {
           method: 'POST',
-          body: JSON.stringify({ symbol: pane.sym }),
+          body: JSON.stringify({ symbol: sym }),
         });
-        toast(res.message || '🛡️ SL Trailed to Cost Price!', 3500);
+        toast(res.message || `🛡️ SL Trailed to Cost Price for ${sym}!`, 3500);
       } catch (err) {
         toast(`Trail SL Failed: ${err.message}`, 4000);
       }
@@ -704,14 +894,28 @@
     // Quick Action 2: Exit 50%
     $('sc-exit-50-btn')?.addEventListener('click', async () => {
       const pane = panes[activePaneIdx];
+      const matchPos = openPositions.find(p => p.symbol === pane.sym) || openPositions[0];
+      const sym = matchPos ? matchPos.symbol : pane.sym;
       try {
         const res = await api('/api/positions/exit-partial', {
           method: 'POST',
-          body: JSON.stringify({ symbol: pane.sym, percentage: 50 }),
+          body: JSON.stringify({ symbol: sym, percentage: 50 }),
         });
-        toast(res.message || '½ Closed 50% Position!', 3500);
+        toast(res.message || `½ Closed 50% Position for ${sym}!`, 3500);
+        setTimeout(updatePositionsReport, 600);
       } catch (err) {
         toast(`Exit 50% Failed: ${err.message}`, 4000);
+      }
+    });
+
+    // Quick Action 3: Exit All
+    $('sc-exit-all-btn')?.addEventListener('click', async () => {
+      try {
+        const res = await api('/api/positions/exit-all', { method: 'POST' });
+        toast(`🚨 Emergency Exit Complete: ${res.closed_positions || 0} positions closed!`, 4000);
+        setTimeout(updatePositionsReport, 600);
+      } catch (err) {
+        toast(`Exit All Failed: ${err.message}`, 4000);
       }
     });
 
@@ -779,6 +983,7 @@
             pane.isOption = /(CE|PE)$/i.test(sym);
             loadPaneData(pane);
             updateScalperContract(pane);
+            syncWebSocketSubscriptions();
             input.value = sym;
             dropdown.classList.add('hidden');
           }
@@ -815,6 +1020,7 @@
         if (label) {
           label.textContent = l === 1 ? '1 CHART' : (l === 2 ? '2 CHARTS' : '3 CHARTS');
         }
+        syncWebSocketSubscriptions();
 
         // Trigger resize on visible charts
         setTimeout(handleResize, 100);
@@ -867,7 +1073,8 @@
     });
 
     toggleInd('btn-ind-vol', 'showVol', (p, val) => {
-      if (p.volSeries) p.volSeries.setData(val ? p.volumes : []);
+      const isIndex = !p.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(p.sym);
+      if (p.volSeries) p.volSeries.setData((val && !isIndex) ? p.volumes : []);
     });
 
     toggleInd('btn-ind-vpvr', 'showVpvr', (p, val) => {

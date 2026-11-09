@@ -7,6 +7,7 @@ import re
 import secrets
 import sqlite3
 import time
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -543,8 +545,43 @@ _cached_indices_time: str = ""
 
 
 def _fetch_all_indices(client: Any = None) -> list[dict[str, Any]]:
-    """Batch fetch live index quotes from Kotak Neo with in-memory caching."""
+    """Batch fetch live index quotes from Upstox Analytics (or Kotak fallback) with in-memory caching."""
     global _cached_indices, _cached_indices_time
+
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    if up_token:
+        try:
+            up_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty%2050,NSE_INDEX|Nifty%20Bank,BSE_INDEX|SENSEX"
+            with httpx.Client(timeout=2.0) as uclient:
+                uresp = uclient.get(up_url, headers={"Authorization": f"Bearer {up_token}", "Accept": "application/json"})
+                if uresp.status_code == 200:
+                    udata = uresp.json().get("data", {})
+                    results = []
+                    name_keys = [
+                        ("NIFTY", "NSE_INDEX:Nifty 50"),
+                        ("BANK NIFTY", "NSE_INDEX:Nifty Bank"),
+                        ("SENSEX", "BSE_INDEX:SENSEX"),
+                    ]
+                    for name, k in name_keys:
+                        q_obj = udata.get(k, {})
+                        ltp = float(q_obj.get("last_price") or 0.0)
+                        diff = float(q_obj.get("net_change") or 0.0)
+                        ohlc = q_obj.get("ohlc", {}) or {}
+                        c_open = float(ohlc.get("open") or ltp)
+                        pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                        results.append({
+                            "name": name,
+                            "ltp": ltp,
+                            "change": diff,
+                            "change_percent": pct,
+                        })
+                    if results and all(r["ltp"] > 0 for r in results):
+                        _cached_indices = results
+                        _cached_indices_time = utc_now()
+                        return results
+        except Exception:
+            pass
+
     consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
     if not consumer_key:
         return _cached_indices
@@ -1920,8 +1957,61 @@ def chart_candles(
     if up_token:
         upstox_headers["Authorization"] = f"Bearer {up_token}"
 
-    # 1. If requesting live/today's chart, first attempt intraday endpoint
-    if not selected_date:
+    interval_clean = interval.lower().strip()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. Daily candles (fetch 1 full year of daily bars directly from Upstox)
+    if interval_clean in {"1d", "day", "daily"}:
+        from_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(day_url, headers=upstox_headers)
+                if resp.status_code == 200:
+                    raw = resp.json().get("data", {}).get("candles", [])
+                    if raw:
+                        raw.reverse()
+                        res_candles = [{
+                            "time": int(datetime.fromisoformat(c[0]).timestamp()),
+                            "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]),
+                            "volume": int(float(c[5]))
+                        } for c in raw]
+                        seen = {}
+                        for c in res_candles:
+                            seen[c["time"]] = c
+                        res_candles = [seen[t] for t in sorted(seen.keys())]
+                        return {
+                            "ok": True,
+                            "symbol": symbol,
+                            "instrument_key": inst_key,
+                            "is_option": is_option,
+                            "interval": interval,
+                            "date": today_str,
+                            "candles": res_candles,
+                        }
+        except Exception:
+            pass
+
+    # 2. Intraday Multi-Day Candles (past 7 days for 1m-15m, past 30 days for 1h)
+    days_back = 30 if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} else 7)
+    from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+    # First attempt multi-day range historical candle
+    range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(range_url, headers=upstox_headers)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                if raw:
+                    raw.reverse()
+                    candles_1m = raw
+                    selected_date = today_str
+    except Exception:
+        pass
+
+    # If range had no data (e.g. market hours today), supplement with live intraday endpoint
+    if not candles_1m or interval_clean in {"5s", "15s"}:
         intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
         try:
             with httpx.Client(timeout=4.0) as client:
@@ -1931,19 +2021,22 @@ def chart_candles(
                     raw = payload.get("data", {}).get("candles", [])
                     if raw:
                         raw.reverse()
-                        candles_1m = raw
-                        selected_date = datetime.now().strftime("%Y-%m-%d")
+                        if not candles_1m:
+                            candles_1m = raw
+                            selected_date = today_str
+                        else:
+                            # Merge intraday to end of multi-day
+                            last_hist_t = candles_1m[-1][0] if candles_1m else ""
+                            for c in raw:
+                                if c[0] > last_hist_t:
+                                    candles_1m.append(c)
         except Exception:
             pass
 
-    # 2. If intraday had no data (market closed / off-hours / weekend), fallback to recent completed daily sessions
+    # Fallback to single daily sessions if needed
     if not candles_1m:
-        if selected_date:
-            dates_to_try = [selected_date]
-        else:
-            d = datetime.now()
-            dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-
+        d = datetime.now()
+        dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
         for try_date in dates_to_try:
             url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
             try:
@@ -1986,6 +2079,12 @@ def chart_candles(
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=375)
     else:
         res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=5)
+
+    if res_candles:
+        seen = {}
+        for c in res_candles:
+            seen[c["time"]] = c
+        res_candles = [seen[t] for t in sorted(seen.keys())]
 
     return {
         "ok": True,
@@ -2041,6 +2140,42 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
     if up_token:
         upstox_headers["Authorization"] = f"Bearer {up_token}"
+        try:
+            quote_url_str = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={quote_url(inst_key)}"
+            with httpx.Client(timeout=1.5) as client:
+                resp = client.get(quote_url_str, headers=upstox_headers)
+                if resp.status_code == 200:
+                    payload = resp.json().get("data", {})
+                    # Find matching item in payload
+                    q_item = payload.get(inst_key) or payload.get(inst_key.replace("|", ":")) or next(iter(payload.values()), None)
+                    if q_item:
+                        ltp = float(q_item.get("last_price") or 0.0)
+                        ohlc = q_item.get("ohlc", {}) or {}
+                        c_open = float(ohlc.get("open") or ltp)
+                        c_high = float(ohlc.get("high") or ltp)
+                        c_low = float(ohlc.get("low") or ltp)
+                        c_close = ltp
+                        c_vol = int(float(q_item.get("volume") or 0))
+                        diff = float(q_item.get("net_change") or round(ltp - c_open, 2))
+                        pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                        res = {
+                            "ok": True,
+                            "symbol": sym,
+                            "token": tok,
+                            "ltp": ltp,
+                            "open": c_open,
+                            "high": c_high,
+                            "low": c_low,
+                            "close": c_close,
+                            "volume": c_vol,
+                            "change": diff,
+                            "change_percent": pct,
+                            "time": int(now),
+                        }
+                        _live_quote_cache[cache_key] = (now, res)
+                        return res
+        except Exception:
+            pass
 
     try:
         intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
@@ -2109,12 +2244,160 @@ class LiveQuotesBatchPayload(BaseModel):
 
 @app.post("/api/chart/live-quotes")
 def live_quotes_batch(payload: LiveQuotesBatchPayload):
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    if up_token and payload.items:
+        try:
+            inst_keys = []
+            sym_key_map = {}
+            for item in payload.items[:6]:
+                sym = str(item.get("symbol") or "NIFTY")
+                tok = str(item.get("token") or "")
+                k, _ = _resolve_upstox_instrument(sym, token=tok)
+                inst_keys.append(k)
+                sym_key_map[k] = (sym, tok)
+                sym_key_map[k.replace("|", ":")] = (sym, tok)
+
+            encoded_keys = ",".join(inst_keys)
+            batch_url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={quote_url(encoded_keys, safe='|,')}"
+            headers = {"Authorization": f"Bearer {up_token}", "Accept": "application/json"}
+            with httpx.Client(timeout=2.0) as client:
+                resp = client.get(batch_url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    results = []
+                    now_t = int(time.time())
+                    for raw_key, q_item in data.items():
+                        mapping = sym_key_map.get(raw_key) or sym_key_map.get(raw_key.replace(":", "|"))
+                        if not mapping:
+                            continue
+                        sym, tok = mapping
+                        ltp = float(q_item.get("last_price") or 0.0)
+                        ohlc = q_item.get("ohlc", {}) or {}
+                        c_open = float(ohlc.get("open") or ltp)
+                        c_high = float(ohlc.get("high") or ltp)
+                        c_low = float(ohlc.get("low") or ltp)
+                        c_close = ltp
+                        c_vol = int(float(q_item.get("volume") or 0))
+                        diff = float(q_item.get("net_change") or round(ltp - c_open, 2))
+                        pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                        res = {
+                            "ok": True,
+                            "symbol": sym,
+                            "token": tok,
+                            "ltp": ltp,
+                            "open": c_open,
+                            "high": c_high,
+                            "low": c_low,
+                            "close": c_close,
+                            "volume": c_vol,
+                            "change": diff,
+                            "change_percent": pct,
+                            "time": now_t,
+                        }
+                        _live_quote_cache[f"{sym}_{tok}"] = (time.time(), res)
+                        results.append(res)
+                    if results:
+                        return {"ok": True, "quotes": results, "time": utc_now()}
+        except Exception:
+            pass
+
+    # Fallback to per-item resolution
     results = []
     for item in payload.items[:6]:
         sym = str(item.get("symbol") or "NIFTY")
         tok = str(item.get("token") or "")
         results.append(_get_live_quote_data(sym, tok))
     return {"ok": True, "quotes": results, "time": utc_now()}
+
+
+@app.websocket("/api/ws/quotes")
+async def ws_quotes_stream(websocket: WebSocket):
+    await websocket.accept()
+    subscribed_items: list[dict[str, Any]] = []
+
+    async def receiver():
+        nonlocal subscribed_items
+        try:
+            while True:
+                msg = await websocket.receive_json()
+                if isinstance(msg, dict) and "items" in msg:
+                    subscribed_items = msg["items"]
+        except Exception:
+            pass
+
+    async def sender():
+        up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+        upstox_headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json"}
+        if up_token:
+            upstox_headers["Authorization"] = f"Bearer {up_token}"
+
+        while True:
+            await asyncio.sleep(0.25)
+            if not subscribed_items:
+                continue
+
+            try:
+                inst_keys = []
+                sym_map = {}
+                for it in subscribed_items[:6]:
+                    sym = str(it.get("symbol") or "NIFTY")
+                    tok = str(it.get("token") or "")
+                    k, _ = _resolve_upstox_instrument(sym, token=tok)
+                    inst_keys.append(k)
+                    sym_map[k] = (sym, tok)
+                    sym_map[k.replace("|", ":")] = (sym, tok)
+
+                if not inst_keys:
+                    continue
+
+                encoded_keys = ",".join(inst_keys)
+                url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={quote_url(encoded_keys, safe='|,')}"
+                async with httpx.AsyncClient(timeout=1.2) as client:
+                    resp = await client.get(url, headers=upstox_headers)
+                    if resp.status_code == 200:
+                        payload = resp.json().get("data", {})
+                        ticks = []
+                        now_t = int(time.time())
+                        for k, quote_obj in payload.items():
+                            mapping = sym_map.get(k) or sym_map.get(k.replace(":", "|"))
+                            if not mapping:
+                                continue
+                            sym, tok = mapping
+                            ltp = float(quote_obj.get("last_price") or 0.0)
+                            ohlc = quote_obj.get("ohlc", {}) or {}
+                            c_open = float(ohlc.get("open") or ltp)
+                            c_high = float(ohlc.get("high") or ltp)
+                            c_low = float(ohlc.get("low") or ltp)
+                            c_close = ltp
+                            c_vol = int(float(quote_obj.get("volume") or 0))
+                            diff = float(quote_obj.get("net_change") or round(ltp - c_open, 2))
+                            pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                            ticks.append({
+                                "symbol": sym,
+                                "token": tok,
+                                "ltp": ltp,
+                                "open": c_open,
+                                "high": c_high,
+                                "low": c_low,
+                                "close": c_close,
+                                "volume": c_vol,
+                                "change": diff,
+                                "change_percent": pct,
+                                "time": now_t,
+                            })
+                        if ticks:
+                            await websocket.send_json({"type": "ticks", "quotes": ticks, "timestamp": now_t})
+            except Exception:
+                pass
+
+    try:
+        rec_task = asyncio.create_task(receiver())
+        send_task = asyncio.create_task(sender())
+        done, pending = await asyncio.wait([rec_task, send_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+    except Exception:
+        pass
 
 
 @app.get("/api/chart/search")

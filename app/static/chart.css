@@ -122,29 +122,90 @@ body.neo-chart-body {
 .ticker-item .t-chg.pos { color: var(--bull); }
 .ticker-item .t-chg.neg { color: var(--bear); }
 
-.pnl-header-badge {
+/* Utility */
+.hidden { display: none !important; }
+
+/* Open Positions Alert Pill in Header */
+.open-pos-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  font: 700 11px var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  animation: pulse-border 2s infinite ease-in-out;
+}
+.open-pos-pill:hover {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: #ef4444;
+  color: #fff;
+  transform: translateY(-1px);
+}
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.75); }
+}
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.35); }
+  50% { border-color: rgba(239, 68, 68, 0.85); }
+}
+
+/* 3-Box P&L Container in Topbar */
+.pnl-header-container {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-  font-family: var(--font-mono);
+}
+
+.pnl-box {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   background: rgba(255, 255, 255, 0.04);
-  padding: 3px 8px;
-  border-radius: 4px;
   border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 3px 8px;
+  min-width: 96px;
+  height: 32px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.pnl-box:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
 }
 
-.pnl-header-badge .pnl-lbl {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.pnl-header-badge .pnl-val {
-  font-size: 12px;
+.pnl-sub {
+  font-size: 8px;
   font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  line-height: 1;
+  margin-bottom: 2px;
 }
 
-.pnl-header-badge .pnl-val.pos { color: var(--bull); }
-.pnl-header-badge .pnl-val.neg { color: var(--bear); }
+.pnl-num {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #e2e8f0;
+}
+.pnl-num.pos { color: var(--bull); }
+.pnl-num.neg { color: var(--bear); }
 
 .terminal-back-btn {
   font-size: 11.5px;

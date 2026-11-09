@@ -39,10 +39,28 @@
     </div>
 
     <div class="topbar-right">
-      <div class="pnl-header-badge" id="header-pnl-badge">
-        <span class="pnl-lbl">Profit/Loss</span>
-        <span class="pnl-val pos" id="header-pnl-val">+₹0.00</span>
+      <!-- Active Open Positions Alert Pill (Click to open most losing position) -->
+      <button id="open-positions-alert" class="open-pos-pill hidden" type="button" title="Click to open running position chart">
+        <span class="pulse-dot"></span>
+        <span id="open-pos-alert-text">0 Open Positions</span>
+      </button>
+
+      <!-- 3 P&L Boxes (Positions Gross P&L, Net P&L After Charges, Contract Scalper P&L) -->
+      <div class="pnl-header-container">
+        <div class="pnl-box" id="box-pos-pnl" title="Kotak Neo Realized + MTM Positions P&L (Gross)">
+          <span class="pnl-sub">POSITIONS P&L</span>
+          <span class="pnl-num" id="val-pos-pnl">—</span>
+        </div>
+        <div class="pnl-box" id="box-net-pnl" title="Net P&L after estimated charges">
+          <span class="pnl-sub">NET (AFTER CHARGES)</span>
+          <span class="pnl-num" id="val-net-pnl">—</span>
+        </div>
+        <div class="pnl-box" id="box-scalper-pnl" title="Active Contract Running P&L">
+          <span class="pnl-sub">CONTRACT P&L</span>
+          <span class="pnl-num" id="val-scalper-pnl">₹0.00</span>
+        </div>
       </div>
+
       <div class="v-sep"></div>
       <button id="chart-token-btn" class="icon-action-btn" type="button" title="Upstox API Token">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
@@ -235,13 +253,13 @@
         <button id="sc-sell-btn" class="sc-btn sc-sell" type="button">Sell</button>
       </div>
 
-      <!-- Active Position & Quick Action Controls -->
-      <div id="sc-position-section" class="sc-position-section">
+      <!-- Active Position & Quick Action Controls (Only shown when a position is running!) -->
+      <div id="sc-position-section" class="sc-position-section hidden">
         <div class="sc-pos-info">
-          <span id="sc-pos-summary">Position: 65 units (1 Lot) @ Avg ₹80.00</span>
-          <span id="sc-pos-pnl" class="sc-pnl-pill pos">P&L: +₹162.50</span>
+          <span id="sc-pos-summary">No Open Position</span>
+          <span id="sc-pos-pnl" class="sc-pnl-pill">—</span>
         </div>
-        <div class="sc-quick-actions">
+        <div class="sc-quick-actions" id="sc-quick-actions">
           <button id="sc-trail-cost-btn" class="action-pill trail-btn" type="button" title="Trail Stop Loss to Cost (Breakeven)">
             🛡️ TRAIL SL TO COST
           </button>
