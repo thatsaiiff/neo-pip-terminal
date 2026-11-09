@@ -1081,3 +1081,320 @@ body.neo-chart-body {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* --- Option Chain Topbar Button --- */
+.opt-chain-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.opt-chain-btn:hover {
+  background: #2563eb;
+  color: #fff;
+  border-color: #3b82f6;
+}
+
+/* --- TradingView Indicators Dropdown Menu --- */
+.indicators-wrap {
+  position: relative;
+}
+
+.fx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.fx-btn .fx-icon {
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.indicators-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 240px;
+  background: #181d27;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  padding: 8px 0;
+  z-index: 100;
+}
+
+.ind-menu-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 4px 12px 6px;
+  letter-spacing: 0.5px;
+}
+
+.ind-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.ind-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.ind-menu-item input[type="checkbox"] {
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.ind-menu-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+.dot-ind.cyan { background-color: #06b6d4; }
+.dot-ind.purple { background-color: #a855f7; }
+.dot-ind.green { background-color: #10b981; }
+.dot-ind.gray { background-color: #94a3b8; }
+
+/* --- Option Chain Modal --- */
+.oc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.oc-modal-card {
+  background: #141721;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  width: 880px;
+  max-width: 95vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.oc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: #1a1e2b;
+}
+
+.oc-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.oc-underlying-selector {
+  display: flex;
+  background: #0f1219;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 2px;
+}
+
+.oc-und-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: 700 11px var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.oc-und-btn.active {
+  background: #2563eb;
+  color: #fff;
+}
+
+.oc-spot-badge {
+  font: 700 11.5px var(--font-mono);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.oc-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oc-expiry-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.oc-expiry-select {
+  background: #0f1219;
+  border: 1px solid var(--border-subtle);
+  color: #fff;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: 600 11.5px var(--font-mono);
+  cursor: pointer;
+}
+
+.oc-table-container {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 64vh;
+}
+
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.oc-main-header th {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.th-call-header {
+  background: rgba(8, 153, 129, 0.15);
+  color: #34d399;
+  text-align: center;
+}
+.th-strike-header {
+  background: #1e222d;
+  color: #f1f5f9;
+  text-align: center;
+  width: 90px;
+}
+.th-put-header {
+  background: rgba(242, 54, 69, 0.15);
+  color: #f87171;
+  text-align: center;
+}
+
+.oc-col-header th {
+  background: #12151f;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.oc-col-header .col-ltp { font-weight: 700; color: #fff; }
+.oc-col-header .col-strike { text-align: center; }
+
+.oc-table tbody tr {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background 0.1s ease;
+}
+.oc-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.oc-table td {
+  padding: 5px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.oc-table td.cell-strike {
+  text-align: center;
+  font-weight: 700;
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ATM Highlight Row */
+.oc-table tr.atm-row {
+  background: rgba(250, 204, 21, 0.12) !important;
+  border-top: 1px solid rgba(250, 204, 21, 0.4);
+  border-bottom: 1px solid rgba(250, 204, 21, 0.4);
+}
+.oc-table tr.atm-row td.cell-strike {
+  color: #fde047;
+  font-weight: 800;
+}
+
+/* ITM Background subtle tints */
+.oc-table td.call-itm {
+  background: rgba(8, 153, 129, 0.05);
+}
+.oc-table td.put-itm {
+  background: rgba(242, 54, 69, 0.05);
+}
+
+.oc-ltp-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #fff;
+  font: 700 11.5px var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-block;
+  min-width: 52px;
+  text-align: right;
+}
+.oc-ltp-btn.call:hover {
+  background: #059669;
+  border-color: #10b981;
+  color: #fff;
+  transform: scale(1.05);
+}
+.oc-ltp-btn.put:hover {
+  background: #dc2626;
+  border-color: #ef4444;
+  color: #fff;
+  transform: scale(1.05);
+}
+
+.oc-loading {
+  text-align: center !important;
+  padding: 30px !important;
+  color: var(--text-muted);
+}
+
+.oc-footer {
+  padding: 8px 16px;
+  background: #11141e;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.oc-hint b { color: #60a5fa; }

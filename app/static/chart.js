@@ -5,12 +5,17 @@
 
   const $ = id => document.getElementById(id);
 
-  // Indicators State
+  // Indicators State (TradingView Technicals)
   const indicators = {
     showEma9: true,
     showEma21: true,
+    showVwap: true,
+    showSupertrend: true,
     showVpvr: true,
     showVol: true,
+    showBb: false,
+    showEma50: false,
+    showEma200: false,
   };
 
   let activeLayout = 3; // 1, 2, or 3
@@ -32,17 +37,25 @@
       volSeries: null,
       ema9Series: null,
       ema21Series: null,
+      ema50Series: null,
+      ema200Series: null,
+      vwapSeries: null,
+      supertrendSeries: null,
+      bbUpperSeries: null,
+      bbBasisSeries: null,
+      bbLowerSeries: null,
       vpvrCanvas: null,
       vpvrCtx: null,
       vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
       activeBar: null,
       lastLtp: null,
+      prevClose: null,
     },
     {
       idx: 1,
       id: 'pane-2',
-      sym: 'NIFTY26N0924900CE',
-      token: '40020',
+      sym: 'NIFTY26N0925000CE',
+      token: '',
       tf: '3m',
       isOption: true,
       candles: [],
@@ -52,17 +65,25 @@
       volSeries: null,
       ema9Series: null,
       ema21Series: null,
+      ema50Series: null,
+      ema200Series: null,
+      vwapSeries: null,
+      supertrendSeries: null,
+      bbUpperSeries: null,
+      bbBasisSeries: null,
+      bbLowerSeries: null,
       vpvrCanvas: null,
       vpvrCtx: null,
       vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
       activeBar: null,
       lastLtp: null,
+      prevClose: null,
     },
     {
       idx: 2,
       id: 'pane-3',
-      sym: 'NIFTY26N0924900PE',
-      token: '40021',
+      sym: 'NIFTY26N0925000PE',
+      token: '',
       tf: '1m',
       isOption: true,
       candles: [],
@@ -72,11 +93,19 @@
       volSeries: null,
       ema9Series: null,
       ema21Series: null,
+      ema50Series: null,
+      ema200Series: null,
+      vwapSeries: null,
+      supertrendSeries: null,
+      bbUpperSeries: null,
+      bbBasisSeries: null,
+      bbLowerSeries: null,
       vpvrCanvas: null,
       vpvrCtx: null,
       vpvrData: { bins: [], pocPrice: null, maxVol: 0 },
       activeBar: null,
       lastLtp: null,
+      prevClose: null,
     },
   ];
 
@@ -121,7 +150,7 @@
     return data;
   }
 
-  // --- Technical Math (EMA) ---
+  // --- Technical Math (TradingView Indicators) ---
   function calculateEMA(candles, period) {
     if (!candles || candles.length < period) return [];
     const k = 2 / (period + 1);
@@ -135,6 +164,109 @@
       result.push({ time: candles[i].time, value: Math.round(ema * 100) / 100 });
     }
     return result;
+  }
+
+  // Institutional Intraday VWAP (Volume Weighted Average Price)
+  function calculateVWAP(candles) {
+    if (!candles || !candles.length) return [];
+    const result = [];
+    let cumPV = 0;
+    let cumVol = 0;
+    let lastDay = '';
+
+    for (let i = 0; i < candles.length; i++) {
+      const c = candles[i];
+      const d = new Date(c.time * 1000);
+      const dayStr = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (dayStr !== lastDay) {
+        cumPV = 0;
+        cumVol = 0;
+        lastDay = dayStr;
+      }
+      const typPrice = (c.high + c.low + c.close) / 3;
+      const vol = c.volume || 100;
+      cumPV += typPrice * vol;
+      cumVol += vol;
+      const vwapVal = cumVol > 0 ? cumPV / cumVol : c.close;
+      result.push({ time: c.time, value: Math.round(vwapVal * 100) / 100 });
+    }
+    return result;
+  }
+
+  // Supertrend (10, 3)
+  function calculateSupertrend(candles, period = 10, multiplier = 3) {
+    if (!candles || candles.length < period) return [];
+    const tr = [candles[0].high - candles[0].low];
+    for (let i = 1; i < candles.length; i++) {
+      const h = candles[i].high;
+      const l = candles[i].low;
+      const prevC = candles[i - 1].close;
+      tr.push(Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC)));
+    }
+
+    const atr = [];
+    let sumTR = 0;
+    for (let i = 0; i < period; i++) sumTR += tr[i];
+    atr[period - 1] = sumTR / period;
+    for (let i = period; i < candles.length; i++) {
+      atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
+    }
+
+    const result = [];
+    let prevUpper = 0;
+    let prevLower = 0;
+    let inUptrend = true;
+
+    for (let i = period - 1; i < candles.length; i++) {
+      const c = candles[i];
+      const curATR = atr[i];
+      const hl2 = (c.high + c.low) / 2;
+      let basicUpper = hl2 + multiplier * curATR;
+      let basicLower = hl2 - multiplier * curATR;
+
+      let finalUpper = (basicUpper < prevUpper || (i > 0 && candles[i - 1].close > prevUpper)) ? basicUpper : prevUpper;
+      let finalLower = (basicLower > prevLower || (i > 0 && candles[i - 1].close < prevLower)) ? basicLower : prevLower;
+
+      if (inUptrend) {
+        if (c.close < finalLower) inUptrend = false;
+      } else {
+        if (c.close > finalUpper) inUptrend = true;
+      }
+
+      const stVal = inUptrend ? finalLower : finalUpper;
+      result.push({
+        time: c.time,
+        value: Math.round(stVal * 100) / 100,
+        color: inUptrend ? '#10b981' : '#ef4444',
+      });
+
+      prevUpper = finalUpper;
+      prevLower = finalLower;
+    }
+    return result;
+  }
+
+  // Bollinger Bands (20, 2)
+  function calculateBollingerBands(candles, period = 20, mult = 2) {
+    if (!candles || candles.length < period) return { upper: [], basis: [], lower: [] };
+    const upper = [];
+    const basis = [];
+    const lower = [];
+
+    for (let i = period - 1; i < candles.length; i++) {
+      let sum = 0;
+      for (let j = 0; j < period; j++) sum += candles[i - j].close;
+      const sma = sum / period;
+      let sumSq = 0;
+      for (let j = 0; j < period; j++) sumSq += Math.pow(candles[i - j].close - sma, 2);
+      const std = Math.sqrt(sumSq / period);
+
+      const time = candles[i].time;
+      basis.push({ time, value: Math.round(sma * 100) / 100 });
+      upper.push({ time, value: Math.round((sma + mult * std) * 100) / 100 });
+      lower.push({ time, value: Math.round((sma - mult * std) * 100) / 100 });
+    }
+    return { upper, basis, lower };
   }
 
   // --- VPVR Calculation & Rendering ---
@@ -332,6 +464,60 @@
       title: 'EMA 21',
     });
 
+    // 5. VWAP (Cyan)
+    pane.vwapSeries = pane.chart.addLineSeries({
+      color: '#06b6d4',
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: 'VWAP',
+    });
+
+    // 6. Supertrend (Green / Red Trend Line)
+    pane.supertrendSeries = pane.chart.addLineSeries({
+      color: '#10b981',
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: 'Supertrend',
+    });
+
+    // 7. EMA 50 (Purple)
+    pane.ema50Series = pane.chart.addLineSeries({
+      color: '#a855f7',
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      title: 'EMA 50',
+    });
+
+    // 8. EMA 200 (Yellow)
+    pane.ema200Series = pane.chart.addLineSeries({
+      color: '#eab308',
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: 'EMA 200',
+    });
+
+    // 9. Bollinger Bands (Upper, Basis, Lower)
+    pane.bbUpperSeries = pane.chart.addLineSeries({
+      color: '#38bdf8',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      title: 'BB Upper',
+    });
+    pane.bbBasisSeries = pane.chart.addLineSeries({
+      color: '#94a3b8',
+      lineWidth: 1,
+      priceLineVisible: false,
+      title: 'BB Basis',
+    });
+    pane.bbLowerSeries = pane.chart.addLineSeries({
+      color: '#38bdf8',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      title: 'BB Lower',
+    });
+
     // Crosshair info sync
     pane.chart.subscribeCrosshairMove(param => {
       if (!param || !param.time || !param.seriesData) return;
@@ -381,6 +567,65 @@
     }
   }
 
+  function applyPaneIndicators(pane) {
+    if (!pane.chart || !pane.candles || !pane.candles.length) return;
+
+    // 1. Volume Series
+    const isIndex = !pane.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(pane.sym);
+    if (pane.volSeries) {
+      pane.volSeries.setData((indicators.showVol && !isIndex) ? pane.volumes : []);
+    }
+
+    // 2. EMA 9 & 21
+    if (pane.ema9Series) {
+      const ema9 = calculateEMA(pane.candles, 9);
+      pane.ema9Series.setData(indicators.showEma9 ? ema9 : []);
+    }
+    if (pane.ema21Series) {
+      const ema21 = calculateEMA(pane.candles, 21);
+      pane.ema21Series.setData(indicators.showEma21 ? ema21 : []);
+    }
+
+    // 3. VWAP
+    if (pane.vwapSeries) {
+      const vwap = calculateVWAP(pane.candles);
+      pane.vwapSeries.setData(indicators.showVwap ? vwap : []);
+    }
+
+    // 4. Supertrend (10, 3)
+    if (pane.supertrendSeries) {
+      const st = calculateSupertrend(pane.candles, 10, 3);
+      pane.supertrendSeries.setData(indicators.showSupertrend ? st : []);
+    }
+
+    // 5. EMA 50 & 200
+    if (pane.ema50Series) {
+      const ema50 = calculateEMA(pane.candles, 50);
+      pane.ema50Series.setData(indicators.showEma50 ? ema50 : []);
+    }
+    if (pane.ema200Series) {
+      const ema200 = calculateEMA(pane.candles, 200);
+      pane.ema200Series.setData(indicators.showEma200 ? ema200 : []);
+    }
+
+    // 6. Bollinger Bands (20, 2)
+    if (pane.bbUpperSeries && pane.bbBasisSeries && pane.bbLowerSeries) {
+      if (indicators.showBb) {
+        const bb = calculateBollingerBands(pane.candles, 20, 2);
+        pane.bbUpperSeries.setData(bb.upper);
+        pane.bbBasisSeries.setData(bb.basis);
+        pane.bbLowerSeries.setData(bb.lower);
+      } else {
+        pane.bbUpperSeries.setData([]);
+        pane.bbBasisSeries.setData([]);
+        pane.bbLowerSeries.setData([]);
+      }
+    }
+
+    // 7. VPVR
+    recalculatePaneVPVR(pane);
+  }
+
   // --- Load Candles for a Pane ---
   async function loadPaneData(pane) {
     const ltpEl = $(`p${pane.idx + 1}-ltp`);
@@ -398,6 +643,9 @@
       if (!data.candles || !data.candles.length) return;
 
       pane.isOption = !!data.is_option;
+      pane.prevClose = data.prev_close || (data.candles[0]?.open || data.candles[0]?.close);
+      pane.lastLtp = data.ltp || (data.candles[data.candles.length - 1]?.close);
+
       pane.candles = data.candles.map(c => ({
         time: c.time,
         open: c.open,
@@ -415,19 +663,6 @@
 
       pane.candleSeries.setData(pane.candles);
 
-      // Spot indices (NIFTY, BANKNIFTY, etc.) do NOT have real traded cash volume; hide volume for them
-      const isIndex = !pane.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(pane.sym);
-      if (isIndex || !indicators.showVol) {
-        pane.volSeries.setData([]);
-      } else {
-        pane.volSeries.setData(pane.volumes);
-      }
-
-      const ema9 = calculateEMA(pane.candles, 9);
-      const ema21 = calculateEMA(pane.candles, 21);
-      pane.ema9Series.setData(indicators.showEma9 ? ema9 : []);
-      pane.ema21Series.setData(indicators.showEma21 ? ema21 : []);
-
       // Fit content and restore spacious right margin
       pane.chart.timeScale().applyOptions({
         rightOffset: 12,
@@ -438,18 +673,16 @@
       const last = pane.candles[pane.candles.length - 1];
       if (last) {
         pane.activeBar = { ...last };
-        pane.lastLtp = last.close;
-        const first = pane.candles[0];
-        updatePaneQuote(pane, last.close, first ? first.open : last.open);
       }
 
-      recalculatePaneVPVR(pane);
+      applyPaneIndicators(pane);
+      updatePaneQuote(pane, pane.lastLtp, pane.prevClose, data.change, data.change_percent);
     } catch (err) {
       console.warn(`Load pane ${pane.idx} error:`, err);
     }
   }
 
-  function updatePaneQuote(pane, ltp, refPrice) {
+  function updatePaneQuote(pane, ltp, refPrice, changePts, changePct) {
     const ltpEl = $(`p${pane.idx + 1}-ltp`);
     const chgEl = $(`p${pane.idx + 1}-chg`);
     if (!ltpEl) return;
@@ -467,9 +700,11 @@
       setTimeout(() => ltpEl.classList.remove('flash-up', 'flash-down'), 400);
     }
 
-    if (chgEl && refPrice > 0) {
-      const diff = ltp - refPrice;
-      const pct = (diff / refPrice) * 100;
+    const base = refPrice || pane.prevClose || ltp;
+    const diff = (changePts != null && !isNaN(changePts)) ? changePts : (ltp - base);
+    const pct = (changePct != null && !isNaN(changePct)) ? changePct : (base > 0 ? (diff / base) * 100 : 0);
+
+    if (chgEl) {
       const isPos = diff >= 0;
       chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
       chgEl.textContent = `${isPos ? '+' : ''}${diff.toFixed(2)} (${isPos ? '+' : ''}${pct.toFixed(2)}%)`;
@@ -480,9 +715,7 @@
       const scLtp = $('sc-ltp');
       const scChg = $('sc-chg');
       if (scLtp) scLtp.textContent = Number(ltp).toFixed(2);
-      if (scChg && refPrice > 0) {
-        const diff = ltp - refPrice;
-        const pct = (diff / refPrice) * 100;
+      if (scChg) {
         const isPos = diff >= 0;
         scChg.className = `sc-chg ${isPos ? 'pos' : 'neg'}`;
         scChg.textContent = `${isPos ? '▲ +' : '▼ '}${diff.toFixed(2)} (${pct.toFixed(2)}%)`;
@@ -503,6 +736,7 @@
 
     const ltp = q.ltp;
     pane.lastLtp = ltp;
+    if (q.prev_close) pane.prevClose = q.prev_close;
 
     const nowSec = Math.floor(Date.now() / 1000);
     const tfSec = pane.tf === '15s' ? 15 : (pane.tf === '1m' ? 60 : (pane.tf === '3m' ? 180 : (pane.tf === '5m' ? 300 : (pane.tf === '15m' ? 900 : (pane.tf === '1h' ? 3600 : (pane.tf === '1d' ? 86400 : 5))))));
@@ -528,7 +762,7 @@
       pane.candleSeries.update(pane.activeBar);
     } catch (_) {}
 
-    updatePaneQuote(pane, ltp, pane.candles[0]?.open || ltp);
+    updatePaneQuote(pane, ltp, pane.prevClose, q.change, q.change_percent);
 
     // If this symbol has an open position, dynamically update running P&L with every tick
     const matchPos = openPositions.find(p => p.symbol === q.symbol);
@@ -1050,37 +1284,177 @@
     });
   }
 
-  // --- Indicator Toggles ---
-  function setupIndicatorToggles() {
-    const toggleInd = (btnId, key, updater) => {
-      const btn = $(btnId);
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        indicators[key] = !indicators[key];
-        btn.classList.toggle('active', indicators[key]);
-        panes.forEach(p => updater(p, indicators[key]));
+  // --- TradingView Technical Indicators Dropdown Menu ---
+  function setupIndicatorsMenu() {
+    const btn = $('btn-indicators-dropdown');
+    const menu = $('indicators-menu');
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      menu.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.indicators-wrap')) {
+        menu.classList.add('hidden');
+      }
+    });
+
+    const bindChk = (id, key) => {
+      const el = $(id);
+      if (!el) return;
+      el.checked = !!indicators[key];
+      el.addEventListener('change', () => {
+        indicators[key] = el.checked;
+        panes.forEach(p => applyPaneIndicators(p));
       });
     };
 
-    toggleInd('btn-ind-ema9', 'showEma9', (p, val) => {
-      const ema9 = calculateEMA(p.candles, 9);
-      if (p.ema9Series) p.ema9Series.setData(val ? ema9 : []);
+    bindChk('chk-ind-ema9', 'showEma9');
+    bindChk('chk-ind-ema21', 'showEma21');
+    bindChk('chk-ind-vwap', 'showVwap');
+    bindChk('chk-ind-supertrend', 'showSupertrend');
+    bindChk('chk-ind-vpvr', 'showVpvr');
+    bindChk('chk-ind-vol', 'showVol');
+    bindChk('chk-ind-bb', 'showBb');
+    bindChk('chk-ind-ema50', 'showEma50');
+    bindChk('chk-ind-ema200', 'showEma200');
+  }
+
+  // --- Real-time Option Chain Modal (Matches Upstox TV) ---
+  let activeOcUnderlying = 'NIFTY';
+  let activeOcExpiry = '';
+
+  function setupOptionChainModal() {
+    const btn = $('btn-option-chain');
+    const modal = $('option-chain-modal');
+    const closeBtn = $('close-oc-modal');
+    const expirySelect = $('oc-expiry-select');
+    const tableBody = $('oc-table-body');
+    const spotBadge = $('oc-spot-badge');
+
+    if (!btn || !modal) return;
+
+    btn.addEventListener('click', () => {
+      const curSym = panes[activePaneIdx].sym.toUpperCase();
+      if (curSym.includes('BANK')) activeOcUnderlying = 'BANKNIFTY';
+      else if (curSym.includes('FIN')) activeOcUnderlying = 'FINNIFTY';
+      else if (curSym.includes('SENSEX')) activeOcUnderlying = 'SENSEX';
+      else activeOcUnderlying = 'NIFTY';
+
+      modal.classList.remove('hidden');
+      updateOcUnderlyingButtons();
+      loadOptionChainData();
     });
 
-    toggleInd('btn-ind-ema21', 'showEma21', (p, val) => {
-      const ema21 = calculateEMA(p.candles, 21);
-      if (p.ema21Series) p.ema21Series.setData(val ? ema21 : []);
+    closeBtn?.addEventListener('click', () => modal.classList.add('hidden'));
+
+    // Underlying tabs
+    modal.querySelectorAll('.oc-und-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        activeOcUnderlying = b.dataset.und;
+        activeOcExpiry = '';
+        updateOcUnderlyingButtons();
+        loadOptionChainData();
+      });
     });
 
-    toggleInd('btn-ind-vol', 'showVol', (p, val) => {
-      const isIndex = !p.isOption && /^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)/i.test(p.sym);
-      if (p.volSeries) p.volSeries.setData((val && !isIndex) ? p.volumes : []);
+    expirySelect?.addEventListener('change', () => {
+      activeOcExpiry = expirySelect.value;
+      loadOptionChainData();
     });
 
-    toggleInd('btn-ind-vpvr', 'showVpvr', (p, val) => {
-      if (val) recalculatePaneVPVR(p);
-      else if (p.vpvrCtx && p.vpvrCanvas) p.vpvrCtx.clearRect(0, 0, p.vpvrCanvas.width, p.vpvrCanvas.height);
-    });
+    function updateOcUnderlyingButtons() {
+      modal.querySelectorAll('.oc-und-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.und === activeOcUnderlying);
+      });
+    }
+
+    async function loadOptionChainData() {
+      if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" class="oc-loading">Fetching real-time option chain…</td></tr>';
+      try {
+        const query = `/api/chart/option-chain?symbol=${activeOcUnderlying}${activeOcExpiry ? `&expiry=${activeOcExpiry}` : ''}`;
+        const data = await api(query);
+
+        if (!data.ok || !data.rows || !data.rows.length) {
+          if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" class="oc-loading">No option strikes available for this expiry.</td></tr>';
+          return;
+        }
+
+        if (spotBadge) {
+          spotBadge.textContent = `Spot: ₹${Number(data.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        }
+
+        // Populate expiries dropdown if not populated or underlying changed
+        if (expirySelect && data.expiries && data.expiries.length) {
+          expirySelect.innerHTML = data.expiries.map(e => `<option value="${e}" ${e === data.selected_expiry ? 'selected' : ''}>${e}</option>`).join('');
+          activeOcExpiry = data.selected_expiry;
+        }
+
+        // Render strikes table
+        renderOptionChainTable(data.rows, data.spot_price);
+      } catch (err) {
+        if (tableBody) tableBody.innerHTML = `<tr class="oc-loading"><td colspan="7">Failed to load chain: ${err.message}</td></tr>`;
+      }
+    }
+
+    function renderOptionChainTable(rows, spotPrice) {
+      if (!tableBody) return;
+      tableBody.innerHTML = rows.map(r => {
+        const isATM = Math.abs(r.strike - spotPrice) <= 50;
+        const callITM = r.strike < spotPrice;
+        const putITM = r.strike > spotPrice;
+
+        const c = r.call || {};
+        const p = r.put || {};
+
+        return `
+          <tr class="${isATM ? 'atm-row' : ''}">
+            <td class="col-oi ${callITM ? 'call-itm' : ''}">${c.oi ? c.oi.toLocaleString() : '—'}</td>
+            <td class="col-vol ${callITM ? 'call-itm' : ''}">${c.volume ? c.volume.toLocaleString() : '—'}</td>
+            <td class="col-ltp ${callITM ? 'call-itm' : ''}">
+              <button type="button" class="oc-ltp-btn call" data-sym="${c.symbol}" data-key="${c.instrument_key}" data-ltp="${c.ltp}">
+                ₹${Number(c.ltp || 0).toFixed(2)}
+              </button>
+            </td>
+            <td class="cell-strike">${Number(r.strike).toFixed(0)}</td>
+            <td class="col-ltp ${putITM ? 'put-itm' : ''}">
+              <button type="button" class="oc-ltp-btn put" data-sym="${p.symbol}" data-key="${p.instrument_key}" data-ltp="${p.ltp}">
+                ₹${Number(p.ltp || 0).toFixed(2)}
+              </button>
+            </td>
+            <td class="col-vol ${putITM ? 'put-itm' : ''}">${p.volume ? p.volume.toLocaleString() : '—'}</td>
+            <td class="col-oi ${putITM ? 'put-itm' : ''}">${p.oi ? p.oi.toLocaleString() : '—'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      tableBody.querySelectorAll('.oc-ltp-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const sym = btn.dataset.sym;
+          const key = btn.dataset.key;
+          const ltp = btn.dataset.ltp;
+          if (!sym || !key) return;
+
+          const pane = panes[activePaneIdx];
+          pane.sym = sym;
+          pane.token = key;
+          pane.isOption = true;
+
+          const searchIn = $('symbol-search-input');
+          if (searchIn) searchIn.value = sym;
+
+          loadPaneData(pane);
+          updateScalperContract(pane);
+          syncWebSocketSubscriptions();
+
+          modal.classList.add('hidden');
+          toast(`⚡ Loaded ${sym} (₹${ltp}) on chart!`, 3500);
+        });
+      });
+    }
   }
 
   // --- Window Resize Handler ---
@@ -1146,7 +1520,8 @@
 
     setupLayoutSelector();
     setupTimeframeButtons();
-    setupIndicatorToggles();
+    setupIndicatorsMenu();
+    setupOptionChainModal();
     setupSearch();
     setupScalperDrag();
     setupTokenModal();

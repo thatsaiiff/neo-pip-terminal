@@ -1756,28 +1756,116 @@ UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
 }
 
 
+_option_contracts_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _get_upstox_option_contracts(underlying: str = "NIFTY") -> list[dict[str, Any]]:
+    global _option_contracts_cache
+    und = underlying.upper().strip()
+    if "BANK" in und:
+        und_key = "NSE_INDEX|Nifty Bank"
+        cache_key = "BANKNIFTY"
+    elif "SENSEX" in und:
+        und_key = "BSE_INDEX|SENSEX"
+        cache_key = "SENSEX"
+    elif "FIN" in und:
+        und_key = "NSE_INDEX|Nifty Fin Service"
+        cache_key = "FINNIFTY"
+    else:
+        und_key = "NSE_INDEX|Nifty 50"
+        cache_key = "NIFTY"
+
+    now = time.time()
+    if cache_key in _option_contracts_cache:
+        t_cache, cached = _option_contracts_cache[cache_key]
+        if now - t_cache < 900:  # 15 minutes cache
+            return cached
+
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    headers = {"Accept": "application/json"}
+    if up_token:
+        headers["Authorization"] = f"Bearer {up_token}"
+
+    url = f"https://api.upstox.com/v2/option/contract?instrument_key={quote_url(und_key)}"
+    try:
+        with httpx.Client(timeout=6.0) as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                if data:
+                    _option_contracts_cache[cache_key] = (now, data)
+                    return data
+    except Exception:
+        pass
+    return _option_contracts_cache.get(cache_key, (0, []))[1]
+
+
+def parse_option_sym(s: str) -> tuple[str, float, str] | None:
+    s_clean = s.upper().strip()
+    # 1. NSE format: e.g. NIFTY26N0925000CE or BANKNIFTY26N1352500PE
+    m = re.match(r"^([A-Z]+)\d{2}[A-Z0-9]{3}(\d{4,5})(CE|PE)$", s_clean)
+    if m:
+        return m.group(1), float(m.group(2)), m.group(3)
+    # 2. Space separated: e.g. NIFTY 25000 CE (09 NOV)
+    m2 = re.search(r"([A-Z]+)\s+(\d{4,5})\s+(CE|PE)", s_clean)
+    if m2:
+        return m2.group(1), float(m2.group(2)), m2.group(3)
+    # 3. Strike + CE/PE: e.g. 24950 PE or 25000CE
+    m3 = re.search(r"(\d{4,5})\s*(CE|PE)", s_clean)
+    if m3:
+        und = "BANKNIFTY" if "BANK" in s_clean else ("SENSEX" if "SENSEX" in s_clean else "NIFTY")
+        return und, float(m3.group(1)), m3.group(2)
+    return None
+
+
+def _find_upstox_option_instrument(sym: str) -> str | None:
+    parsed = parse_option_sym(sym)
+    if not parsed:
+        return None
+    und, strike, opt_type = parsed
+    contracts = _get_upstox_option_contracts(und)
+    if not contracts:
+        return None
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    matched = [
+        c for c in contracts
+        if abs(float(c.get("strike_price") or 0) - strike) < 0.1
+        and str(c.get("instrument_type") or "").upper() == opt_type
+    ]
+    if not matched:
+        return None
+    matched.sort(key=lambda x: (x.get("expiry", "") < today_str, x.get("expiry", "")))
+    return matched[0].get("instrument_key")
+
+
 def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[str, bool]:
     sym = (symbol or "NIFTY").strip().upper()
     if token and str(token).strip():
         clean_tok = str(token).strip()
         if "|" in clean_tok:
-            return clean_tok, True
+            is_opt = "NSE_FO" in clean_tok or bool(re.search(r"(CE|PE)$", sym))
+            return clean_tok, is_opt
         return f"NSE_FO|{clean_tok}", True
 
     if sym in UPSTOX_INSTRUMENT_MAP:
         return UPSTOX_INSTRUMENT_MAP[sym], False
 
-    is_option = bool(re.search(r"(CE|PE)$", sym))
-    if is_option and neo_client is not None:
-        try:
-            res = neo_client.search_scrip(exchange_segment="nse_fo", symbol=sym)
-            rows = _rows_from_sdk_result(res)
-            if rows:
-                tok = rows[0].get("pSymbol") or rows[0].get("instrument_token") or rows[0].get("token")
-                if tok:
-                    return f"NSE_FO|{tok}", True
-        except Exception:
-            pass
+    is_option = bool(re.search(r"(CE|PE)$", sym)) or bool(parse_option_sym(sym))
+    if is_option:
+        found_key = _find_upstox_option_instrument(sym)
+        if found_key:
+            return found_key, True
+
+        if neo_client is not None:
+            try:
+                res = neo_client.search_scrip(exchange_segment="nse_fo", symbol=sym)
+                rows = _rows_from_sdk_result(res)
+                if rows:
+                    tok = rows[0].get("pSymbol") or rows[0].get("instrument_token") or rows[0].get("token")
+                    if tok:
+                        return f"NSE_FO|{tok}", True
+            except Exception:
+                pass
 
     if not is_option:
         if sym.startswith("BANKNIFTY"):
@@ -1980,6 +2068,7 @@ def chart_candles(
                         for c in res_candles:
                             seen[c["time"]] = c
                         res_candles = [seen[t] for t in sorted(seen.keys())]
+                        q_data = _get_live_quote_data(symbol, token=token)
                         return {
                             "ok": True,
                             "symbol": symbol,
@@ -1987,6 +2076,10 @@ def chart_candles(
                             "is_option": is_option,
                             "interval": interval,
                             "date": today_str,
+                            "ltp": float(q_data.get("ltp") or res_candles[-1]["close"]),
+                            "prev_close": float(q_data.get("prev_close") or res_candles[-1]["open"]),
+                            "change": float(q_data.get("change") or 0.0),
+                            "change_percent": float(q_data.get("change_percent") or 0.0),
                             "candles": res_candles,
                         }
         except Exception:
@@ -2086,6 +2179,7 @@ def chart_candles(
             seen[c["time"]] = c
         res_candles = [seen[t] for t in sorted(seen.keys())]
 
+    q_data = _get_live_quote_data(symbol, token=token)
     return {
         "ok": True,
         "symbol": symbol,
@@ -2093,6 +2187,10 @@ def chart_candles(
         "is_option": is_option,
         "interval": interval,
         "date": selected_date,
+        "ltp": float(q_data.get("ltp") or (res_candles[-1]["close"] if res_candles else 0.0)),
+        "prev_close": float(q_data.get("prev_close") or (res_candles[-1]["open"] if res_candles else 0.0)),
+        "change": float(q_data.get("change") or 0.0),
+        "change_percent": float(q_data.get("change_percent") or 0.0),
         "candles": res_candles,
     }
 
@@ -2154,10 +2252,11 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
                         c_open = float(ohlc.get("open") or ltp)
                         c_high = float(ohlc.get("high") or ltp)
                         c_low = float(ohlc.get("low") or ltp)
+                        c_prev = float(ohlc.get("close") or ltp)
                         c_close = ltp
                         c_vol = int(float(q_item.get("volume") or 0))
-                        diff = float(q_item.get("net_change") or round(ltp - c_open, 2))
-                        pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                        diff = float(q_item.get("net_change") or round(ltp - c_prev, 2))
+                        pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
                         res = {
                             "ok": True,
                             "symbol": sym,
@@ -2167,6 +2266,7 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
                             "high": c_high,
                             "low": c_low,
                             "close": c_close,
+                            "prev_close": c_prev,
                             "volume": c_vol,
                             "change": diff,
                             "change_percent": pct,
@@ -2276,10 +2376,11 @@ def live_quotes_batch(payload: LiveQuotesBatchPayload):
                         c_open = float(ohlc.get("open") or ltp)
                         c_high = float(ohlc.get("high") or ltp)
                         c_low = float(ohlc.get("low") or ltp)
+                        c_prev = float(ohlc.get("close") or ltp)
                         c_close = ltp
                         c_vol = int(float(q_item.get("volume") or 0))
-                        diff = float(q_item.get("net_change") or round(ltp - c_open, 2))
-                        pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                        diff = float(q_item.get("net_change") or round(ltp - c_prev, 2))
+                        pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
                         res = {
                             "ok": True,
                             "symbol": sym,
@@ -2289,6 +2390,7 @@ def live_quotes_batch(payload: LiveQuotesBatchPayload):
                             "high": c_high,
                             "low": c_low,
                             "close": c_close,
+                            "prev_close": c_prev,
                             "volume": c_vol,
                             "change": diff,
                             "change_percent": pct,
@@ -2368,10 +2470,11 @@ async def ws_quotes_stream(websocket: WebSocket):
                             c_open = float(ohlc.get("open") or ltp)
                             c_high = float(ohlc.get("high") or ltp)
                             c_low = float(ohlc.get("low") or ltp)
+                            c_prev = float(ohlc.get("close") or ltp)
                             c_close = ltp
                             c_vol = int(float(quote_obj.get("volume") or 0))
-                            diff = float(quote_obj.get("net_change") or round(ltp - c_open, 2))
-                            pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                            diff = float(quote_obj.get("net_change") or round(ltp - c_prev, 2))
+                            pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
                             ticks.append({
                                 "symbol": sym,
                                 "token": tok,
@@ -2380,6 +2483,7 @@ async def ws_quotes_stream(websocket: WebSocket):
                                 "high": c_high,
                                 "low": c_low,
                                 "close": c_close,
+                                "prev_close": c_prev,
                                 "volume": c_vol,
                                 "change": diff,
                                 "change_percent": pct,
@@ -2418,22 +2522,47 @@ def chart_search(q: str = ""):
         if query in idx["symbol"] or query in idx["name"].upper():
             results.append(idx)
 
-    strike_match = re.search(r"\d{4,6}", query)
-    if strike_match:
-        strike = strike_match.group(0)
-        underlying = "BANKNIFTY" if "BANK" in query else ("SENSEX" if "SENSEX" in query else "NIFTY")
-        opt_type = "CE" if "CE" in query else ("PE" if "PE" in query else None)
-        types_to_add = [opt_type] if opt_type else ["CE", "PE"]
-        for t in types_to_add:
-            sym_code = f"{underlying}26N09{strike}{t}"
-            results.append({
-                "symbol": sym_code,
-                "name": f"{underlying} {strike} {('CALL' if t == 'CE' else 'PUT')} (09 NOV)",
-                "segment": "nse_fo",
-                "type": f"OPT {t}",
-                "strike": strike,
-                "token": "40021" if t == "PE" else "40020",
-            })
+    # 2. Options search with real Upstox option contracts
+    parsed = parse_option_sym(query)
+    strike_match = re.search(r"\d{4,5}", query)
+    if parsed or strike_match:
+        if parsed:
+            underlying, strike_val, opt_type = parsed
+        else:
+            strike_val = float(strike_match.group(0))
+            underlying = "BANKNIFTY" if "BANK" in query else ("SENSEX" if "SENSEX" in query else ("FINNIFTY" if "FIN" in query else "NIFTY"))
+            opt_type = "CE" if "CE" in query else ("PE" if "PE" in query else None)
+
+        contracts = _get_upstox_option_contracts(underlying)
+        if contracts:
+            matched = [
+                c for c in contracts
+                if abs(float(c.get("strike_price") or 0) - strike_val) < 0.1
+                and (not opt_type or str(c.get("instrument_type") or "").upper() == opt_type)
+            ]
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            matched.sort(key=lambda x: (x.get("expiry", "") < today_str, x.get("expiry", "")))
+            for c in matched[:6]:
+                sym_title = c.get("trading_symbol") or f"{underlying} {int(strike_val)} {c.get('instrument_type')}"
+                results.append({
+                    "symbol": sym_title,
+                    "name": f"{underlying} {int(c.get('strike_price', strike_val))} {c.get('instrument_type')} ({c.get('expiry')})",
+                    "segment": "nse_fo",
+                    "type": f"OPT {c.get('instrument_type')}",
+                    "strike": str(c.get("strike_price")),
+                    "token": c.get("instrument_key"), # REAL Upstox instrument key!
+                })
+        else:
+            types_to_add = [opt_type] if opt_type else ["CE", "PE"]
+            for t in types_to_add:
+                results.append({
+                    "symbol": f"{underlying} {int(strike_val)} {t}",
+                    "name": f"{underlying} {int(strike_val)} {('CALL' if t == 'CE' else 'PUT')}",
+                    "segment": "nse_fo",
+                    "type": f"OPT {t}",
+                    "strike": str(strike_val),
+                    "token": "",
+                })
 
     popular_stocks = [
         ("RELIANCE", "Reliance Industries Ltd", "NSE_EQ|INE002A01018"),
@@ -2459,6 +2588,106 @@ def chart_search(q: str = ""):
             })
 
     return {"ok": True, "results": results[:12]}
+
+
+@app.get("/api/chart/option-chain")
+def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
+    und = (symbol or "NIFTY").upper().strip()
+    if "BANK" in und:
+        und_key = "NSE_INDEX|Nifty Bank"
+        und_name = "BANKNIFTY"
+    elif "SENSEX" in und:
+        und_key = "BSE_INDEX|SENSEX"
+        und_name = "SENSEX"
+    elif "FIN" in und:
+        und_key = "NSE_INDEX|Nifty Fin Service"
+        und_name = "FINNIFTY"
+    else:
+        und_key = "NSE_INDEX|Nifty 50"
+        und_name = "NIFTY"
+
+    contracts = _get_upstox_option_contracts(und_name)
+    all_expiries = sorted(list(set(c["expiry"] for c in contracts if c.get("expiry"))))
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    valid_expiries = [e for e in all_expiries if e >= today_str]
+    if not valid_expiries:
+        valid_expiries = all_expiries[:5]
+
+    selected_exp = expiry if (expiry and expiry in valid_expiries) else (valid_expiries[0] if valid_expiries else today_str)
+
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    headers = {"Accept": "application/json"}
+    if up_token:
+        headers["Authorization"] = f"Bearer {up_token}"
+
+    chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key={quote_url(und_key)}&expiry_date={selected_exp}"
+    rows = []
+    spot_price = 0.0
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(chain_url, headers=headers)
+            if resp.status_code == 200:
+                raw_data = resp.json().get("data", [])
+                if raw_data:
+                    spot_price = float(raw_data[0].get("underlying_spot_price") or 0.0)
+                    for item in raw_data:
+                        strike = float(item.get("strike_price") or 0.0)
+                        call_opt = item.get("call_options", {}) or {}
+                        put_opt = item.get("put_options", {}) or {}
+                        call_md = call_opt.get("market_data", {}) or {}
+                        put_md = put_opt.get("market_data", {}) or {}
+
+                        c_ltp = float(call_md.get("ltp") or 0.0)
+                        c_prev = float(call_md.get("close_price") or c_ltp)
+                        c_diff = round(c_ltp - c_prev, 2)
+                        c_pct = round((c_diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
+
+                        p_ltp = float(put_md.get("ltp") or 0.0)
+                        p_prev = float(put_md.get("close_price") or p_ltp)
+                        p_diff = round(p_ltp - p_prev, 2)
+                        p_pct = round((p_diff / p_prev) * 100, 2) if p_prev > 0 else 0.0
+
+                        rows.append({
+                            "strike": strike,
+                            "call": {
+                                "instrument_key": call_opt.get("instrument_key", ""),
+                                "symbol": f"{und_name} {int(strike)} CE",
+                                "ltp": c_ltp,
+                                "change": c_diff,
+                                "change_percent": c_pct,
+                                "volume": int(float(call_md.get("volume") or 0)),
+                                "oi": int(float(call_md.get("oi") or 0)),
+                            },
+                            "put": {
+                                "instrument_key": put_opt.get("instrument_key", ""),
+                                "symbol": f"{und_name} {int(strike)} PE",
+                                "ltp": p_ltp,
+                                "change": p_diff,
+                                "change_percent": p_pct,
+                                "volume": int(float(put_md.get("volume") or 0)),
+                                "oi": int(float(put_md.get("oi") or 0)),
+                            }
+                        })
+    except Exception:
+        pass
+
+    rows.sort(key=lambda r: r["strike"])
+
+    # Center 28 strikes around ATM spot
+    if spot_price > 0 and len(rows) > 28:
+        center_idx = min(range(len(rows)), key=lambda i: abs(rows[i]["strike"] - spot_price))
+        start_idx = max(0, min(center_idx - 14, len(rows) - 28))
+        rows = rows[start_idx:start_idx + 28]
+
+    return {
+        "ok": True,
+        "underlying": und_name,
+        "spot_price": spot_price,
+        "expiries": valid_expiries,
+        "selected_expiry": selected_exp,
+        "rows": rows,
+    }
 
 
 def _calculate_estimated_charges(all_positions: list[dict[str, Any]], client: Any = None) -> dict[str, Any]:

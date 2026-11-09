@@ -95,20 +95,69 @@
 
       <div class="v-sep"></div>
 
-      <!-- Indicators Toggles -->
-      <div class="ind-pill-group">
-        <button type="button" id="btn-ind-ema9" class="tb-btn active" title="Toggle EMA 9 (Blue)">
-          <span class="dot-ind blue"></span> EMA 9
+      <!-- Option Chain Button (Matching Upstox TV) -->
+      <button type="button" id="btn-option-chain" class="tb-btn opt-chain-btn" title="Open Real-Time Option Chain">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <span>Option Chain</span>
+      </button>
+
+      <div class="v-sep"></div>
+
+      <!-- TradingView Technical Indicators Dropdown -->
+      <div class="indicators-wrap">
+        <button type="button" id="btn-indicators-dropdown" class="tb-btn fx-btn" title="TradingView Technical Indicators">
+          <span class="fx-icon">ƒx</span> Indicators
+          <span class="caret">▼</span>
         </button>
-        <button type="button" id="btn-ind-ema21" class="tb-btn active" title="Toggle EMA 21 (Orange)">
-          <span class="dot-ind orange"></span> EMA 21
-        </button>
-        <button type="button" id="btn-ind-vpvr" class="tb-btn active" title="Toggle Volume Profile Visible Range (VPVR)">
-          <span class="dot-ind yellow"></span> VPVR
-        </button>
-        <button type="button" id="btn-ind-vol" class="tb-btn active" title="Toggle Volume Histogram">
-          Vol
-        </button>
+        <div id="indicators-menu" class="indicators-menu hidden">
+          <div class="ind-menu-header">TradingView Indicators</div>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-ema9" checked>
+            <span class="dot-ind blue"></span>
+            <span>EMA 9 (Blue)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-ema21" checked>
+            <span class="dot-ind orange"></span>
+            <span>EMA 21 (Orange)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-vwap" checked>
+            <span class="dot-ind cyan"></span>
+            <span>VWAP (Volume Weighted Avg)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-supertrend" checked>
+            <span class="dot-ind green"></span>
+            <span>Supertrend (10, 3)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-vpvr" checked>
+            <span class="dot-ind yellow"></span>
+            <span>VPVR (Volume Profile POC)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-vol" checked>
+            <span class="dot-ind gray"></span>
+            <span>Volume Histogram</span>
+          </label>
+          <div class="ind-menu-divider"></div>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-bb">
+            <span class="dot-ind purple"></span>
+            <span>Bollinger Bands (20, 2)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-ema50">
+            <span class="dot-ind purple"></span>
+            <span>EMA 50 (Trend)</span>
+          </label>
+          <label class="ind-menu-item">
+            <input type="checkbox" id="chk-ind-ema200">
+            <span class="dot-ind yellow"></span>
+            <span>EMA 200 (Macro)</span>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -274,6 +323,56 @@
     </div>
   </aside>
 
+  <!-- Real-time Option Chain Modal (Matches Upstox TV) -->
+  <div id="option-chain-modal" class="oc-modal-backdrop hidden">
+    <div class="oc-modal-card">
+      <div class="oc-header">
+        <div class="oc-title-group">
+          <div class="oc-underlying-selector">
+            <button type="button" class="oc-und-btn active" data-und="NIFTY">NIFTY</button>
+            <button type="button" class="oc-und-btn" data-und="BANKNIFTY">BANKNIFTY</button>
+            <button type="button" class="oc-und-btn" data-und="FINNIFTY">FINNIFTY</button>
+            <button type="button" class="oc-und-btn" data-und="SENSEX">SENSEX</button>
+          </div>
+          <span class="oc-spot-badge" id="oc-spot-badge">Spot: ₹—</span>
+        </div>
+        <div class="oc-controls">
+          <label class="oc-expiry-label">Expiry:</label>
+          <select id="oc-expiry-select" class="oc-expiry-select"></select>
+          <button id="close-oc-modal" class="modal-close-btn" type="button" title="Close Option Chain">✕</button>
+        </div>
+      </div>
+
+      <div class="oc-table-container">
+        <table class="oc-table">
+          <thead>
+            <tr class="oc-main-header">
+              <th colspan="3" class="th-call-header">CALLS</th>
+              <th class="th-strike-header">STRIKE</th>
+              <th colspan="3" class="th-put-header">PUTS</th>
+            </tr>
+            <tr class="oc-col-header">
+              <th class="col-oi">OI</th>
+              <th class="col-vol">Volume</th>
+              <th class="col-ltp th-call">LTP (₹)</th>
+              <th class="col-strike">Strike</th>
+              <th class="col-ltp th-put">LTP (₹)</th>
+              <th class="col-vol">Volume</th>
+              <th class="col-oi">OI</th>
+            </tr>
+          </thead>
+          <tbody id="oc-table-body">
+            <tr><td colspan="7" class="oc-loading">Loading real-time option chain…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="oc-footer">
+        <span class="oc-hint">⚡ Click any <b>Call or Put LTP</b> to immediately load that option chart & ready Scalper Mode!</span>
+      </div>
+    </div>
+  </div>
+
   <!-- Upstox Token Setup Modal -->
   <div id="token-modal" class="token-modal-backdrop hidden">
     <div class="token-modal-card">
@@ -301,6 +400,7 @@
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261109-2"></script>
+  <script src="/static/chart.js?v=20261109-3"></script>
+  <link rel="stylesheet" href="/static/chart.css?v=20261109-3">
 </body>
 </html>
