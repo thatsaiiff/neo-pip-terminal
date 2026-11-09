@@ -890,7 +890,7 @@
         order_type: selectedOrderType,
         price: limitPrice,
         trigger_price: triggerPrice,
-        validity: 'GFD',
+        validity: 'DAY',
         user_confirmed: true,
       };
 
