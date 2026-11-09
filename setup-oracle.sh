@@ -80,6 +80,11 @@ fi
 cd "${APP_DIR}"
 
 # Step 5: Check or generate .env
+if [ -f /home/ubuntu/.env ]; then
+  echo "🔑 Installing credentials from /home/ubuntu/.env..."
+  cp /home/ubuntu/.env "${APP_DIR}/.env"
+fi
+
 if [ ! -f .env ]; then
   echo "📝 Creating initial .env configuration..."
   cp .env.example .env
