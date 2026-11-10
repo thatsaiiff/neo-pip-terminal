@@ -34,6 +34,7 @@
   let selectedOrderType = 'MKT'; // MKT, L, SL
   let selectedLots = 1;
   let updateLotDisplayFn = null;
+  let openKeysModalFn = null;
   let cachedPositions = [];
   let cachedOrders = [];
   let cachedClosedPositions = [];
@@ -41,12 +42,41 @@
   let cachedPnlSummary = {};
   let updateMobileOrdersFn = null;
 
+  // Symbol metadata cache (populated from Upstox/Kotak search & option chain)
+  const symbolMeta = {};
+
+  function isOptionSymbol(sym) {
+    const s = String(sym || '').trim().toUpperCase();
+    return /\d\s*(?:CE|PE)(?:\b|$)/i.test(s);
+  }
+
+  function registerSymbolMeta(sym, meta = {}) {
+    const key = String(sym || '').trim().toUpperCase();
+    if (!key) return;
+    const prev = symbolMeta[key] || {};
+    symbolMeta[key] = {
+      ...prev,
+      ...meta,
+      lotSize: Number(meta.lotSize || meta.lot_size || prev.lotSize || 0) || prev.lotSize || 0,
+      segment: meta.segment || prev.segment || (isOptionSymbol(key) ? 'NSE_FO' : ''),
+    };
+  }
+
+  function escapeHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // Open Symbol Tabs
   let openTabs = [
-    { symbol: 'NIFTY 25000 CE', token: '', interval: '1m', isOption: true },
-    { symbol: 'NIFTY 25000 PE', token: '', interval: '1m', isOption: true },
-    { symbol: 'NIFTY', token: 'NSE_INDEX|Nifty 50', interval: '5m', isOption: false },
-    { symbol: 'BANKNIFTY', token: 'NSE_INDEX|Nifty Bank', interval: '5m', isOption: false },
+    { symbol: 'NIFTY 25000 CE', token: '', interval: '1m', isOption: true, rangeDays: 5 },
+    { symbol: 'NIFTY 25000 PE', token: '', interval: '1m', isOption: true, rangeDays: 5 },
+    { symbol: 'NIFTY', token: 'NSE_INDEX|Nifty 50', interval: '5m', isOption: false, rangeDays: 5 },
+    { symbol: 'BANKNIFTY', token: 'NSE_INDEX|Nifty Bank', interval: '5m', isOption: false, rangeDays: 5 },
   ];
   let activeTabIndex = 0;
 
@@ -93,10 +123,14 @@
       sym: 'NIFTY 25000 CE',
       token: '',
       tf: '1m',
+      rangeDays: 5,
       isOption: true,
       candles: [],
       volumes: [],
       chart: null,
+      container: null,
+      canvasWrap: null,
+      _ro: null,
       candleSeries: null,
       volSeries: null,
       ema9Series: null,
@@ -119,12 +153,16 @@
       idx: 1,
       id: 'pane-2',
       sym: 'NIFTY 25000 PE',
-      token: 'NSE_FO|40038',
+      token: '',
       tf: '1m',
+      rangeDays: 5,
       isOption: true,
       candles: [],
       volumes: [],
       chart: null,
+      container: null,
+      canvasWrap: null,
+      _ro: null,
       candleSeries: null,
       volSeries: null,
       ema9Series: null,
@@ -149,10 +187,14 @@
       sym: 'NIFTY',
       token: 'NSE_INDEX|Nifty 50',
       tf: '5m',
+      rangeDays: 5,
       isOption: false,
       candles: [],
       volumes: [],
       chart: null,
+      container: null,
+      canvasWrap: null,
+      _ro: null,
       candleSeries: null,
       volSeries: null,
       ema9Series: null,
@@ -182,9 +224,10 @@
     panes[0].sym = qSym.toUpperCase();
     panes[0].token = qTok || '';
     if (qTf) panes[0].tf = qTf;
-    panes[0].isOption = /(CE|PE)$/i.test(qSym);
+    panes[0].isOption = isOptionSymbol(qSym);
     openTabs[0].symbol = panes[0].sym;
     openTabs[0].token = panes[0].token;
+    openTabs[0].isOption = panes[0].isOption;
   }
 
   function toast(msg, duration = 3000) {
@@ -436,17 +479,72 @@
     }
   }
 
+  // --- Pane DOM Lookup Helpers ---
+  function getPanePrefix(pane) {
+    return `p${(pane && typeof pane.idx === 'number' ? pane.idx : 0) + 1}`;
+  }
+
+  function getPaneCanvasWrap(pane) {
+    return $(`${getPanePrefix(pane)}-canvas-wrap`);
+  }
+
+  function getPaneContainer(pane) {
+    return $(`${getPanePrefix(pane)}-chart-container`);
+  }
+
+  function getPaneVpvrCanvas(pane) {
+    return $(`${getPanePrefix(pane)}-vpvr-canvas`);
+  }
+
+  function resizePaneChart(pane) {
+    if (!pane || !pane.chart) return;
+    const canvasWrap = getPaneCanvasWrap(pane);
+    const container = getPaneContainer(pane);
+    const targetEl = canvasWrap || container;
+    if (!targetEl) return;
+    const cr = targetEl.getBoundingClientRect();
+    const w = Math.floor(cr.width || targetEl.clientWidth || 0);
+    const h = Math.floor(cr.height || targetEl.clientHeight || 0);
+    if (w > 40 && h > 40) {
+      if (typeof pane.chart.resize === 'function') {
+        pane.chart.resize(w, h);
+      } else {
+        pane.chart.applyOptions({ width: w, height: h });
+      }
+      renderVPVR(pane);
+    }
+  }
+
   // --- Lightweight Charts Initialization ---
   function initChartPane(pane) {
-    const container = $(`${pane.id}-chart-container`);
-    const canvasWrap = $(`${pane.id}-canvas-wrap`);
+    if (!pane) return;
+    if (typeof LightweightCharts === 'undefined' || typeof LightweightCharts.createChart !== 'function') {
+      console.error('[Chart] LightweightCharts library is not loaded');
+      return;
+    }
+
+    const container = getPaneContainer(pane);
+    const canvasWrap = getPaneCanvasWrap(pane);
     if (!container) return;
 
-    container.innerHTML = '';
+    if (pane._ro) {
+      try { pane._ro.disconnect(); } catch (_) {}
+      pane._ro = null;
+    }
+    if (pane.chart) {
+      try { pane.chart.remove(); } catch (_) {}
+      pane.chart = null;
+    }
 
-    const rect = canvasWrap ? canvasWrap.getBoundingClientRect() : null;
-    const initW = Math.max(300, Math.floor((rect && rect.width) || container.clientWidth || (window.innerWidth - 500)));
-    const initH = Math.max(250, Math.floor((rect && rect.height) || container.clientHeight || (window.innerHeight - 350)));
+    container.innerHTML = '';
+    pane.container = container;
+    pane.canvasWrap = canvasWrap;
+
+    const rect = canvasWrap ? canvasWrap.getBoundingClientRect() : container.getBoundingClientRect();
+    const fallbackW = window.innerWidth <= 768 ? window.innerWidth : Math.max(360, window.innerWidth - 620);
+    const fallbackH = window.innerWidth <= 768 ? Math.max(180, window.innerHeight - 260) : Math.max(240, window.innerHeight - 360);
+    const initW = Math.max(200, Math.floor((rect && rect.width) || container.clientWidth || fallbackW));
+    const initH = Math.max(140, Math.floor((rect && rect.height) || container.clientHeight || fallbackH));
 
     const chart = LightweightCharts.createChart(container, {
       width: initW,
@@ -474,6 +572,7 @@
         borderColor: '#202735',
         timeVisible: true,
         secondsVisible: pane.tf.includes('s'),
+        rightOffset: 6,
       },
     });
 
@@ -486,23 +585,29 @@
       wickDownColor: '#ff4757',
     });
 
-    // Volume Series
+    // Volume Series (confined to bottom 18% via LWC v4 priceScale().applyOptions)
     const volSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
-      priceScaleId: '',
-      scaleMargins: { top: 0.82, bottom: 0 },
+      priceScaleId: 'vol_overlay',
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
+    try {
+      volSeries.priceScale().applyOptions({
+        scaleMargins: { top: 0.82, bottom: 0 },
+      });
+    } catch (_) {}
 
-    // Indicators Series
-    const ema9Series = chart.addLineSeries({ color: '#00d2d3', lineWidth: 1.5, title: 'EMA 9' });
-    const ema21Series = chart.addLineSeries({ color: '#fb8500', lineWidth: 1.5, title: 'EMA 21' });
-    const ema50Series = chart.addLineSeries({ color: '#8e44ad', lineWidth: 1.5, title: 'EMA 50' });
-    const ema200Series = chart.addLineSeries({ color: '#ffb703', lineWidth: 2, title: 'EMA 200' });
-    const vwapSeries = chart.addLineSeries({ color: '#9b59b6', lineWidth: 2, title: 'VWAP' });
-    const supertrendSeries = chart.addLineSeries({ color: '#00b074', lineWidth: 2, title: 'Supertrend' });
-    const bbUpperSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1 });
-    const bbBasisSeries = chart.addLineSeries({ color: '#1e88e5', lineWidth: 1.5 });
-    const bbLowerSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1 });
+    // Indicators Series (hide extra horizontal price lines so live LTP stands out clearly)
+    const ema9Series = chart.addLineSeries({ color: '#00d2d3', lineWidth: 1.5, title: 'EMA 9', priceLineVisible: false, lastValueVisible: false });
+    const ema21Series = chart.addLineSeries({ color: '#fb8500', lineWidth: 1.5, title: 'EMA 21', priceLineVisible: false, lastValueVisible: false });
+    const ema50Series = chart.addLineSeries({ color: '#8e44ad', lineWidth: 1.5, title: 'EMA 50', priceLineVisible: false, lastValueVisible: false });
+    const ema200Series = chart.addLineSeries({ color: '#ffb703', lineWidth: 2, title: 'EMA 200', priceLineVisible: false, lastValueVisible: false });
+    const vwapSeries = chart.addLineSeries({ color: '#9b59b6', lineWidth: 2, title: 'VWAP', priceLineVisible: false, lastValueVisible: false });
+    const supertrendSeries = chart.addLineSeries({ color: '#00b074', lineWidth: 2, title: 'Supertrend', priceLineVisible: false, lastValueVisible: false });
+    const bbUpperSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const bbBasisSeries = chart.addLineSeries({ color: '#1e88e5', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+    const bbLowerSeries = chart.addLineSeries({ color: 'rgba(30, 136, 229, 0.6)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
 
     pane.chart = chart;
     pane.candleSeries = candleSeries;
@@ -517,7 +622,7 @@
     pane.bbBasisSeries = bbBasisSeries;
     pane.bbLowerSeries = bbLowerSeries;
 
-    pane.vpvrCanvas = $(`${pane.id}-vpvr-canvas`);
+    pane.vpvrCanvas = getPaneVpvrCanvas(pane);
     if (pane.vpvrCanvas) {
       pane.vpvrCtx = pane.vpvrCanvas.getContext('2d');
     }
@@ -546,24 +651,58 @@
     });
 
     // Resize observer
-    if (window.ResizeObserver && canvasWrap) {
+    const observeTarget = canvasWrap || container;
+    if (window.ResizeObserver && observeTarget) {
       const ro = new ResizeObserver(entries => {
         for (const entry of entries) {
           const cr = entry.contentRect;
           const w = Math.floor(cr.width);
           const h = Math.floor(cr.height);
-          if (w > 50 && h > 50 && pane.chart) {
-            pane.chart.applyOptions({ width: w, height: h });
+          if (w > 40 && h > 40 && pane.chart) {
+            if (typeof pane.chart.resize === 'function') {
+              pane.chart.resize(w, h);
+            } else {
+              pane.chart.applyOptions({ width: w, height: h });
+            }
             renderVPVR(pane);
           }
         }
       });
-      ro.observe(canvasWrap);
+      ro.observe(observeTarget);
+      pane._ro = ro;
+    }
+  }
+
+  function clearPaneChartData(pane) {
+    if (!pane) return;
+    pane.candles = [];
+    pane.volumes = [];
+    pane.activeBar = null;
+    pane.vpvrData = { bins: [], pocPrice: null, maxVol: 0 };
+    [
+      pane.candleSeries,
+      pane.volSeries,
+      pane.ema9Series,
+      pane.ema21Series,
+      pane.ema50Series,
+      pane.ema200Series,
+      pane.vwapSeries,
+      pane.supertrendSeries,
+      pane.bbUpperSeries,
+      pane.bbBasisSeries,
+      pane.bbLowerSeries,
+    ].forEach(s => {
+      if (s) {
+        try { s.setData([]); } catch (_) {}
+      }
+    });
+    if (pane.vpvrCtx && pane.vpvrCanvas) {
+      pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
     }
   }
 
   function applyPaneIndicators(pane) {
-    if (!pane.candles.length) return;
+    if (!pane || !pane.chart || !pane.candleSeries || !pane.candles.length) return;
 
     if (indicators.showEma9) pane.ema9Series.setData(calculateEMA(pane.candles, 9));
     else pane.ema9Series.setData([]);
@@ -642,7 +781,11 @@
     const ltp = Number(quote.ltp);
     pane.lastLtp = ltp;
 
-    if (quote.prev_close !== undefined && quote.prev_close > 0) {
+    if (quote.prev_close !== undefined && Number(quote.prev_close) > 0 && Math.abs(Number(quote.prev_close) - ltp) > 1e-6) {
+      pane.prevClose = Number(quote.prev_close);
+    } else if (quote.change !== undefined && Number(quote.change) !== 0) {
+      pane.prevClose = ltp - Number(quote.change);
+    } else if (quote.prev_close !== undefined && Number(quote.prev_close) > 0 && !pane.prevClose) {
       pane.prevClose = Number(quote.prev_close);
     }
 
@@ -667,58 +810,96 @@
 
   async function loadCandles(pane) {
     try {
+      if (!pane) return;
+      pane._reqId = (pane._reqId || 0) + 1;
+      const reqId = pane._reqId;
+
+      if (!pane.chart || !pane.candleSeries) {
+        initChartPane(pane);
+      }
+
       const tokenEnc = encodeURIComponent(pane.token || '');
       const symEnc = encodeURIComponent(pane.sym);
-      const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${pane.tf}&days=5`;
+      const reqDays = Math.max(1, Math.min(Number(pane.rangeDays || 5), 365));
+      const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${encodeURIComponent(pane.tf)}&days=${reqDays}`;
       const data = await api(url);
+      if (reqId !== pane._reqId) return;
 
-      const pSym = $(`p${pane.idx + 1}-sym`);
+      const prefix = getPanePrefix(pane);
+      const pSym = $(`${prefix}-sym`);
+      const pTf = $(`${prefix}-tf`);
+      const paneEl = $(pane.id);
+      const segBadge = paneEl ? paneEl.querySelector('.pane-seg') : null;
+      const ikey = String((data && data.instrument_key) || pane.token || '');
+      const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|');
+      pane.isOption = isOptionSymbol(pane.sym) || isOptResolved;
+      const segLabel = isOptResolved ? 'NSE F&O' : (ikey.includes('_INDEX') ? 'NSE INDEX' : 'NSE EQ');
+      if (ikey) {
+        registerSymbolMeta(pane.sym, { segment: ikey.split('|')[0] || segLabel });
+      }
+
       if (pSym) pSym.textContent = pane.sym;
+      if (pTf) pTf.textContent = pane.tf;
+      if (segBadge) segBadge.textContent = segLabel;
+
       if (pane.idx === 0) {
         const topSym = $('chart-active-sym');
+        const topSeg = $('chart-active-seg');
         const opSym = $('op-sym-name');
         if (topSym) topSym.textContent = pane.sym;
+        if (topSeg) topSeg.textContent = segLabel;
         if (opSym) opSym.textContent = pane.sym;
+        if (typeof updateLotDisplayFn === 'function') updateLotDisplayFn();
       }
 
       if (!data || !data.ok || !data.candles || !data.candles.length) {
+        clearPaneChartData(pane);
         return;
       }
+
+      if (!pane.chart || !pane.candleSeries) {
+        initChartPane(pane);
+      }
+      if (!pane.candleSeries || !pane.volSeries) return;
+
+      pane.chart.timeScale().applyOptions({ secondsVisible: String(pane.tf || '').includes('s') });
 
       if (data.prev_close) pane.prevClose = Number(data.prev_close);
       if (data.ltp) pane.lastLtp = Number(data.ltp);
 
-      pane.candles = data.candles.map(c => ({
-        time: c.time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume || 100,
-      }));
+      // Ensure ascending unique timestamps for LightweightCharts setData
+      const byTime = new Map();
+      data.candles.forEach(c => {
+        const t = Number(c.time);
+        if (!Number.isFinite(t)) return;
+        byTime.set(t, {
+          time: t,
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+          volume: Number(c.volume || 0),
+        });
+      });
+      pane.candles = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 
+      const isIndexInst = ikey.startsWith('NSE_INDEX|') || ikey.startsWith('BSE_INDEX|');
       pane.volumes = pane.candles.map(c => ({
         time: c.time,
-        value: c.volume,
+        value: isIndexInst ? 0 : (c.volume || 0),
         color: c.close >= c.open ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
       }));
 
       pane.candleSeries.setData(pane.candles);
-      pane.volSeries.setData(pane.volumes);
-
       applyPaneIndicators(pane);
 
       // Fit container dimensions and content robustly
       function refitPane() {
-        const canvasWrap = $(`${pane.id}-canvas-wrap`);
-        const container = $(`${pane.id}-chart-container`);
-        if (canvasWrap && pane.chart) {
-          const cr = canvasWrap.getBoundingClientRect();
-          const targetW = Math.max(280, Math.floor(cr.width || (container ? container.clientWidth : 0) || window.innerWidth));
-          const targetH = Math.max(220, Math.floor(cr.height || (container ? container.clientHeight : 0) || (window.innerHeight - 300)));
-          pane.chart.applyOptions({ width: targetW, height: targetH });
+        if (!pane.chart || reqId !== pane._reqId) return;
+        resizePaneChart(pane);
+        try {
           pane.chart.timeScale().fitContent();
-        }
+        } catch (_) {}
       }
       refitPane();
       requestAnimationFrame(refitPane);
@@ -729,18 +910,26 @@
       if (lastBar) {
         pane.activeBar = { ...lastBar };
         updatePaneHeaderQuote(pane, lastBar.open, lastBar.high, lastBar.low, lastBar.close);
-        updatePaneQuote(pane, { ltp: lastBar.close, prev_close: pane.prevClose });
+        updatePaneQuote(pane, {
+          ltp: Number(data.ltp || lastBar.close),
+          prev_close: pane.prevClose || Number(data.prev_close || lastBar.open),
+          change: data.change,
+        });
       }
     } catch (err) {
-      console.warn(`[Candles] Failed loading candles for ${pane.sym}:`, err.message);
+      console.warn(`[Candles] Failed loading candles for ${pane && pane.sym}:`, err && err.message ? err.message : err);
     }
   }
 
   // --- Sub-second Quotes Stream ---
   function startQuotesPolling() {
+    let pollTickCount = 0;
     async function tick() {
       try {
-        const items = panes.map(p => ({ symbol: p.sym, token: p.token }));
+        pollTickCount += 1;
+        const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+        const activePanes = panes.slice(0, visibleCount);
+        const items = activePanes.map(p => ({ symbol: p.sym, token: p.token }));
         const res = await api('/api/chart/live-quotes', {
           method: 'POST',
           body: JSON.stringify({ items }),
@@ -750,21 +939,28 @@
           const qMap = res.quotes_by_symbol || {};
           qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
 
-          panes.forEach(pane => {
+          activePanes.forEach(pane => {
             const q = qMap[pane.sym];
-            if (q) {
+            if (q && q.ltp && !q.is_fallback) {
               updatePaneQuote(pane, q);
-              // Update live candle bar
-              if (pane.activeBar && q.ltp) {
+              // Update live candle bar safely only if series initialized and scale matches
+              if (pane.candleSeries && pane.activeBar && q.ltp > 0) {
                 const ltp = Number(q.ltp);
-                pane.activeBar.close = ltp;
-                if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
-                if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
-                pane.candleSeries.update(pane.activeBar);
-                updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
+                if (pane.activeBar.close > 0 && Math.abs(ltp - pane.activeBar.close) / pane.activeBar.close < 0.25) {
+                  pane.activeBar.close = ltp;
+                  if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
+                  if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
+                  try {
+                    pane.candleSeries.update(pane.activeBar);
+                  } catch (_) {}
+                  updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
+                }
               }
             }
           });
+        }
+        if (pollTickCount % 15 === 0) {
+          updateWatchlistQuotes();
         }
       } catch (e) {
         // quiet error
@@ -776,14 +972,19 @@
 
   // --- Exness Order Ticket Controls ---
   function getIndexLotSize(symbol) {
-    const s = (symbol || '').toUpperCase();
-    if (s.includes('BANKNIFTY')) return 15;
-    if (s.includes('MIDCPNIFTY')) return 50;
-    if (s.includes('FINNIFTY')) return 25;
+    const s = String(symbol || '').trim().toUpperCase();
+    if (symbolMeta[s] && Number(symbolMeta[s].lotSize) > 0) {
+      return Number(symbolMeta[s].lotSize);
+    }
+    const isDeriv = isOptionSymbol(s) || /\bFUT\b/i.test(s) || s === 'NIFTY' || s === 'BANKNIFTY' || s === 'FINNIFTY' || s === 'MIDCPNIFTY' || s === 'SENSEX' || s === 'BANKEX';
+    if (!isDeriv) return 1; // Equities & ETFs (e.g. RELIANCE, MARUTI, NIFTYBEES)
+    if (s.includes('BANKNIFTY')) return 30;
+    if (s.includes('MIDCPNIFTY')) return 120;
+    if (s.includes('FINNIFTY')) return 60;
     if (s.includes('SENSEX')) return 10;
-    if (s.includes('BANKEX')) return 15;
-    if (s.includes('NIFTY')) return 25;
-    return 1; // Equities (e.g. RELIANCE, TCS)
+    if (s.includes('BANKEX')) return 30;
+    if (s.includes('NIFTY')) return 65;
+    return 1;
   }
 
   function updateOrderFormPrices(ltp) {
@@ -807,10 +1008,14 @@
     const marginEl = $('op-margin-req');
     if (marginEl) marginEl.textContent = `₹${Number(estMargin).toLocaleString('en-IN')}`;
 
-    // Auto-fill limit price input if empty or at default
+    // Auto-fill limit / trigger price inputs if empty or not manually overridden
     const limitInput = $('input-limit-price');
     if (limitInput && (!limitInput.value || limitInput.dataset.manual !== 'true')) {
       limitInput.value = ltp.toFixed(2);
+    }
+    const trigInput = $('input-trigger-price');
+    if (trigInput && (!trigInput.value || trigInput.dataset.manual !== 'true')) {
+      trigInput.value = Math.max(0.05, ltp - 0.5).toFixed(2);
     }
 
     // Update Mobile Trade Dock (Screenshot 5)
@@ -948,12 +1153,36 @@
       inputPrice.addEventListener('input', () => { inputPrice.dataset.manual = 'true'; });
     }
 
+    const btnTriggerMinus = $('btn-trigger-minus');
+    const btnTriggerPlus = $('btn-trigger-plus');
+    const inputTrigger = $('input-trigger-price');
+    if (btnTriggerMinus && btnTriggerPlus && inputTrigger) {
+      btnTriggerMinus.addEventListener('click', () => {
+        const cur = parseFloat(inputTrigger.value) || (panes[0].lastLtp || 40);
+        inputTrigger.value = Math.max(0.05, cur - 0.05).toFixed(2);
+        inputTrigger.dataset.manual = 'true';
+      });
+      btnTriggerPlus.addEventListener('click', () => {
+        const cur = parseFloat(inputTrigger.value) || (panes[0].lastLtp || 40);
+        inputTrigger.value = (cur + 0.05).toFixed(2);
+        inputTrigger.dataset.manual = 'true';
+      });
+      inputTrigger.addEventListener('input', () => { inputTrigger.dataset.manual = 'true'; });
+    }
+
     // 5. Submit Order (Buy / Sell)
     async function submitOrder(side) {
       const sym = panes[0].sym;
       const lotSize = getIndexLotSize(sym);
       const qty = selectedLots * lotSize;
-      const seg = panes[0].isOption ? 'nse_fo' : 'nse_cm';
+      const meta = symbolMeta[String(sym || '').trim().toUpperCase()] || {};
+      const isFo = Boolean(
+        panes[0].isOption ||
+        isOptionSymbol(sym) ||
+        /\bFUT\b/i.test(sym) ||
+        String(meta.segment || '').toUpperCase().includes('_FO')
+      );
+      const seg = isFo ? 'nse_fo' : 'nse_cm';
 
       let limitPrice = null;
       let triggerPrice = null;
@@ -978,8 +1207,12 @@
         user_confirmed: true,
       };
 
+      const qtyLabel = lotSize === 1
+        ? `${qty} share${qty > 1 ? 's' : ''}`
+        : `${selectedLots} Lot(s) (${qty} qty)`;
+
       try {
-        toast(`Submitting ${side} ${selectedLots} Lot(s) ${sym}...`);
+        toast(`Submitting ${side} ${qtyLabel} ${sym}...`);
         const res = await api('/api/orders', {
           method: 'POST',
           body: JSON.stringify(payload),
@@ -1029,7 +1262,7 @@
       tabEl.className = `ex-tab ${idx === activeTabIndex ? 'active' : ''}`;
       tabEl.innerHTML = `
         <span class="tab-icon">${tab.isOption ? '🪙' : '📈'}</span>
-        <span class="tab-name">${tab.symbol}</span>
+        <span class="tab-name">${escapeHtml(tab.symbol)}</span>
         <button type="button" class="tab-close" data-idx="${idx}" title="Close Tab">✕</button>
       `;
 
@@ -1048,39 +1281,96 @@
     });
   }
 
+  function syncToolbarForPane(pane) {
+    if (!pane) return;
+    document.querySelectorAll('.ex-tf-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.tf === pane.tf);
+    });
+    const rangeDaysMap = { '1d': 5, '5d': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+    document.querySelectorAll('.range-btn').forEach(b => {
+      b.classList.toggle('active', (rangeDaysMap[b.dataset.range] || 5) === (pane.rangeDays || 5));
+    });
+  }
+
   function switchTab(index) {
     if (index < 0 || index >= openTabs.length) return;
     activeTabIndex = index;
+    activePaneIdx = 0;
+    document.querySelectorAll('.chart-pane').forEach((el, i) => {
+      el.classList.toggle('active', i === 0);
+    });
     renderSymbolTabs();
 
     const selected = openTabs[index];
+    const meta = symbolMeta[String(selected.symbol || '').trim().toUpperCase()] || {};
+    const segUpper = String(selected.segment || meta.segment || '').toUpperCase();
+    const isOpt = isOptionSymbol(selected.symbol);
+    const isFo = Boolean(isOpt || /\bFUT\b/i.test(selected.symbol) || segUpper.includes('_FO'));
+
     panes[0].sym = selected.symbol;
     panes[0].token = selected.token || '';
     panes[0].tf = selected.interval || '1m';
-    panes[0].isOption = /(CE|PE)$/i.test(selected.symbol);
+    panes[0].rangeDays = selected.rangeDays || 5;
+    panes[0].isOption = isOpt;
+    panes[0].lastLtp = null;
+    panes[0].prevClose = null;
+    clearPaneChartData(panes[0]);
 
     const symTitle = $('chart-active-sym');
     const symSeg = $('chart-active-seg');
     const p1Sym = $('p1-sym');
+    const p1Tf = $('p1-tf');
+    const pane1El = $('pane-1');
+    const p1SegBadge = pane1El ? pane1El.querySelector('.pane-seg') : null;
+    const isIdxSym = String(selected.token || '').includes('_INDEX') || ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX'].includes(selected.symbol.toUpperCase());
+    const segLabel = isFo ? 'NSE F&O' : (isIdxSym ? 'NSE INDEX' : 'NSE EQ');
+
     if (symTitle) symTitle.textContent = selected.symbol;
-    if (symSeg) symSeg.textContent = panes[0].isOption ? 'NSE F&O' : 'NSE';
+    if (symSeg) symSeg.textContent = segLabel;
     if (p1Sym) p1Sym.textContent = selected.symbol;
+    if (p1Tf) p1Tf.textContent = panes[0].tf;
+    if (p1SegBadge) p1SegBadge.textContent = segLabel;
+
+    const ltpEl = $('p1-ltp');
+    const chgEl = $('p1-chg');
+    if (ltpEl) ltpEl.textContent = '—';
+    if (chgEl) {
+      chgEl.textContent = '—';
+      chgEl.className = 'pane-chg pos';
+    }
+    updatePaneHeaderQuote(panes[0], 0, 0, 0, 0);
+
+    const limitInput = $('input-limit-price');
+    if (limitInput) {
+      limitInput.value = '';
+      delete limitInput.dataset.manual;
+    }
+    const trigInput = $('input-trigger-price');
+    if (trigInput) {
+      trigInput.value = '';
+      delete trigInput.dataset.manual;
+    }
 
     const opSym = $('op-sym-name');
     if (opSym) opSym.textContent = selected.symbol;
 
-    // Immediately update order ticket lot sizing & values for the selected symbol!
+    syncToolbarForPane(panes[0]);
+
+    if (!panes[0].chart) {
+      initChartPane(panes[0]);
+    }
+
+    // Immediately update order ticket lot sizing for the selected symbol
     if (typeof updateLotDisplayFn === 'function') {
       updateLotDisplayFn();
     }
-    if (panes[0].lastLtp) {
-      updateOrderFormPrices(panes[0].lastLtp);
-    }
 
-    // Instantly fetch live quote for order ticket
+    // Instantly fetch real quote for order ticket without letting static fallback overwrite pending candles
+    const reqSym = selected.symbol;
     api(`/api/chart/live-quote?symbol=${encodeURIComponent(selected.symbol)}&token=${encodeURIComponent(selected.token || '')}`)
       .then(q => {
-        if (q && q.ok && q.ltp) {
+        if (panes[0].sym !== reqSym) return;
+        if (q && q.ok && q.ltp && !q.is_fallback) {
           panes[0].lastLtp = Number(q.ltp);
           if (q.prev_close) panes[0].prevClose = Number(q.prev_close);
           updateOrderFormPrices(panes[0].lastLtp);
@@ -1105,14 +1395,33 @@
     switchTab(activeTabIndex);
   }
 
-  function addSymbolTab(sym, token = '') {
-    const isOpt = /(CE|PE)$/i.test(sym);
-    const existing = openTabs.findIndex(t => t.symbol === sym);
+  function addSymbolTab(sym, token = '', lotSize = 0, segment = '') {
+    const cleanSym = String(sym || '').trim();
+    if (!cleanSym) return;
+    if (lotSize || segment) {
+      registerSymbolMeta(cleanSym, { lotSize, segment });
+    }
+    const segUpper = String(segment || '').toUpperCase();
+    const isOpt = isOptionSymbol(cleanSym);
+    const existing = openTabs.findIndex(t => t.symbol.toUpperCase() === cleanSym.toUpperCase());
     if (existing >= 0) {
+      if (token && !openTabs[existing].token) {
+        openTabs[existing].token = token;
+      }
+      if (segment && !openTabs[existing].segment) {
+        openTabs[existing].segment = segment;
+      }
       switchTab(existing);
       return;
     }
-    openTabs.push({ symbol: sym, token, interval: '1m', isOption: isOpt });
+    openTabs.push({
+      symbol: cleanSym,
+      token: token || '',
+      interval: '1m',
+      rangeDays: 5,
+      isOption: isOpt || segUpper === 'NSE_FO' || /\bFUT\b/i.test(cleanSym),
+      segment: segment || '',
+    });
     activeTabIndex = openTabs.length - 1;
     renderSymbolTabs();
     switchTab(activeTabIndex);
@@ -1134,6 +1443,9 @@
       if (popup) {
         popup.classList.toggle('hidden');
         if (!popup.classList.contains('hidden') && input) {
+          if (!input.value.trim() && resultsBox) {
+            resultsBox.innerHTML = '<div class="quick-search-hint">Type 3+ characters to search Upstox / Kotak (e.g. REL, MAR, 25000 CE)</div>';
+          }
           input.focus();
           input.select();
         }
@@ -1149,42 +1461,56 @@
     });
 
     let debounceTimer = null;
+    let quickSearchSeq = 0;
     if (input && resultsBox) {
       input.addEventListener('input', () => {
         clearTimeout(debounceTimer);
         const q = input.value.trim();
-        if (q.length < 2) {
-          resultsBox.innerHTML = '<div class="quick-search-hint">Type any symbol or strike to open chart tab</div>';
+        if (q.length === 0) {
+          resultsBox.innerHTML = '<div class="quick-search-hint">Type 3+ characters to search Upstox / Kotak (e.g. REL, MAR, 25000 CE)</div>';
+          return;
+        }
+        if (q.length < 3) {
+          const need = 3 - q.length;
+          resultsBox.innerHTML = `<div class="quick-search-hint">Type ${need} more character${need > 1 ? 's' : ''} to search Upstox &amp; Kotak…</div>`;
           return;
         }
 
+        const reqSeq = ++quickSearchSeq;
         debounceTimer = setTimeout(async () => {
           try {
-            resultsBox.innerHTML = '<div class="quick-search-hint">Searching…</div>';
+            resultsBox.innerHTML = '<div class="quick-search-hint">Searching Upstox &amp; Kotak…</div>';
             const data = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
+            if (reqSeq !== quickSearchSeq) return;
             if (data.ok && data.results && data.results.length) {
               resultsBox.innerHTML = '';
               data.results.forEach(r => {
+                registerSymbolMeta(r.symbol, { lotSize: r.lot_size, segment: r.segment });
                 const item = document.createElement('div');
                 item.className = 'quick-search-item';
+                const hasSubName = r.name && r.name.toUpperCase() !== r.symbol.toUpperCase();
                 item.innerHTML = `
-                  <div class="item-main"><b>${r.symbol}</b></div>
-                  <div class="item-sub">${r.segment || 'NSE'}</div>
+                  <div class="item-main">
+                    <b>${escapeHtml(r.symbol)}</b>
+                    ${hasSubName ? `<div class="ex-search-row-sub">${escapeHtml(r.name)}</div>` : ''}
+                  </div>
+                  <div class="item-sub">${escapeHtml(r.segment || 'NSE')}</div>
                 `;
                 item.addEventListener('click', () => {
-                  addSymbolTab(r.symbol, r.token || '');
+                  addSymbolTab(r.symbol, r.token || '', r.lot_size || 0, r.segment || '');
                   popup.classList.add('hidden');
                   input.value = '';
                 });
                 resultsBox.appendChild(item);
               });
             } else {
-              resultsBox.innerHTML = '<div class="quick-search-hint">No symbols found</div>';
+              resultsBox.innerHTML = '<div class="quick-search-hint">No matching symbols on Upstox / Kotak</div>';
             }
           } catch (err) {
-            resultsBox.innerHTML = `<div class="quick-search-hint" style="color:var(--bear);">Error: ${err.message}</div>`;
+            if (reqSeq !== quickSearchSeq) return;
+            resultsBox.innerHTML = `<div class="quick-search-hint" style="color:var(--bear);">Error: ${escapeHtml(err.message)}</div>`;
           }
-        }, 150);
+        }, 160);
       });
 
       input.addEventListener('keydown', e => {
@@ -1203,6 +1529,7 @@
     const leftPanel = $('ex-left-panel');
     const btnCollapse = $('btn-collapse-drawer');
     const railBtnInst = $('rail-btn-instruments');
+    const railBtnSettings = $('rail-btn-settings');
 
     if (btnCollapse && leftPanel) {
       btnCollapse.addEventListener('click', () => {
@@ -1216,6 +1543,17 @@
       });
     }
 
+    if (railBtnSettings) {
+      railBtnSettings.addEventListener('click', () => {
+        if (typeof openKeysModalFn === 'function') {
+          openKeysModalFn();
+        } else {
+          const km = $('modal-api-keys');
+          if (km) km.classList.remove('hidden');
+        }
+      });
+    }
+
     // Category filter dropdown
     const catSelect = $('ex-inst-category');
     if (catSelect) {
@@ -1224,42 +1562,77 @@
       });
     }
 
-    // Search input
+    // Search input (triggers live Upstox/Kotak API search from 3+ chars)
     const searchInput = $('ex-inst-search');
     const searchDropdown = $('ex-inst-search-results');
     let searchDebounce = null;
+    let drawerSearchSeq = 0;
 
     if (searchInput && searchDropdown) {
       searchInput.addEventListener('input', () => {
         clearTimeout(searchDebounce);
         const q = searchInput.value.trim();
-        if (q.length < 2) {
+        if (q.length === 0) {
           searchDropdown.classList.add('hidden');
+          searchDropdown.innerHTML = '';
           return;
         }
+        if (q.length < 3) {
+          const need = 3 - q.length;
+          searchDropdown.innerHTML = `<div class="quick-search-hint">Type ${need} more character${need > 1 ? 's' : ''} to search Upstox &amp; Kotak…</div>`;
+          searchDropdown.classList.remove('hidden');
+          return;
+        }
+
+        const reqSeq = ++drawerSearchSeq;
+        searchDropdown.innerHTML = '<div class="quick-search-hint">Searching Upstox &amp; Kotak…</div>';
+        searchDropdown.classList.remove('hidden');
 
         searchDebounce = setTimeout(async () => {
           try {
             const data = await api(`/api/chart/search?q=${encodeURIComponent(q)}`);
+            if (reqSeq !== drawerSearchSeq) return;
             if (data.ok && data.results && data.results.length) {
               searchDropdown.innerHTML = '';
-              data.results.slice(0, 10).forEach(r => {
+              data.results.slice(0, 15).forEach(r => {
+                registerSymbolMeta(r.symbol, { lotSize: r.lot_size, segment: r.segment });
                 const item = document.createElement('div');
-                item.className = 'acc-menu-item';
-                item.innerHTML = `<b>${r.symbol}</b> <small style="margin-left:auto; color:#8b95a5;">${r.segment}</small>`;
+                item.className = 'acc-menu-item ex-search-result-item';
+                const hasSubName = r.name && r.name.toUpperCase() !== r.symbol.toUpperCase();
+                item.innerHTML = `
+                  <div style="display:flex;flex-direction:column;min-width:0;flex:1;">
+                    <b>${escapeHtml(r.symbol)}</b>
+                    ${hasSubName ? `<span class="ex-search-row-sub">${escapeHtml(r.name)}</span>` : ''}
+                  </div>
+                  <small style="margin-left:8px;color:#8b95a5;white-space:nowrap;">${escapeHtml(r.segment || 'NSE')}</small>
+                `;
                 item.addEventListener('click', () => {
-                  addSymbolTab(r.symbol, r.token || '');
+                  addSymbolTab(r.symbol, r.token || '', r.lot_size || 0, r.segment || '');
                   searchDropdown.classList.add('hidden');
                   searchInput.value = '';
                 });
                 searchDropdown.appendChild(item);
               });
               searchDropdown.classList.remove('hidden');
+            } else {
+              searchDropdown.innerHTML = '<div class="quick-search-hint">No matching instruments on Upstox / Kotak</div>';
+              searchDropdown.classList.remove('hidden');
             }
           } catch (e) {
-            // quiet
+            if (reqSeq !== drawerSearchSeq) return;
+            searchDropdown.innerHTML = `<div class="quick-search-hint" style="color:var(--bear);">Search failed: ${escapeHtml(e.message)}</div>`;
+            searchDropdown.classList.remove('hidden');
           }
-        }, 200);
+        }, 160);
+      });
+
+      searchInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const first = searchDropdown.querySelector('.ex-search-result-item');
+          if (first) first.click();
+        } else if (e.key === 'Escape') {
+          searchDropdown.classList.add('hidden');
+        }
       });
 
       document.addEventListener('click', e => {
@@ -1281,21 +1654,22 @@
     list.forEach(inst => {
       const tr = document.createElement('tr');
       tr.className = 'ex-inst-row';
+      tr.dataset.token = inst.token || '';
       tr.innerHTML = `
         <td>
           <div class="td-sym-wrap">
-            <span class="sym-main">${inst.symbol}</span>
-            <span class="sym-sub">${inst.name}</span>
+            <span class="sym-main">${escapeHtml(inst.symbol)}</span>
+            <span class="sym-sub">${escapeHtml(inst.name)}</span>
           </div>
         </td>
         <td>
           <span class="sig-badge ${inst.signal.toLowerCase()}">${inst.signal === 'BUY' ? '▲' : '▼'} ${inst.signal}</span>
         </td>
         <td>
-          <button type="button" class="btn-price-bid" data-sym="${inst.symbol}" title="Sell @ Bid">—</button>
+          <button type="button" class="btn-price-bid" data-sym="${escapeHtml(inst.symbol)}" title="Sell @ Bid">—</button>
         </td>
         <td>
-          <button type="button" class="btn-price-ask" data-sym="${inst.symbol}" title="Buy @ Ask">—</button>
+          <button type="button" class="btn-price-ask" data-sym="${escapeHtml(inst.symbol)}" title="Buy @ Ask">—</button>
         </td>
       `;
 
@@ -1309,12 +1683,14 @@
       bidBtn.addEventListener('click', e => {
         e.stopPropagation();
         addSymbolTab(inst.symbol, inst.token);
-        $('ex-order-panel').classList.remove('collapsed');
+        const op = $('ex-order-panel');
+        if (op) op.classList.remove('collapsed');
       });
       askBtn.addEventListener('click', e => {
         e.stopPropagation();
         addSymbolTab(inst.symbol, inst.token);
-        $('ex-order-panel').classList.remove('collapsed');
+        const op = $('ex-order-panel');
+        if (op) op.classList.remove('collapsed');
       });
 
       tbody.appendChild(tr);
@@ -1327,7 +1703,10 @@
   async function updateWatchlistQuotes() {
     try {
       const rows = document.querySelectorAll('.ex-inst-row');
-      const symbols = Array.from(rows).map(r => ({ symbol: r.querySelector('.sym-main').textContent }));
+      const symbols = Array.from(rows).map(r => ({
+        symbol: r.querySelector('.sym-main').textContent.trim(),
+        token: r.dataset.token || '',
+      }));
       if (!symbols.length) return;
 
       const data = await api('/api/chart/live-quotes', {
@@ -1343,7 +1722,7 @@
         rows.forEach(r => {
           const symEl = r.querySelector('.sym-main');
           if (!symEl) return;
-          const sym = symEl.textContent;
+          const sym = symEl.textContent.trim();
           const q = qMap[sym];
           if (q && q.ltp) {
             const bidBtn = r.querySelector('.btn-price-bid');
@@ -1602,6 +1981,11 @@
       }
 
       if (closedTbody) {
+        const fRealized = $('f-realized-pnl');
+        if (fRealized) {
+          fRealized.textContent = `${net >= 0 ? '+' : ''}₹${net.toFixed(2)}`;
+          fRealized.style.color = net >= 0 ? 'var(--bull)' : 'var(--bear)';
+        }
         if (!closedPositions.length) {
           closedTbody.innerHTML = '<tr><td colspan="11" class="empty-row">No closed positions recorded.</td></tr>';
         } else {
@@ -1876,7 +2260,7 @@
           const callBtn = tr.querySelector('.call-ltp');
           if (callBtn) {
             callBtn.addEventListener('click', () => {
-              addSymbolTab(callSym, callTok);
+              addSymbolTab(callSym, callTok, 0, 'NSE_FO');
               closeModal();
               toast(`Loaded ${callSym} chart & ticket`);
             });
@@ -1886,7 +2270,7 @@
           const putBtn = tr.querySelector('.put-ltp');
           if (putBtn) {
             putBtn.addEventListener('click', () => {
-              addSymbolTab(putSym, putTok);
+              addSymbolTab(putSym, putTok, 0, 'NSE_FO');
               closeModal();
               toast(`Loaded ${putSym} chart & ticket`);
             });
@@ -2148,7 +2532,7 @@
       try {
         const st = await api('/api/auth/session-status');
         if (st && st.authenticated) {
-          isOwner = bool(st.is_owner || st.is_admin);
+          isOwner = Boolean(st.is_owner || st.is_admin);
           updateAuthModeUI(isOwner, st.username || (isOwner ? 'Admin (Saif)' : 'Trader'));
           if (gateModal) gateModal.classList.add('hidden');
         } else {
@@ -2316,13 +2700,53 @@
       }
     });
 
+    // Active pane selection (in 2 or 3 chart split layout)
+    document.querySelectorAll('.chart-pane').forEach((paneEl, idx) => {
+      paneEl.addEventListener('click', () => {
+        activePaneIdx = idx;
+        document.querySelectorAll('.chart-pane').forEach((el, i) => {
+          el.classList.toggle('active', i === idx);
+        });
+        if (panes[idx]) {
+          syncToolbarForPane(panes[idx]);
+        }
+      });
+    });
+
     // Timeframe Buttons
     document.querySelectorAll('.ex-tf-btn').forEach(tfBtn => {
       tfBtn.addEventListener('click', () => {
         document.querySelectorAll('.ex-tf-btn').forEach(b => b.classList.remove('active'));
         tfBtn.classList.add('active');
-        panes[0].tf = tfBtn.dataset.tf;
-        loadCandles(panes[0]);
+        const targetPane = panes[activePaneIdx] || panes[0];
+        targetPane.tf = tfBtn.dataset.tf;
+        if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
+          openTabs[activeTabIndex].interval = targetPane.tf;
+        }
+        loadCandles(targetPane);
+      });
+    });
+
+    // Bottom Date Range Shortcuts (1D, 5D, 1M, 3M, 6M, 1Y)
+    const rangeDaysMap = { '1d': 5, '5d': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+    document.querySelectorAll('.range-btn').forEach(rBtn => {
+      rBtn.addEventListener('click', () => {
+        document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+        rBtn.classList.add('active');
+        const targetPane = panes[activePaneIdx] || panes[0];
+        const days = rangeDaysMap[rBtn.dataset.range] || 5;
+        targetPane.rangeDays = days;
+        if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
+          openTabs[activeTabIndex].rangeDays = days;
+        }
+        if (days > 30 && targetPane.tf !== '1d') {
+          targetPane.tf = '1d';
+          document.querySelectorAll('.ex-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === '1d'));
+          if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
+            openTabs[activeTabIndex].interval = '1d';
+          }
+        }
+        loadCandles(targetPane);
       });
     });
 
@@ -2334,12 +2758,17 @@
 
     function applyLayout(lay) {
       activeLayout = lay;
-      stage.className = `ex-chart-stage layout-${lay}`;
+      if (stage) stage.className = `ex-chart-stage layout-${lay}`;
       if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
 
       document.querySelectorAll('.layout-opt').forEach(opt => {
         opt.classList.toggle('active', parseInt(opt.dataset.layout) === lay);
       });
+
+      if (lay === 1) {
+        activePaneIdx = 0;
+        document.querySelectorAll('.chart-pane').forEach((el, i) => el.classList.toggle('active', i === 0));
+      }
 
       // Initialize pane charts if not yet done
       if (lay >= 2 && !panes[1].chart) {
@@ -2352,18 +2781,17 @@
       }
 
       // Resize all active pane charts so they fill container seamlessly
-      setTimeout(() => {
-        panes.forEach(p => {
+      function refitVisiblePanes() {
+        panes.slice(0, lay).forEach(p => {
           if (p.chart) {
-            if (p.container) {
-              const w = p.container.clientWidth;
-              const h = p.container.clientHeight;
-              if (w > 0 && h > 0) p.chart.resize(w, h);
-            }
-            p.chart.timeScale().fitContent();
+            resizePaneChart(p);
+            try { p.chart.timeScale().fitContent(); } catch (_) {}
           }
         });
-      }, 60);
+      }
+      requestAnimationFrame(refitVisiblePanes);
+      setTimeout(refitVisiblePanes, 60);
+      setTimeout(refitVisiblePanes, 220);
     }
 
     if (lBtn) {
@@ -2471,6 +2899,7 @@
       if (modal) modal.classList.add('hidden');
     }
 
+    openKeysModalFn = openKeysModal;
     if (openBtn) openBtn.addEventListener('click', openKeysModal);
     if (closeBtn) closeBtn.addEventListener('click', closeKeysModal);
     if (cancelBtn) cancelBtn.addEventListener('click', closeKeysModal);
@@ -2582,6 +3011,9 @@
   // --- Mobile Exness App Flow Setup ---
   function setupMobileFlow() {
     const navItems = document.querySelectorAll('.mobile-nav-item');
+    let currentCat = 'favorites';
+    let mobileSearchSeq = 0;
+    let activeOrdersTab = 'open';
     const views = {
       chart: null,
       accounts: $('mview-accounts'),
@@ -2589,6 +3021,17 @@
       performance: $('mview-perf'),
       profile: $('mview-profile'),
     };
+    const keysModal = $('modal-api-keys');
+    const guideModal = $('modal-setup-guide');
+    const paperModal = $('modal-guest-profile');
+
+    function openMobileKeys() {
+      if (typeof openKeysModalFn === 'function') {
+        openKeysModalFn();
+      } else if (keysModal) {
+        keysModal.classList.remove('hidden');
+      }
+    }
 
     function switchMobileTab(tabKey) {
       navItems.forEach(item => {
@@ -2599,18 +3042,22 @@
         document.body.classList.remove('mobile-view-active');
         Object.values(views).forEach(v => v && v.classList.add('hidden'));
 
-        // Trigger chart canvas resize and fit
-        setTimeout(() => {
-          const canvasWrap = $(`${panes[0].id}-canvas-wrap`);
-          const cont = $(`${panes[0].id}-chart-container`);
-          if (canvasWrap && panes[0].chart) {
-            const cr = canvasWrap.getBoundingClientRect();
-            const targetW = Math.max(280, Math.floor(cr.width || (cont ? cont.clientWidth : 0) || window.innerWidth));
-            const targetH = Math.max(220, Math.floor(cr.height || (cont ? cont.clientHeight : 0) || (window.innerHeight - 300)));
-            panes[0].chart.applyOptions({ width: targetW, height: targetH });
-            panes[0].chart.timeScale().fitContent();
-          }
-        }, 50);
+        // Trigger chart canvas resize and fit for all visible panes
+        const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+        function refitMobilePanes() {
+          panes.slice(0, visibleCount).forEach(p => {
+            if (!p.chart) {
+              initChartPane(p);
+              loadCandles(p);
+            } else {
+              resizePaneChart(p);
+              try { p.chart.timeScale().fitContent(); } catch (_) {}
+            }
+          });
+        }
+        requestAnimationFrame(refitMobilePanes);
+        setTimeout(refitMobilePanes, 60);
+        setTimeout(refitMobilePanes, 220);
       } else {
         document.body.classList.add('mobile-view-active');
         Object.entries(views).forEach(([k, v]) => {
@@ -2618,7 +3065,8 @@
         });
 
         if (tabKey === 'trade') {
-          renderMobileTradeList();
+          const msInput = $('m-trade-search-input');
+          renderMobileTradeList(currentCat, msInput ? msInput.value.trim() : '');
         } else if (tabKey === 'accounts') {
           updateMobileAccountsView();
           if (typeof renderMobileOrdersList === 'function') {
@@ -2655,8 +3103,8 @@
     }
 
     const mAccCog = $('m-btn-acc-settings');
-    if (mAccCog && keysModal) {
-      mAccCog.addEventListener('click', () => keysModal.classList.remove('hidden'));
+    if (mAccCog) {
+      mAccCog.addEventListener('click', openMobileKeys);
     }
 
     // Performance screen Start Trading button
@@ -2665,17 +3113,16 @@
 
     // Modals triggers from mobile
     const mBtnGuide = $('m-btn-open-guide');
-    const guideModal = $('modal-setup-guide');
     if (mBtnGuide && guideModal) mBtnGuide.addEventListener('click', () => guideModal.classList.remove('hidden'));
 
     const mBtnKeys = $('m-btn-open-keys');
     const mBtnProfKeys = $('m-btn-profile-keys');
-    const keysModal = $('modal-api-keys');
-    if (mBtnKeys && keysModal) mBtnKeys.addEventListener('click', () => keysModal.classList.remove('hidden'));
-    if (mBtnProfKeys && keysModal) mBtnProfKeys.addEventListener('click', () => keysModal.classList.remove('hidden'));
+    const mProfCog = $('m-profile-cog');
+    if (mBtnKeys) mBtnKeys.addEventListener('click', openMobileKeys);
+    if (mBtnProfKeys) mBtnProfKeys.addEventListener('click', openMobileKeys);
+    if (mProfCog) mProfCog.addEventListener('click', openMobileKeys);
 
     const mRowPaper = $('m-row-paper-profile');
-    const paperModal = $('modal-guest-profile');
     if (mRowPaper && paperModal) mRowPaper.addEventListener('click', () => paperModal.classList.remove('hidden'));
 
     const mRowLocal = $('m-row-run-local');
@@ -2685,7 +3132,6 @@
     if (mRowReddit) mRowReddit.addEventListener('click', () => window.open('https://reddit.com/user/thatsaiiff', '_blank'));
 
     // Mobile Accounts Open / Pending / Closed Tabs
-    let activeOrdersTab = 'open';
     const otabs = document.querySelectorAll('.m-otab');
     otabs.forEach(tab => {
       tab.addEventListener('click', () => {
@@ -3002,17 +3448,17 @@
 
     // Mobile Watchlist Category Chips
     const catChips = document.querySelectorAll('.m-cat-chip');
-    let currentCat = 'favorites';
     catChips.forEach(chip => {
       chip.addEventListener('click', () => {
         catChips.forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
         currentCat = chip.dataset.cat;
-        renderMobileTradeList(currentCat);
+        const mSearchInputEl = $('m-trade-search-input');
+        renderMobileTradeList(currentCat, mSearchInputEl ? mSearchInputEl.value.trim() : '');
       });
     });
 
-    // Mobile Watchlist Search Input
+    // Mobile Watchlist Search Input (3+ chars calls live Upstox/Kotak API)
     const mSearchInput = $('m-trade-search-input');
     if (mSearchInput) {
       let mDebounce = null;
@@ -3020,24 +3466,114 @@
         clearTimeout(mDebounce);
         mDebounce = setTimeout(() => {
           renderMobileTradeList(currentCat, mSearchInput.value.trim());
-        }, 150);
+        }, 160);
+      });
+      mSearchInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const firstRow = document.querySelector('#m-trade-list .m-trade-item');
+          if (firstRow) firstRow.click();
+        }
       });
     }
 
-    function renderMobileTradeList(category = 'favorites', query = '') {
+    async function hydrateMobileTradeQuotes(rowsInfo) {
+      if (!rowsInfo || !rowsInfo.length) return;
+      try {
+        const items = rowsInfo.slice(0, 15).map(r => ({ symbol: r.symbol, token: r.token || '' }));
+        const data = await api('/api/chart/live-quotes', {
+          method: 'POST',
+          body: JSON.stringify({ items }),
+        });
+        if (!data || !data.ok) return;
+        const qList = Array.isArray(data.quotes) ? data.quotes : Object.values(data.quotes || {});
+        const qMap = data.quotes_by_symbol || {};
+        qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
+
+        rowsInfo.forEach(({ symbol, row }) => {
+          const q = qMap[symbol] || qMap[String(symbol).toUpperCase()];
+          if (!q || !q.ltp || !row.isConnected) return;
+          const priceEl = row.querySelector('.m-ti-price');
+          const chgEl = row.querySelector('.m-ti-chg');
+          const ltp = Number(q.ltp);
+          const pct = Number(q.change_percent || 0);
+          const isPos = pct >= 0;
+          if (priceEl) priceEl.textContent = `₹${ltp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          if (chgEl) {
+            chgEl.textContent = `${isPos ? '▲ +' : '▼ '}${pct.toFixed(2)}%`;
+            chgEl.className = `m-ti-chg ${isPos ? 'pos' : 'neg'}`;
+          }
+        });
+      } catch (_) {}
+    }
+
+    async function renderMobileTradeList(category = 'favorites', query = '') {
       const container = $('m-trade-list');
       if (!container) return;
+
+      const reqSeq = ++mobileSearchSeq;
+      let items = [];
+
+      if (query && query.length >= 3) {
+        container.innerHTML = '<div class="m-orders-empty-msg" style="padding:16px;">Searching Upstox &amp; Kotak instruments…</div>';
+        try {
+          const res = await api(`/api/chart/search?q=${encodeURIComponent(query)}`);
+          if (reqSeq !== mobileSearchSeq) return;
+          if (res && res.ok && res.results && res.results.length) {
+            items = res.results.map(r => {
+              registerSymbolMeta(r.symbol, { lotSize: r.lot_size, segment: r.segment });
+              return {
+                symbol: r.symbol,
+                name: (r.name && r.name.toUpperCase() !== r.symbol.toUpperCase())
+                  ? `${r.name} · ${r.segment || 'NSE'}`
+                  : (r.segment || 'NSE'),
+                token: r.token || '',
+                lotSize: r.lot_size || 0,
+                segment: r.segment || '',
+                signal: isOptionSymbol(r.symbol) && r.symbol.includes('PE') ? 'SELL' : 'BUY',
+              };
+            });
+          } else {
+            container.innerHTML = `<div class="m-orders-empty-msg" style="padding:16px;">No matching symbols for "${escapeHtml(query)}"</div>`;
+            return;
+          }
+        } catch (err) {
+          if (reqSeq !== mobileSearchSeq) return;
+          container.innerHTML = `<div class="m-orders-empty-msg" style="padding:16px;color:var(--bear);">Search error: ${escapeHtml(err.message)}</div>`;
+          return;
+        }
+      } else {
+        items = WATCHLIST_PRESETS[category] || WATCHLIST_PRESETS.favorites;
+        if (category === 'options') {
+          items = [...WATCHLIST_PRESETS.nifty_options, ...WATCHLIST_PRESETS.bank_options];
+        }
+        if (query) {
+          const qUpper = query.toUpperCase();
+          items = items.filter(it => it.symbol.toUpperCase().includes(qUpper) || it.name.toUpperCase().includes(qUpper));
+        }
+      }
+
+      if (reqSeq !== mobileSearchSeq) return;
       container.innerHTML = '';
 
-      let items = WATCHLIST_PRESETS[category] || WATCHLIST_PRESETS.favorites;
-      if (category === 'options') {
-        items = [...WATCHLIST_PRESETS.nifty_options, ...WATCHLIST_PRESETS.bank_options];
-      }
-      if (query) {
-        const qUpper = query.toUpperCase();
-        items = items.filter(it => it.symbol.toUpperCase().includes(qUpper) || it.name.toUpperCase().includes(qUpper));
+      if (query && query.length > 0 && query.length < 3) {
+        const need = 3 - query.length;
+        const hint = document.createElement('div');
+        hint.className = 'm-orders-empty-msg';
+        hint.style.padding = '10px 16px 4px';
+        hint.textContent = `Type ${need} more char${need > 1 ? 's' : ''} to search all Upstox stocks & F&O strikes…`;
+        container.appendChild(hint);
       }
 
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'm-orders-empty-msg';
+        empty.style.padding = '16px';
+        empty.textContent = 'No matching instruments.';
+        container.appendChild(empty);
+        return;
+      }
+
+      const renderedRows = [];
       items.forEach(it => {
         const row = document.createElement('div');
         row.className = 'm-trade-item';
@@ -3046,21 +3582,24 @@
           <div class="m-ti-left">
             <div class="m-ti-icon">${it.symbol.includes('BANK') ? '🏦' : (it.symbol.includes('NIFTY') ? '🇮🇳' : (it.symbol.includes('SENSEX') ? '📈' : '⚡'))}</div>
             <div class="m-ti-names">
-              <span class="m-ti-sym">${it.symbol}</span>
-              <span class="m-ti-sub">${it.name}</span>
+              <span class="m-ti-sym">${escapeHtml(it.symbol)}</span>
+              <span class="m-ti-sub">${escapeHtml(it.name || 'NSE')}</span>
             </div>
           </div>
           <div class="m-ti-right">
-            <span class="m-ti-price" id="m-price-${it.symbol.replace(/\s+/g, '_')}">—</span>
-            <span class="m-ti-chg ${isPos ? 'pos' : 'neg'}">${isPos ? '▲ +0.45%' : '▼ -0.32%'}</span>
+            <span class="m-ti-price">—</span>
+            <span class="m-ti-chg ${isPos ? 'pos' : 'neg'}">—</span>
           </div>
         `;
         row.addEventListener('click', () => {
-          addSymbolTab(it.symbol, it.token || '');
+          addSymbolTab(it.symbol, it.token || '', it.lotSize || 0, it.segment || '');
           switchMobileTab('chart');
         });
         container.appendChild(row);
+        renderedRows.push({ symbol: it.symbol, token: it.token || '', row });
       });
+
+      hydrateMobileTradeQuotes(renderedRows);
     }
 
     function updateMobileAccountsView() {
@@ -3082,12 +3621,18 @@
     }
 
     function updateMobilePerformanceView() {
-      const grossPnl = $('pnl-gross-val');
-      const netPnl = $('pnl-net-val');
+      const grossPnl = $('cs-gross-pnl');
+      const netPnl = $('cs-net-pnl');
       const mRealized = $('m-perf-realized');
       const mNet = $('m-perf-net');
-      if (grossPnl && mRealized) mRealized.textContent = grossPnl.textContent;
-      if (netPnl && mNet) mNet.textContent = netPnl.textContent;
+      if (grossPnl && mRealized) {
+        mRealized.textContent = grossPnl.textContent;
+        mRealized.className = `m-metric-val ${grossPnl.textContent.includes('-') ? 'neg' : 'pos'}`;
+      }
+      if (netPnl && mNet) {
+        mNet.textContent = netPnl.textContent;
+        mNet.className = `m-metric-val ${netPnl.textContent.includes('-') ? 'neg' : 'pos'}`;
+      }
     }
 
     function updateMobileProfileView() {

@@ -825,6 +825,131 @@ def test_position_exit_single_endpoint(client):
     assert res.json()["ok"] is True
 
 
+def test_is_option_symbol_distinguishes_equities_and_options():
+    assert main._is_option_symbol("RELIANCE") is False
+    assert main._is_option_symbol("BAJFINANCE") is False
+    assert main._is_option_symbol("SHREECEM") is False
+    assert main._is_option_symbol("NIFTYBEES") is False
+    assert main._is_option_symbol("NIFTY") is False
+    assert main._is_option_symbol("NIFTY 25000 CE") is True
+    assert main._is_option_symbol("BANKNIFTY 52000 PE") is True
+    assert main._is_option_symbol("NIFTY26NOV25000CE") is True
+    assert main._is_option_symbol("SENSEX 81200 CE 12 NOV 26") is True
+
+
+def test_chart_search_equities_and_options_ranking(client, monkeypatch):
+    import time as _time
+
+    future_exp_ms = int((_time.time() + 7 * 86400) * 1000)
+    sample_instruments = [
+        {"trading_symbol": "RELIANCE", "name": "RELIANCE INDUSTRIES LTD", "segment": "NSE_EQ", "instrument_type": "EQ", "instrument_key": "NSE_EQ|INE002A01018", "lot_size": 1},
+        {"trading_symbol": "RELINFRA", "name": "RELIANCE INFRASTRUCTURE", "segment": "NSE_EQ", "instrument_type": "EQ", "instrument_key": "NSE_EQ|INE036A01016", "lot_size": 1},
+        {"trading_symbol": "RELCAPITAL", "name": "RELIANCE CAPITAL LTD", "segment": "NSE_EQ", "instrument_type": "EQ", "instrument_key": "NSE_EQ|INE013A01015", "lot_size": 1},
+        {"trading_symbol": "SHREECEM", "name": "SHREE CEMENT LIMITED", "segment": "NSE_EQ", "instrument_type": "EQ", "instrument_key": "NSE_EQ|INE070A01015", "lot_size": 1},
+        {"trading_symbol": "NIFTY 25000 CE 17 NOV 26", "name": "NIFTY", "underlying_symbol": "NIFTY", "segment": "NSE_FO", "instrument_type": "CE", "instrument_key": "NSE_FO|40001", "strike_price": 25000, "expiry": future_exp_ms, "lot_size": 65},
+        {"trading_symbol": "SHREECEM 25000 CE 26 NOV 26", "name": "SHREECEM", "underlying_symbol": "SHREECEM", "segment": "NSE_FO", "instrument_type": "CE", "instrument_key": "NSE_FO|49999", "strike_price": 25000, "expiry": future_exp_ms, "lot_size": 25},
+    ]
+    monkeypatch.setattr(main, "_UPSTOX_NSE_INSTRUMENTS", sample_instruments)
+    monkeypatch.setattr(main, "_UPSTOX_FO_UNDERLYINGS", {"RELIANCE", "SHREECEM"})
+    monkeypatch.setattr(main, "_get_upstox_option_contracts", lambda *a, **k: [])
+
+    res_rel = client.get("/api/chart/search?q=REL")
+    assert res_rel.status_code == 200
+    d_rel = res_rel.json()
+    assert d_rel["ok"] is True
+    assert len(d_rel["results"]) >= 3
+    first = d_rel["results"][0]
+    assert first["symbol"] == "RELIANCE"
+    assert first["lot_size"] == 1
+    assert first["source"] == "upstox"
+    assert first["token"] == "NSE_EQ|INE002A01018"
+
+    res_opt = client.get("/api/chart/search?q=25000%20CE")
+    assert res_opt.status_code == 200
+    d_opt = res_opt.json()
+    assert d_opt["ok"] is True
+    syms = [r["symbol"] for r in d_opt["results"]]
+    assert "SHREECEM" not in syms
+    assert "NIFTY 25000 CE 17 NOV 26" in syms
+    # Index option must rank ahead of any stock option match
+    assert syms[0].startswith("NIFTY 25000 CE")
+
+
+def test_chart_candles_daily_and_days_param(client, monkeypatch):
+    monkeypatch.setattr(main, "_UPSTOX_INSTRUMENT_KEY_BY_SYM", {"RELIANCE": "NSE_EQ|INE002A01018"})
+    monkeypatch.setattr(main, "_last_candle_quote_cache", {})
+    monkeypatch.setattr(main, "_live_quote_cache", {})
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {
+                "status": "success",
+                "data": {
+                    "candles": [
+                        ["2026-11-10T00:00:00+05:30", 1300.0, 1320.0, 1295.0, 1315.0, 450000, 0],
+                        ["2026-11-09T00:00:00+05:30", 1280.0, 1298.0, 1275.0, 1290.0, 390000, 0],
+                    ]
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def get(self, url, **k):
+            assert "/day/" in url
+            assert "INE002A01018" in url
+            return FakeResp()
+
+    monkeypatch.setattr(main.httpx, "Client", FakeClient)
+
+    res = client.get("/api/chart/candles?symbol=RELIANCE&interval=1d&days=90")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert len(body["candles"]) == 2
+    assert body["candles"][-1]["close"] == 1315.0
+    assert body["ltp"] == 1315.0
+    assert body["prev_close"] == 1290.0
+    assert body["change"] == 25.0
+
+
+def test_cache_quote_from_candles_uses_previous_ist_day(monkeypatch):
+    monkeypatch.setattr(main, "_last_candle_quote_cache", {})
+    # Day 1 close at 15:29 IST (09:59 UTC), Day 2 latest close at 10:00 IST (04:30 UTC)
+    candles = [
+        {"time": 1794218340, "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 100},   # 2026-11-09 15:29 IST
+        {"time": 1794285000, "open": 106.0, "high": 109.0, "low": 105.0, "close": 108.0, "volume": 120},  # 2026-11-10 10:00 IST
+        {"time": 1794285060, "open": 108.0, "high": 111.0, "low": 107.0, "close": 110.0, "volume": 130},  # 2026-11-10 10:01 IST
+    ]
+    main._cache_quote_from_candles("RELIANCE", "NSE_EQ|INE002A01018", candles)
+    entry = main._last_candle_quote_cache["RELIANCE_NSE_EQ|INE002A01018"][1]
+    assert entry["ltp"] == 110.0
+    assert entry["prev_close"] == 104.0
+    assert entry["change"] == 6.0
+
+
+def test_parse_upstox_market_quote_recovers_prev_close_from_net_change():
+    # Post-market Upstox quotes return today's settled close inside ohlc.close while net_change holds true delta
+    q = main._parse_upstox_market_quote(
+        "NIFTY",
+        "NSE_INDEX|Nifty 50",
+        {"last_price": 25044.65, "net_change": 58.25, "ohlc": {"open": 25076.4, "high": 25084.05, "low": 24838.75, "close": 25044.65}},
+        1794292395,
+    )
+    assert q is not None
+    assert q["ltp"] == 25044.65
+    assert q["prev_close"] == 24986.4
+    assert q["change"] == 58.25
+    assert q["change_percent"] == 0.23
+
+
+
+
 
 
 

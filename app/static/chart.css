@@ -54,7 +54,7 @@ body.ex-theme-dark {
   justify-content: space-between;
   padding: 0 12px;
   flex-shrink: 0;
-  z-index: 50;
+  z-index: 120;
 }
 
 .ex-header-left, .ex-header-right {
@@ -552,7 +552,7 @@ body.ex-theme-dark {
   font-weight: 700;
   color: var(--text-dim);
   text-transform: uppercase;
-  padding: 6px 8px;
+  padding: 6px 5px;
   text-align: left;
   border-bottom: 1px solid var(--border-subtle);
   z-index: 2;
@@ -561,7 +561,7 @@ body.ex-theme-dark {
 .ex-instruments-table th.th-bid,
 .ex-instruments-table th.th-ask {
   text-align: right;
-  width: 58px;
+  width: 60px;
 }
 
 .ex-inst-row {
@@ -579,8 +579,8 @@ body.ex-theme-dark {
 }
 
 .ex-inst-row td {
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 6px 5px;
+  font-size: 11.5px;
   vertical-align: middle;
 }
 
@@ -619,15 +619,16 @@ body.ex-theme-dark {
 
 .btn-price-bid, .btn-price-ask {
   width: 100%;
-  padding: 4px 6px;
+  padding: 4px 4px;
   border-radius: 4px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   border: none;
   cursor: pointer;
   text-align: right;
   transition: opacity 0.12s ease;
+  white-space: nowrap;
 }
 
 .btn-price-bid {
@@ -949,6 +950,11 @@ body.ex-theme-dark {
 
 .ex-chart-stage.layout-3 #pane-1 {
   grid-row: 1 / 3;
+}
+
+.ex-chart-stage.layout-2 .pane-chart-wrap,
+.ex-chart-stage.layout-3 .pane-chart-wrap {
+  min-height: 0;
 }
 
 .chart-pane {
@@ -2414,7 +2420,7 @@ body.ex-theme-dark {
   border-radius: 8px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.8);
   padding: 8px;
-  z-index: 250;
+  z-index: 300;
 }
 .quick-search-box input {
   width: 100%;
@@ -2457,6 +2463,20 @@ body.ex-theme-dark {
 .quick-search-item .item-sub {
   font-size: 10.5px;
   color: var(--text-muted);
+  white-space: nowrap;
+  margin-left: 8px;
+}
+.quick-search-item .item-main {
+  min-width: 0;
+  flex: 1;
+}
+.ex-search-row-sub {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Account Menu Promo Note */
@@ -2660,6 +2680,10 @@ body.ex-theme-dark {
   }
 
   /* Mobile Chart Layout: Horizontal half-half split instead of narrow vertical columns */
+  .pane-chart-wrap {
+    min-height: 0 !important;
+  }
+
   .ex-chart-stage.layout-2 {
     grid-template-columns: 1fr !important;
     grid-template-rows: 1fr 1fr !important;
@@ -2729,17 +2753,36 @@ body.ex-theme-dark {
 
   .ex-chart-topbar {
     height: 34px;
-    padding: 0 8px;
+    padding: 0 6px;
     overflow-x: auto;
+    scrollbar-width: none;
+    gap: 6px;
   }
 
+  .ex-chart-topbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ex-chart-topbar .chart-active-sym-wrap,
+  .ex-chart-topbar .v-sep,
   .active-ohlc {
     display: none;
+  }
+
+  .tb-left, .tb-right {
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   .ex-tf-btn {
     padding: 2px 5px;
     font-size: 11px;
+  }
+
+  #layout-toggle-btn {
+    padding: 3px 6px;
+    font-size: 10.5px;
+    white-space: nowrap;
   }
 
   .pane-header {

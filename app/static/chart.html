@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness3">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness4">
 </head>
 <body class="ex-theme-dark">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -30,10 +30,10 @@
         <button type="button" id="btn-add-tab" class="ex-tab-add-btn" title="Add Chart Tab (Search Symbol)">+</button>
         <div id="quick-tab-search-popup" class="quick-tab-search-popup hidden">
           <div class="quick-search-box">
-            <input type="text" id="quick-tab-search-input" placeholder="Search strike or symbol (e.g. 25000 CE, RELIANCE)" autocomplete="off">
+            <input type="text" id="quick-tab-search-input" placeholder="Search NSE stock or strike (3+ chars, e.g. REL, MAR, 25000 CE)" autocomplete="off">
           </div>
           <div id="quick-tab-search-results" class="quick-tab-search-results">
-            <div class="quick-search-hint">Type any symbol or strike to open chart tab</div>
+            <div class="quick-search-hint">Type 3+ characters to search Upstox / Kotak</div>
           </div>
         </div>
       </div>
@@ -149,7 +149,7 @@
         </div>
 
         <div class="ex-drawer-search">
-          <input type="text" id="ex-inst-search" placeholder="Search scrip, strike (e.g. 25000 CE)" autocomplete="off">
+          <input type="text" id="ex-inst-search" placeholder="Search NSE stock or strike (3+ chars, e.g. REL, MAR)" autocomplete="off">
           <div id="ex-inst-search-results" class="ex-inst-search-results hidden"></div>
         </div>
 
@@ -352,7 +352,7 @@
         <section class="chart-pane" id="pane-3" data-pane-idx="2">
           <div class="pane-header">
             <div class="pane-title-wrap">
-              <span class="pane-sym" id="p3-sym">NIFTY 50</span>
+              <span class="pane-sym" id="p3-sym">NIFTY</span>
               <span class="pane-tf" id="p3-tf">5m</span>
               <span class="pane-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p3-quote-pill">
@@ -834,7 +834,7 @@
 
       <!-- Search Bar -->
       <div class="m-trade-search-bar">
-        <input type="text" id="m-trade-search-input" placeholder="Search scrip or strike (e.g. 25000 CE)">
+        <input type="text" id="m-trade-search-input" placeholder="Search NSE stock or strike (3+ chars, e.g. REL, MAR, 25000 CE)">
       </div>
 
       <!-- Category Filter Tabs -->
@@ -1401,6 +1401,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-exness3"></script>
+  <script src="/static/chart.js?v=20261110-exness4"></script>
 </body>
 </html>

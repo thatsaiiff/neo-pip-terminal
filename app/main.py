@@ -2729,7 +2729,9 @@ def market_movers():
 
 UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
     "NIFTY": "NSE_INDEX|Nifty 50",
+    "NIFTY 50": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "BANK NIFTY": "NSE_INDEX|Nifty Bank",
     "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
     "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
     "SENSEX": "BSE_INDEX|SENSEX",
@@ -2748,6 +2750,8 @@ UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
     "BAJFINANCE": "NSE_EQ|INE296A01024",
     "MARUTI": "NSE_EQ|INE585B01010",
     "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TMPV": "NSE_EQ|INE155A01022",
+    "TMCV": "NSE_EQ|INE1TAE01010",
     "TATASTEEL": "NSE_EQ|INE081A01020",
     "M&M": "NSE_EQ|INE101A01026",
     "ASIANPAINT": "NSE_EQ|INE021A01026",
@@ -2760,7 +2764,101 @@ UPSTOX_INSTRUMENT_MAP: dict[str, str] = {
     "COALINDIA": "NSE_EQ|INE522F01014",
     "ADANIENT": "NSE_EQ|INE423A01024",
     "ADANIPORTS": "NSE_EQ|INE742F01042",
+    "ETERNAL": "NSE_EQ|INE758T01015",
+    "ZOMATO": "NSE_EQ|INE758T01015",
+    "PAYTM": "NSE_EQ|INE982J01020",
 }
+
+
+_OPTION_SYM_RE = re.compile(r"\d\s*(?:CE|PE)(?:\b|$)", re.IGNORECASE)
+
+
+def _is_option_symbol(symbol: str | None) -> bool:
+    s = (symbol or "").strip().upper()
+    if not s:
+        return False
+    return bool(_OPTION_SYM_RE.search(s)) or bool(parse_option_sym(s))
+
+
+_UPSTOX_NSE_INSTRUMENTS: list[dict[str, Any]] = []
+_UPSTOX_INSTRUMENT_KEY_BY_SYM: dict[str, str] = {}
+_UPSTOX_LOT_SIZE_BY_SYM: dict[str, int] = {}
+_UPSTOX_FO_UNDERLYINGS: set[str] = set()
+_UPSTOX_MASTER_LAST_FETCH: float = 0.0
+_UPSTOX_MASTER_CACHE_FILE = "/tmp/upstox_nse_instruments.json.gz"
+_UPSTOX_MASTER_LOCK = threading.Lock()
+
+
+def _ensure_upstox_instruments_loaded(force: bool = False) -> None:
+    global _UPSTOX_NSE_INSTRUMENTS, _UPSTOX_INSTRUMENT_KEY_BY_SYM, _UPSTOX_LOT_SIZE_BY_SYM, _UPSTOX_FO_UNDERLYINGS, _UPSTOX_MASTER_LAST_FETCH
+    now = time.time()
+    if not force and _UPSTOX_NSE_INSTRUMENTS and (now - _UPSTOX_MASTER_LAST_FETCH < 43200):
+        return
+
+    with _UPSTOX_MASTER_LOCK:
+        if not force and _UPSTOX_NSE_INSTRUMENTS and (now - _UPSTOX_MASTER_LAST_FETCH < 43200):
+            return
+
+        raw_bytes = None
+        if os.path.exists(_UPSTOX_MASTER_CACHE_FILE) and not force:
+            try:
+                mtime = os.path.getmtime(_UPSTOX_MASTER_CACHE_FILE)
+                if now - mtime < 43200:
+                    with open(_UPSTOX_MASTER_CACHE_FILE, "rb") as f:
+                        raw_bytes = f.read()
+            except Exception:
+                raw_bytes = None
+
+        if not raw_bytes and not os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+                with httpx.Client(timeout=12.0) as client:
+                    resp = client.get(url, headers={"User-Agent": "NeoPIP/1.0"})
+                    if resp.status_code == 200:
+                        raw_bytes = resp.content
+                        try:
+                            with open(_UPSTOX_MASTER_CACHE_FILE, "wb") as f:
+                                f.write(raw_bytes)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if raw_bytes:
+            try:
+                import gzip
+                decompressed = gzip.decompress(raw_bytes)
+                data = json.loads(decompressed.decode("utf-8"))
+                if isinstance(data, list) and data:
+                    _UPSTOX_NSE_INSTRUMENTS = data
+                    key_map: dict[str, str] = {}
+                    lot_map: dict[str, int] = {}
+                    fo_underlyings: set[str] = set()
+                    for item in data:
+                        sym = str(item.get("trading_symbol") or "").upper().strip()
+                        ikey = str(item.get("instrument_key") or "").strip()
+                        seg = str(item.get("segment") or "").upper().strip()
+                        if seg == "NSE_FO":
+                            und_sym = str(item.get("underlying_symbol") or item.get("asset_symbol") or "").upper().strip()
+                            if und_sym:
+                                fo_underlyings.add(und_sym)
+                        if sym and ikey:
+                            if sym not in key_map or item.get("instrument_type") == "EQ":
+                                key_map[sym] = ikey
+                            try:
+                                lot_map[sym] = int(item.get("lot_size") or 1)
+                            except (ValueError, TypeError):
+                                lot_map[sym] = 1
+                    _UPSTOX_INSTRUMENT_KEY_BY_SYM = key_map
+                    _UPSTOX_LOT_SIZE_BY_SYM = lot_map
+                    _UPSTOX_FO_UNDERLYINGS = fo_underlyings
+                    _UPSTOX_MASTER_LAST_FETCH = now
+            except Exception:
+                pass
+
+
+if not os.getenv("PYTEST_CURRENT_TEST"):
+    threading.Thread(target=_ensure_upstox_instruments_loaded, daemon=True).start()
 
 
 _option_contracts_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -2834,34 +2932,56 @@ def _find_upstox_option_instrument(sym: str) -> str | None:
         return None
     und, strike, opt_type = parsed
     contracts = _get_upstox_option_contracts(und)
-    if not contracts:
-        return None
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    matched = [
-        c for c in contracts
-        if abs(float(c.get("strike_price") or 0) - strike) < 0.1
-        and str(c.get("instrument_type") or "").upper() == opt_type
-    ]
-    if not matched:
-        return None
-    matched.sort(key=lambda x: (x.get("expiry", "") < today_str, x.get("expiry", "")))
-    return matched[0].get("instrument_key")
+    if contracts:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        matched = [
+            c for c in contracts
+            if abs(float(c.get("strike_price") or 0) - strike) < 0.1
+            and str(c.get("instrument_type") or "").upper() == opt_type
+        ]
+        if matched:
+            matched.sort(key=lambda x: (x.get("expiry", "") < today_str, x.get("expiry", "")))
+            return matched[0].get("instrument_key")
+
+    if not _UPSTOX_NSE_INSTRUMENTS:
+        _ensure_upstox_instruments_loaded()
+    if _UPSTOX_NSE_INSTRUMENTS:
+        now_ms = int(time.time() * 1000) - 86400_000
+        matched_master = [
+            x for x in _UPSTOX_NSE_INSTRUMENTS
+            if x.get("segment") == "NSE_FO"
+            and str(x.get("underlying_symbol") or "").upper() == und
+            and str(x.get("instrument_type") or "").upper() == opt_type
+            and abs(float(x.get("strike_price") or 0) - strike) < 0.1
+        ]
+        if matched_master:
+            matched_master.sort(key=lambda x: (int(x.get("expiry") or 0) < now_ms, int(x.get("expiry") or 0)))
+            return matched_master[0].get("instrument_key")
+    return None
 
 
 def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[str, bool]:
     sym = (symbol or "NIFTY").strip().upper()
+    sym_is_opt = _is_option_symbol(sym)
     if token and str(token).strip():
         clean_tok = str(token).strip()
         if "|" in clean_tok:
-            is_opt = "NSE_FO" in clean_tok or bool(re.search(r"(CE|PE)$", sym))
+            is_opt = "NSE_FO" in clean_tok or sym_is_opt
             return clean_tok, is_opt
         return f"NSE_FO|{clean_tok}", True
 
     if sym in UPSTOX_INSTRUMENT_MAP:
         return UPSTOX_INSTRUMENT_MAP[sym], False
 
-    is_option = bool(re.search(r"(CE|PE)$", sym)) or bool(parse_option_sym(sym))
-    if is_option:
+    if not _UPSTOX_NSE_INSTRUMENTS:
+        _ensure_upstox_instruments_loaded()
+
+    if sym in _UPSTOX_INSTRUMENT_KEY_BY_SYM:
+        k = _UPSTOX_INSTRUMENT_KEY_BY_SYM[sym]
+        is_opt = "NSE_FO" in k or sym_is_opt
+        return k, is_opt
+
+    if sym_is_opt:
         found_key = _find_upstox_option_instrument(sym)
         if found_key:
             return found_key, True
@@ -2877,25 +2997,25 @@ def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[s
             except Exception:
                 pass
 
-    if not is_option:
+    if not sym_is_opt:
         if sym.startswith("BANKNIFTY"):
             return UPSTOX_INSTRUMENT_MAP["BANKNIFTY"], False
         if sym.startswith("FINNIFTY"):
             return UPSTOX_INSTRUMENT_MAP["FINNIFTY"], False
         if sym.startswith("MIDCPNIFTY"):
             return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"], False
-        if sym.startswith("NIFTY"):
+        if sym.startswith("NIFTY") and sym == "NIFTY":
             return UPSTOX_INSTRUMENT_MAP["NIFTY"], False
-        if sym.startswith("SENSEX"):
+        if sym.startswith("SENSEX") and sym == "SENSEX":
             return UPSTOX_INSTRUMENT_MAP["SENSEX"], False
         if sym.startswith("BANKEX"):
             return UPSTOX_INSTRUMENT_MAP["BANKEX"], False
 
     m = re.match(r"^([A-Z&_-]+?)(\d{2}[A-Z]{3}|\d{2}[0-9]{2})", sym)
-    if m and m.group(1) in UPSTOX_INSTRUMENT_MAP and not is_option:
+    if m and m.group(1) in UPSTOX_INSTRUMENT_MAP and not sym_is_opt:
         return UPSTOX_INSTRUMENT_MAP[m.group(1)], False
 
-    if is_option:
+    if sym_is_opt:
         if "SENSEX" in sym:
             return UPSTOX_INSTRUMENT_MAP["SENSEX"], True
         if "BANKNIFTY" in sym:
@@ -2906,7 +3026,7 @@ def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[s
             return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"], True
         return UPSTOX_INSTRUMENT_MAP["NIFTY"], True
 
-    return UPSTOX_INSTRUMENT_MAP.get(sym, UPSTOX_INSTRUMENT_MAP["NIFTY"]), is_option
+    return UPSTOX_INSTRUMENT_MAP.get(sym, UPSTOX_INSTRUMENT_MAP["NIFTY"]), sym_is_opt
 
 
 def _derive_option_candles_from_index(
@@ -3134,6 +3254,100 @@ def upstox_status():
     }
 
 
+_last_candle_quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_daily_close_cache: dict[str, tuple[float, tuple[float, float, float, float, float, int, int]]] = {}
+
+
+def _get_daily_close_info(inst_key: str, upstox_headers: dict[str, str]) -> tuple[float, float, float, float, float, int, int] | None:
+    """Return (latest_close, prev_close, open, high, low, volume, time_ts) cached for 300s."""
+    global _daily_close_cache
+    now = time.time()
+    cached = _daily_close_cache.get(inst_key)
+    if cached and (now - cached[0] < 300.0):
+        return cached[1]
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return None
+    if inst_key.startswith("NSE_FO|") and not inst_key.split("|", 1)[1].isdigit():
+        return None
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        from_str = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+        day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
+        with httpx.Client(timeout=2.5) as client:
+            resp = client.get(day_url, headers=upstox_headers)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                if raw:
+                    latest = raw[0]
+                    prev = raw[1] if len(raw) >= 2 else latest
+                    ltp = float(latest[4])
+                    prev_c = float(prev[4] if len(raw) >= 2 else latest[1])
+                    d_open = float(latest[1])
+                    d_high = float(latest[2])
+                    d_low = float(latest[3])
+                    d_vol = int(float(latest[5]))
+                    d_time = int(datetime.fromisoformat(latest[0]).timestamp())
+                    info = (ltp, prev_c, d_open, d_high, d_low, d_vol, d_time)
+                    _daily_close_cache[inst_key] = (now, info)
+                    return info
+    except Exception:
+        pass
+    return None
+
+
+def _cache_quote_from_candles(
+    symbol: str,
+    token: str | None,
+    candles: list[dict[str, Any]],
+) -> None:
+    if not candles:
+        return
+    sym = (symbol or "NIFTY").strip().upper()
+    tok = (token or "").strip()
+    key = f"{sym}_{tok}"
+    last = candles[-1]
+    ltp = float(last.get("close") or 0.0)
+    if ltp <= 0:
+        return
+
+    # Find close of the previous IST trading session inside the candle array when available
+    last_ist_day = (int(last.get("time") or 0) + 19800) // 86400
+    prev_day_bar = None
+    for c in reversed(candles[:-1]):
+        c_ist_day = (int(c.get("time") or 0) + 19800) // 86400
+        if c_ist_day < last_ist_day:
+            prev_day_bar = c
+            break
+
+    if prev_day_bar is not None:
+        prev_close = float(prev_day_bar.get("close") or ltp)
+    else:
+        first_bar = candles[0]
+        prev_close = float(first_bar.get("open") or (candles[-2].get("close") if len(candles) >= 2 else last.get("open")) or ltp)
+
+    diff = round(ltp - prev_close, 2)
+    pct = round((diff / prev_close) * 100, 2) if prev_close > 0 else 0.0
+    _last_candle_quote_cache[key] = (
+        time.time(),
+        {
+            "ok": True,
+            "symbol": sym,
+            "token": tok,
+            "ltp": ltp,
+            "open": float(last.get("open") or ltp),
+            "high": float(last.get("high") or ltp),
+            "low": float(last.get("low") or ltp),
+            "close": ltp,
+            "prev_close": prev_close,
+            "volume": int(last.get("volume") or 0),
+            "change": diff,
+            "change_percent": pct,
+            "time": int(last.get("time") or time.time()),
+            "is_fallback": False,
+        },
+    )
+
+
 @app.get("/api/chart/candles")
 def chart_candles(
     symbol: str = "NIFTY",
@@ -3141,9 +3355,11 @@ def chart_candles(
     interval: str = "5s",
     date: str | None = None,
     use_underlying: bool = False,
+    days: int = 7,
 ):
     sym = (symbol or "NIFTY").strip().upper()
-    is_option_sym = bool(re.search(r"(CE|PE)$", sym)) or bool(parse_option_sym(sym))
+    is_option_sym = _is_option_symbol(sym)
+    requested_days = max(1, min(int(days or 7), 365))
 
     if use_underlying and is_option_sym:
         underlying_sym = "NIFTY"
@@ -3174,9 +3390,10 @@ def chart_candles(
 
     # If it is an option and we only have an index key, do NOT query Upstox directly for raw option candles
     if not must_derive_option:
-        # 1. Daily candles (fetch 1 full year of daily bars directly from Upstox)
-        if interval_clean in {"1d", "day", "daily"}:
-            from_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        # 1. Daily candles (fetch up to requested_days or 1 full year of daily bars directly from Upstox)
+        if interval_clean in {"1d", "day", "daily"} or requested_days > 30:
+            daily_span = max(requested_days, 365) if interval_clean in {"1d", "day", "daily"} else requested_days
+            from_str = (datetime.now() - timedelta(days=daily_span)).strftime("%Y-%m-%d")
             day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
             try:
                 with httpx.Client(timeout=5.0) as client:
@@ -3194,7 +3411,14 @@ def chart_candles(
                             for c in res_candles:
                                 seen[c["time"]] = c
                             res_candles = [seen[t] for t in sorted(seen.keys())]
+                            _cache_quote_from_candles(sym, token, res_candles)
                             q_data = _get_live_quote_data(symbol, token=token)
+                            if q_data.get("is_fallback") and res_candles:
+                                q_data["ltp"] = res_candles[-1]["close"]
+                                prev_d = res_candles[-2]["close"] if len(res_candles) >= 2 else res_candles[-1]["open"]
+                                q_data["prev_close"] = prev_d
+                                q_data["change"] = round(q_data["ltp"] - prev_d, 2)
+                                q_data["change_percent"] = round((q_data["change"] / prev_d) * 100, 2) if prev_d > 0 else 0.0
                             return {
                                 "ok": True,
                                 "symbol": symbol,
@@ -3211,8 +3435,8 @@ def chart_candles(
             except Exception:
                 pass
 
-        # 2. Intraday Multi-Day Candles (past 7 days for 1m-15m, past 30 days for 1h)
-        days_back = 30 if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} else 7)
+        # 2. Intraday Multi-Day Candles (up to 30 days for 1h or explicit days param, 1d for 5s/15s, else requested_days)
+        days_back = max(requested_days, 30) if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} and requested_days <= 5 else min(requested_days, 30))
         from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
         range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
@@ -3351,8 +3575,20 @@ def chart_candles(
         for c in res_candles:
             seen[c["time"]] = c
         res_candles = [seen[t] for t in sorted(seen.keys())]
+        _cache_quote_from_candles(sym, token, res_candles)
 
     q_data = _get_live_quote_data(symbol, token=token)
+    if q_data.get("is_fallback") and res_candles:
+        ltp_final = float(res_candles[-1]["close"])
+        prev_final = float(res_candles[-2]["close"] if len(res_candles) >= 2 else res_candles[-1]["open"])
+        diff_final = round(ltp_final - prev_final, 2)
+        pct_final = round((diff_final / prev_final) * 100, 2) if prev_final > 0 else 0.0
+    else:
+        ltp_final = float(q_data.get("ltp") or (res_candles[-1]["close"] if res_candles else 0.0))
+        prev_final = float(q_data.get("prev_close") or (res_candles[-1]["open"] if res_candles else 0.0))
+        diff_final = float(q_data.get("change") or 0.0)
+        pct_final = float(q_data.get("change_percent") or 0.0)
+
     return {
         "ok": True,
         "symbol": symbol,
@@ -3360,15 +3596,53 @@ def chart_candles(
         "is_option": is_option,
         "interval": interval,
         "date": selected_date,
-        "ltp": float(q_data.get("ltp") or (res_candles[-1]["close"] if res_candles else 0.0)),
-        "prev_close": float(q_data.get("prev_close") or (res_candles[-1]["open"] if res_candles else 0.0)),
-        "change": float(q_data.get("change") or 0.0),
-        "change_percent": float(q_data.get("change_percent") or 0.0),
+        "ltp": ltp_final,
+        "prev_close": prev_final,
+        "change": diff_final,
+        "change_percent": pct_final,
         "candles": res_candles,
     }
 
 
 _live_quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _parse_upstox_market_quote(sym: str, tok: str, q_item: dict[str, Any], now_t: int) -> dict[str, Any] | None:
+    """Normalize an Upstox market-quote item, recovering true previous close when ohlc.close reflects settlement close."""
+    ltp = float(q_item.get("last_price") or 0.0)
+    if ltp <= 0:
+        return None
+    ohlc = q_item.get("ohlc", {}) or {}
+    c_open = float(ohlc.get("open") or ltp)
+    c_high = float(ohlc.get("high") or ltp)
+    c_low = float(ohlc.get("low") or ltp)
+    c_prev = float(ohlc.get("close") or 0.0)
+    net_chg_raw = q_item.get("net_change")
+    if net_chg_raw is not None:
+        diff = round(float(net_chg_raw), 2)
+        if c_prev <= 0 or abs(c_prev - ltp) < 1e-6 or abs((ltp - c_prev) - diff) > 0.25:
+            c_prev = round(ltp - diff, 2)
+    else:
+        if c_prev <= 0:
+            c_prev = ltp
+        diff = round(ltp - c_prev, 2)
+    pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
+    return {
+        "ok": True,
+        "symbol": sym,
+        "token": tok,
+        "ltp": ltp,
+        "open": c_open,
+        "high": c_high,
+        "low": c_low,
+        "close": ltp,
+        "prev_close": c_prev,
+        "volume": int(float(q_item.get("volume") or 0)),
+        "change": diff,
+        "change_percent": pct,
+        "time": now_t,
+        "is_fallback": False,
+    }
 
 
 def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any]:
@@ -3380,32 +3654,38 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
 
     if cache_key in _live_quote_cache:
         t_cache, data = _live_quote_cache[cache_key]
-        if now - t_cache < 0.6:
+        ttl = 30.0 if data.get("source") == "upstox_daily" else 0.6
+        if now - t_cache < ttl:
             return data
 
     inst_key, is_option = _resolve_upstox_instrument(sym, token=tok)
 
-    for idx in _cached_indices:
-        if idx.get("name", "").upper() == sym:
-            ltp = float(idx.get("ltp") or 0.0)
-            chg = float(idx.get("change") or 0.0)
-            pct = float(idx.get("change_percent") or 0.0)
-            res = {
-                "ok": True,
-                "symbol": sym,
-                "token": tok,
-                "ltp": ltp,
-                "open": round(ltp - chg, 2),
-                "high": round(ltp + 5.0, 2),
-                "low": round(ltp - 5.0, 2),
-                "close": ltp,
-                "volume": 1000,
-                "change": chg,
-                "change_percent": pct,
-                "time": int(now),
-            }
-            _live_quote_cache[cache_key] = (now, res)
-            return res
+    # Only use _cached_indices early when it has actually been refreshed recently from broker/Upstox API
+    if _cached_indices_time:
+        for idx in _cached_indices:
+            if idx.get("name", "").upper() == sym:
+                ltp = float(idx.get("ltp") or 0.0)
+                chg = float(idx.get("change") or 0.0)
+                pct = float(idx.get("change_percent") or 0.0)
+                prev_c = round(ltp - chg, 2)
+                res = {
+                    "ok": True,
+                    "symbol": sym,
+                    "token": tok,
+                    "ltp": ltp,
+                    "open": prev_c,
+                    "high": round(ltp + 5.0, 2),
+                    "low": round(ltp - 5.0, 2),
+                    "close": ltp,
+                    "prev_close": prev_c,
+                    "volume": 1000,
+                    "change": chg,
+                    "change_percent": pct,
+                    "time": int(now),
+                    "is_fallback": False,
+                }
+                _live_quote_cache[cache_key] = (now, res)
+                return res
 
     upstox_headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json"}
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
@@ -3417,36 +3697,12 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
                 resp = client.get(quote_url_str, headers=upstox_headers)
                 if resp.status_code == 200:
                     payload = resp.json().get("data", {})
-                    # Find matching item in payload
                     q_item = payload.get(inst_key) or payload.get(inst_key.replace("|", ":")) or next(iter(payload.values()), None)
                     if q_item:
-                        ltp = float(q_item.get("last_price") or 0.0)
-                        ohlc = q_item.get("ohlc", {}) or {}
-                        c_open = float(ohlc.get("open") or ltp)
-                        c_high = float(ohlc.get("high") or ltp)
-                        c_low = float(ohlc.get("low") or ltp)
-                        c_prev = float(ohlc.get("close") or ltp)
-                        c_close = ltp
-                        c_vol = int(float(q_item.get("volume") or 0))
-                        diff = float(q_item.get("net_change") or round(ltp - c_prev, 2))
-                        pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
-                        res = {
-                            "ok": True,
-                            "symbol": sym,
-                            "token": tok,
-                            "ltp": ltp,
-                            "open": c_open,
-                            "high": c_high,
-                            "low": c_low,
-                            "close": c_close,
-                            "prev_close": c_prev,
-                            "volume": c_vol,
-                            "change": diff,
-                            "change_percent": pct,
-                            "time": int(now),
-                        }
-                        _live_quote_cache[cache_key] = (now, res)
-                        return res
+                        res = _parse_upstox_market_quote(sym, tok, q_item, int(now))
+                        if res:
+                            _live_quote_cache[cache_key] = (now, res)
+                            return res
         except Exception:
             pass
 
@@ -3467,8 +3723,10 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
                         int(float(first[5])),
                     )
                     c_time = int(datetime.fromisoformat(first[0]).timestamp())
-                    diff = round(c_close - c_open, 2)
-                    pct = round((diff / c_open) * 100, 2) if c_open > 0 else 0.0
+                    daily_info = _get_daily_close_info(inst_key, upstox_headers)
+                    day_prev = float(daily_info[1]) if daily_info and daily_info[1] > 0 else float(raw[-1][1])
+                    diff = round(c_close - day_prev, 2)
+                    pct = round((diff / day_prev) * 100, 2) if day_prev > 0 else 0.0
                     res = {
                         "ok": True,
                         "symbol": sym,
@@ -3478,15 +3736,49 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
                         "high": c_high,
                         "low": c_low,
                         "close": c_close,
+                        "prev_close": day_prev,
                         "volume": c_vol,
                         "change": diff,
                         "change_percent": pct,
                         "time": c_time,
+                        "is_fallback": False,
                     }
                     _live_quote_cache[cache_key] = (now, res)
                     return res
     except Exception:
         pass
+
+    # Query Upstox 24/7 daily historical candles (cached 300s) for accurate close & prev_close
+    if not (is_option and inst_key.endswith(("Nifty 50", "Nifty Bank", "SENSEX", "Nifty Fin Service", "NIFTY MID SELECT"))):
+        daily_info = _get_daily_close_info(inst_key, upstox_headers)
+        if daily_info:
+            ltp, prev_c, d_open, d_high, d_low, d_vol, d_time = daily_info
+            diff = round(ltp - prev_c, 2)
+            pct = round((diff / prev_c) * 100, 2) if prev_c > 0 else 0.0
+            res = {
+                "ok": True,
+                "symbol": sym,
+                "token": tok,
+                "ltp": ltp,
+                "open": d_open,
+                "high": d_high,
+                "low": d_low,
+                "close": ltp,
+                "prev_close": prev_c,
+                "volume": d_vol,
+                "change": diff,
+                "change_percent": pct,
+                "time": d_time,
+                "is_fallback": False,
+                "source": "upstox_daily",
+            }
+            _live_quote_cache[cache_key] = (now, res)
+            return res
+
+    # Check cached candle close when daily historical candles are unavailable
+    cached_cq = _last_candle_quote_cache.get(cache_key)
+    if cached_cq and (now - cached_cq[0] < 300):
+        return cached_cq[1]
 
     if is_option:
         fallback_price = 80.0
@@ -3509,10 +3801,12 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
         "high": fallback_price + 2.0,
         "low": fallback_price - 2.0,
         "close": fallback_price,
+        "prev_close": fallback_price,
         "volume": 500,
         "change": 0.0,
         "change_percent": 0.0,
         "time": int(now),
+        "is_fallback": True,
     }
     return fallback
 
@@ -3529,11 +3823,13 @@ class LiveQuotesBatchPayload(BaseModel):
 @app.post("/api/chart/live-quotes")
 def live_quotes_batch(payload: LiveQuotesBatchPayload):
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
-    if up_token and payload.items:
+    items = payload.items[:20]
+    quotes_map: dict[str, dict[str, Any]] = {}
+    if up_token and items:
         try:
             inst_keys = []
             sym_key_map = {}
-            for item in payload.items[:6]:
+            for item in items:
                 sym = str(item.get("symbol") or "NIFTY")
                 tok = str(item.get("token") or "")
                 k, _ = _resolve_upstox_instrument(sym, token=tok)
@@ -3548,53 +3844,29 @@ def live_quotes_batch(payload: LiveQuotesBatchPayload):
                 resp = client.get(batch_url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
-                    results = []
                     now_t = int(time.time())
                     for raw_key, q_item in data.items():
                         mapping = sym_key_map.get(raw_key) or sym_key_map.get(raw_key.replace(":", "|"))
                         if not mapping:
                             continue
                         sym, tok = mapping
-                        ltp = float(q_item.get("last_price") or 0.0)
-                        ohlc = q_item.get("ohlc", {}) or {}
-                        c_open = float(ohlc.get("open") or ltp)
-                        c_high = float(ohlc.get("high") or ltp)
-                        c_low = float(ohlc.get("low") or ltp)
-                        c_prev = float(ohlc.get("close") or ltp)
-                        c_close = ltp
-                        c_vol = int(float(q_item.get("volume") or 0))
-                        diff = float(q_item.get("net_change") or round(ltp - c_prev, 2))
-                        pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
-                        res = {
-                            "ok": True,
-                            "symbol": sym,
-                            "token": tok,
-                            "ltp": ltp,
-                            "open": c_open,
-                            "high": c_high,
-                            "low": c_low,
-                            "close": c_close,
-                            "prev_close": c_prev,
-                            "volume": c_vol,
-                            "change": diff,
-                            "change_percent": pct,
-                            "time": now_t,
-                        }
+                        res = _parse_upstox_market_quote(sym, tok, q_item, now_t)
+                        if not res:
+                            continue
                         _live_quote_cache[f"{sym}_{tok}"] = (time.time(), res)
-                        results.append(res)
-                    if results:
-                        quotes_map = {q["symbol"]: q for q in results}
-                        return {"ok": True, "quotes": results, "quotes_by_symbol": quotes_map, "time": utc_now()}
+                        quotes_map[sym] = res
         except Exception:
             pass
 
-    # Fallback to per-item resolution
     results = []
-    for item in payload.items[:6]:
+    for item in items:
         sym = str(item.get("symbol") or "NIFTY")
         tok = str(item.get("token") or "")
-        results.append(_get_live_quote_data(sym, tok))
-    quotes_map = {q["symbol"]: q for q in results}
+        q = quotes_map.get(sym)
+        if q is None:
+            q = _get_live_quote_data(sym, tok)
+            quotes_map[sym] = q
+        results.append(q)
     return {"ok": True, "quotes": results, "quotes_by_symbol": quotes_map, "time": utc_now()}
 
 
@@ -3651,30 +3923,9 @@ async def ws_quotes_stream(websocket: WebSocket):
                             if not mapping:
                                 continue
                             sym, tok = mapping
-                            ltp = float(quote_obj.get("last_price") or 0.0)
-                            ohlc = quote_obj.get("ohlc", {}) or {}
-                            c_open = float(ohlc.get("open") or ltp)
-                            c_high = float(ohlc.get("high") or ltp)
-                            c_low = float(ohlc.get("low") or ltp)
-                            c_prev = float(ohlc.get("close") or ltp)
-                            c_close = ltp
-                            c_vol = int(float(quote_obj.get("volume") or 0))
-                            diff = float(quote_obj.get("net_change") or round(ltp - c_prev, 2))
-                            pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
-                            ticks.append({
-                                "symbol": sym,
-                                "token": tok,
-                                "ltp": ltp,
-                                "open": c_open,
-                                "high": c_high,
-                                "low": c_low,
-                                "close": c_close,
-                                "prev_close": c_prev,
-                                "volume": c_vol,
-                                "change": diff,
-                                "change_percent": pct,
-                                "time": now_t,
-                            })
+                            tick_obj = _parse_upstox_market_quote(sym, tok, quote_obj, now_t)
+                            if tick_obj:
+                                ticks.append(tick_obj)
                         if ticks:
                             await websocket.send_json({"type": "ticks", "quotes": ticks, "timestamp": now_t})
             except Exception:
@@ -3696,86 +3947,241 @@ def chart_search(q: str = ""):
     if not query:
         return {"ok": True, "results": []}
 
-    results = []
+    if not _UPSTOX_NSE_INSTRUMENTS:
+        _ensure_upstox_instruments_loaded()
+
+    results: list[dict[str, Any]] = []
+    seen_symbols: set[str] = set()
+
+    resolved_queries = [query]
+    if query.startswith("ZOM"):
+        resolved_queries.append("ETERNAL")
+    if query.startswith("TATAM"):
+        resolved_queries.extend(["TATA MOTORS", "TMPV", "TMCV"])
+
+    # 1. Benchmark Indices
     indices = [
-        {"symbol": "NIFTY", "name": "NIFTY 50", "segment": "nse_cm", "type": "INDEX", "token": ""},
-        {"symbol": "BANKNIFTY", "name": "NIFTY BANK", "segment": "nse_cm", "type": "INDEX", "token": ""},
-        {"symbol": "FINNIFTY", "name": "NIFTY FIN SERVICE", "segment": "nse_cm", "type": "INDEX", "token": ""},
-        {"symbol": "SENSEX", "name": "BSE SENSEX", "segment": "bse_cm", "type": "INDEX", "token": ""},
-        {"symbol": "MIDCPNIFTY", "name": "NIFTY MIDCAP SELECT", "segment": "nse_cm", "type": "INDEX", "token": ""},
+        {"symbol": "NIFTY", "name": "NIFTY 50", "segment": "NSE_INDEX", "type": "INDEX", "token": "NSE_INDEX|Nifty 50", "lot_size": 65},
+        {"symbol": "BANKNIFTY", "name": "NIFTY BANK", "segment": "NSE_INDEX", "type": "INDEX", "token": "NSE_INDEX|Nifty Bank", "lot_size": 30},
+        {"symbol": "FINNIFTY", "name": "NIFTY FIN SERVICE", "segment": "NSE_INDEX", "type": "INDEX", "token": "NSE_INDEX|Nifty Fin Service", "lot_size": 60},
+        {"symbol": "SENSEX", "name": "BSE SENSEX", "segment": "BSE_INDEX", "type": "INDEX", "token": "BSE_INDEX|SENSEX", "lot_size": 10},
+        {"symbol": "MIDCPNIFTY", "name": "NIFTY MIDCAP SELECT", "segment": "NSE_INDEX", "type": "INDEX", "token": "NSE_INDEX|NIFTY MID SELECT", "lot_size": 120},
     ]
     for idx in indices:
-        if query in idx["symbol"] or query in idx["name"].upper():
+        if any(rq in idx["symbol"] or rq in idx["name"].upper() for rq in resolved_queries):
             results.append(idx)
+            seen_symbols.add(idx["symbol"])
 
-    # 2. Options search with real Upstox option contracts
+    # 2. Options & Futures search (Upstox live option chain + Upstox NSE_FO master)
     parsed = parse_option_sym(query)
-    strike_match = re.search(r"\d{4,5}", query)
-    if parsed or strike_match:
-        if parsed:
-            underlying, strike_val, opt_type = parsed
-        else:
-            strike_val = float(strike_match.group(0))
-            underlying = "BANKNIFTY" if "BANK" in query else ("SENSEX" if "SENSEX" in query else ("FINNIFTY" if "FIN" in query else "NIFTY"))
-            opt_type = "CE" if "CE" in query else ("PE" if "PE" in query else None)
+    strike_match = re.search(r"\d{3,5}", query)
+    wants_fo = bool(parsed or strike_match or re.search(r"\b(CE|PE|FUT)\b", query))
+    if wants_fo:
+        if parsed or strike_match:
+            if parsed:
+                underlying, strike_val, opt_type = parsed
+            else:
+                strike_val = float(strike_match.group(0))
+                underlying = "BANKNIFTY" if "BANK" in query else ("SENSEX" if "SENSEX" in query else ("FINNIFTY" if "FIN" in query else ("MIDCPNIFTY" if "MID" in query else "NIFTY")))
+                opt_type = "CE" if "CE" in query else ("PE" if "PE" in query else None)
 
-        contracts = _get_upstox_option_contracts(underlying)
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        matched = []
-        if contracts:
-            matched = [
-                c for c in contracts
-                if abs(float(c.get("strike_price") or 0) - strike_val) < 0.1
-                and (not opt_type or str(c.get("instrument_type") or "").upper() == opt_type)
-                and (not c.get("expiry") or c.get("expiry") >= today_str)
-            ]
-            matched.sort(key=lambda x: x.get("expiry", ""))
-            for c in matched[:6]:
-                sym_title = c.get("trading_symbol") or f"{underlying} {int(strike_val)} {c.get('instrument_type')}"
+            contracts = _get_upstox_option_contracts(underlying)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            matched = []
+            if contracts:
+                matched = [
+                    c for c in contracts
+                    if abs(float(c.get("strike_price") or 0) - strike_val) < 0.1
+                    and (not opt_type or str(c.get("instrument_type") or "").upper() == opt_type)
+                    and (not c.get("expiry") or c.get("expiry") >= today_str)
+                ]
+                matched.sort(key=lambda x: x.get("expiry", ""))
+                for c in matched[:8]:
+                    sym_title = c.get("trading_symbol") or f"{underlying} {int(strike_val)} {c.get('instrument_type')}"
+                    if sym_title not in seen_symbols:
+                        seen_symbols.add(sym_title)
+                        results.append({
+                            "symbol": sym_title,
+                            "name": f"{underlying} {int(c.get('strike_price', strike_val))} {c.get('instrument_type')} ({c.get('expiry')})",
+                            "segment": "NSE_FO",
+                            "type": f"OPT {c.get('instrument_type')}",
+                            "strike": str(c.get("strike_price")),
+                            "token": c.get("instrument_key"),
+                            "lot_size": int(c.get("lot_size") or 65),
+                        })
+
+        if _UPSTOX_NSE_INSTRUMENTS:
+            now_ms = int(time.time() * 1000) - 86400_000
+            tokens_q = [tok for tok in re.split(r"\s+", query) if tok]
+            index_unds = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+            fo_matches = []
+            for inst in _UPSTOX_NSE_INSTRUMENTS:
+                if inst.get("segment") != "NSE_FO":
+                    continue
+                exp_ms = int(inst.get("expiry") or 0)
+                if exp_ms and exp_ms < now_ms:
+                    continue
+                tsym = str(inst.get("trading_symbol") or "").upper()
+                und_s = str(inst.get("underlying_symbol") or "").upper()
+                itype_s = str(inst.get("instrument_type") or "").upper()
+                tsym_words = set(re.split(r"\s+", tsym))
+                ok_match = True
+                for t in tokens_q:
+                    if t in {"CE", "PE", "FUT"}:
+                        if t != itype_s and t not in tsym_words:
+                            ok_match = False
+                            break
+                    elif not (t in tsym_words or t == und_s or t in tsym):
+                        ok_match = False
+                        break
+                if ok_match:
+                    fo_matches.append(inst)
+            fo_matches.sort(key=lambda x: (
+                0 if str(x.get("underlying_symbol") or "").upper() in index_unds else 1,
+                int(x.get("expiry") or 0),
+                0 if x.get("instrument_type") == "FUT" else 1,
+                len(str(x.get("trading_symbol") or "")),
+            ))
+            for inst in fo_matches[:10]:
+                sym_title = str(inst.get("trading_symbol") or "").strip().upper()
+                if not sym_title or sym_title in seen_symbols:
+                    continue
+                seen_symbols.add(sym_title)
+                exp_str = datetime.fromtimestamp(int(inst.get("expiry") or 0) / 1000).strftime("%d %b %y") if inst.get("expiry") else ""
                 results.append({
                     "symbol": sym_title,
-                    "name": f"{underlying} {int(c.get('strike_price', strike_val))} {c.get('instrument_type')} ({c.get('expiry')})",
-                    "segment": "nse_fo",
-                    "type": f"OPT {c.get('instrument_type')}",
-                    "strike": str(c.get("strike_price")),
-                    "token": c.get("instrument_key"),
-                })
-        if not matched:
-            types_to_add = [opt_type] if opt_type else ["CE", "PE"]
-            for t in types_to_add:
-                results.append({
-                    "symbol": f"{underlying} {int(strike_val)} {t}",
-                    "name": f"{underlying} {int(strike_val)} {('CALL' if t == 'CE' else 'PUT')}",
-                    "segment": "nse_fo",
-                    "type": f"OPT {t}",
-                    "strike": str(strike_val),
-                    "token": "",
+                    "name": f"{inst.get('name') or inst.get('underlying_symbol') or sym_title} ({exp_str})".strip(),
+                    "segment": "NSE_FO",
+                    "type": str(inst.get("instrument_type") or "FO"),
+                    "strike": str(inst.get("strike_price") or ""),
+                    "token": str(inst.get("instrument_key") or ""),
+                    "lot_size": int(inst.get("lot_size") or 1),
+                    "source": "upstox",
                 })
 
-    popular_stocks = [
-        ("RELIANCE", "Reliance Industries Ltd", "NSE_EQ|INE002A01018"),
-        ("HDFCBANK", "HDFC Bank Ltd", "NSE_EQ|INE040A01034"),
-        ("ICICIBANK", "ICICI Bank Ltd", "NSE_EQ|INE090A01021"),
-        ("INFY", "Infosys Ltd", "NSE_EQ|INE009A01021"),
-        ("TCS", "Tata Consultancy Services Ltd", "NSE_EQ|INE467B01029"),
-        ("ITC", "ITC Ltd", "NSE_EQ|INE154A01025"),
-        ("SBIN", "State Bank of India", "NSE_EQ|INE062A01020"),
-        ("TATASTEEL", "Tata Steel Ltd", "NSE_EQ|INE081A01020"),
-        ("TATAMOTORS", "Tata Motors Ltd", "NSE_EQ|INE155A01022"),
-        ("LT", "Larsen & Toubro Ltd", "NSE_EQ|INE018A01030"),
-        ("BHARTIARTL", "Bharti Airtel Ltd", "NSE_EQ|INE397D01024"),
-    ]
-    for sym, name, tok in popular_stocks:
-        if query in sym or query in name.upper():
+        if not results and strike_match:
+            stk = int(float(strike_match.group(0)))
+            und = "BANKNIFTY" if "BANK" in query else ("SENSEX" if "SENSEX" in query else ("FINNIFTY" if "FIN" in query else "NIFTY"))
+            types_to_add = ["CE"] if "CE" in query else (["PE"] if "PE" in query else ["CE", "PE"])
+            for t in types_to_add:
+                sym_title = f"{und} {stk} {t}"
+                if sym_title not in seen_symbols:
+                    seen_symbols.add(sym_title)
+                    results.append({
+                        "symbol": sym_title,
+                        "name": f"{und} {stk} {('CALL' if t == 'CE' else 'PUT')}",
+                        "segment": "NSE_FO",
+                        "type": f"OPT {t}",
+                        "strike": str(stk),
+                        "token": "",
+                        "lot_size": 30 if und == "BANKNIFTY" else (10 if und == "SENSEX" else 65),
+                    })
+
+    # 3. Search all 85,000+ Upstox NSE Equities & Indices (rank liquid F&O names first)
+    if _UPSTOX_NSE_INSTRUMENTS:
+        eq_exact = []
+        eq_prefix = []
+        eq_contains = []
+
+        for inst in _UPSTOX_NSE_INSTRUMENTS:
+            itype = str(inst.get("instrument_type") or "")
+            if itype not in {"EQ", "INDEX"}:
+                continue
+
+            tsym = str(inst.get("trading_symbol") or "").upper()
+            name = str(inst.get("name") or "").upper()
+
+            if any(tsym == rq for rq in resolved_queries):
+                eq_exact.append(inst)
+            elif any(tsym.startswith(rq) for rq in resolved_queries):
+                eq_prefix.append(inst)
+            elif (len(query) >= 3 or len(resolved_queries) > 1) and any((rq in tsym or rq in name) for rq in resolved_queries):
+                eq_contains.append(inst)
+
+        def _rank_key(inst_obj: dict[str, Any]) -> tuple[int, int, int, str]:
+            sym_s = str(inst_obj.get("trading_symbol") or "").upper()
+            is_fo = 0 if sym_s in _UPSTOX_FO_UNDERLYINGS else 1
+            starts_name = 0 if any(str(inst_obj.get("name") or "").upper().startswith(rq) for rq in resolved_queries) else 1
+            return (is_fo, starts_name, len(sym_s), sym_s)
+
+        eq_prefix.sort(key=_rank_key)
+        eq_contains.sort(key=_rank_key)
+
+        for inst in (eq_exact + eq_prefix + eq_contains):
+            sym = str(inst.get("trading_symbol") or "").strip().upper()
+            if not sym or sym in seen_symbols:
+                continue
+            seen_symbols.add(sym)
+            try:
+                ls = int(inst.get("lot_size") or 1)
+            except (ValueError, TypeError):
+                ls = 1
             results.append({
                 "symbol": sym,
-                "name": name,
-                "segment": "nse_cm",
-                "type": "EQUITY",
-                "token": tok,
+                "name": str(inst.get("name") or sym),
+                "segment": str(inst.get("segment") or "NSE_EQ"),
+                "type": str(inst.get("instrument_type") or "EQUITY"),
+                "token": str(inst.get("instrument_key") or ""),
+                "lot_size": ls,
+                "source": "upstox",
             })
+            if len(results) >= 20:
+                break
+    else:
+        # Static fallback if master failed to load
+        popular_stocks = [
+            ("RELIANCE", "Reliance Industries Ltd", "NSE_EQ|INE002A01018"),
+            ("HDFCBANK", "HDFC Bank Ltd", "NSE_EQ|INE040A01034"),
+            ("ICICIBANK", "ICICI Bank Ltd", "NSE_EQ|INE090A01021"),
+            ("INFY", "Infosys Ltd", "NSE_EQ|INE009A01021"),
+            ("TCS", "Tata Consultancy Services Ltd", "NSE_EQ|INE467B01029"),
+            ("ITC", "ITC Ltd", "NSE_EQ|INE154A01025"),
+            ("SBIN", "State Bank of India", "NSE_EQ|INE062A01020"),
+            ("TATASTEEL", "Tata Steel Ltd", "NSE_EQ|INE081A01020"),
+            ("TMPV", "Tata Motors Pass Veh Ltd", "NSE_EQ|INE155A01022"),
+            ("TMCV", "Tata Motors Limited", "NSE_EQ|INE1TAE01010"),
+            ("MARUTI", "Maruti Suzuki India Ltd", "NSE_EQ|INE585B01010"),
+            ("LT", "Larsen & Toubro Ltd", "NSE_EQ|INE018A01030"),
+            ("BHARTIARTL", "Bharti Airtel Ltd", "NSE_EQ|INE397D01024"),
+            ("ETERNAL", "Eternal Limited (Zomato)", "NSE_EQ|INE758T01015"),
+        ]
+        for sym, name, tok in popular_stocks:
+            if any(rq in sym or rq in name.upper() for rq in resolved_queries) and sym not in seen_symbols:
+                seen_symbols.add(sym)
+                results.append({
+                    "symbol": sym,
+                    "name": name,
+                    "segment": "NSE_EQ",
+                    "type": "EQ",
+                    "token": tok,
+                    "lot_size": 1,
+                })
 
-    return {"ok": True, "results": results[:12]}
+    # 4. Kotak Neo Live Search Integration (when connected)
+    if neo_client is not None and neo_authenticated:
+        try:
+            k_res = neo_client.search_scrip(exchange_segment="nse_cm", symbol=query)
+            k_rows = _rows_from_sdk_result(k_res)
+            for r in k_rows:
+                k_sym = str(r.get("pTrdSymbol") or r.get("trading_symbol") or "").strip().upper()
+                if not k_sym or k_sym in seen_symbols:
+                    continue
+                seen_symbols.add(k_sym)
+                k_tok = r.get("pSymbol") or r.get("token") or ""
+                results.append({
+                    "symbol": k_sym,
+                    "name": str(r.get("pSymbolName") or k_sym),
+                    "segment": "NSE_CM",
+                    "type": "EQUITY",
+                    "token": f"NSE_EQ|{k_tok}" if k_tok else "",
+                    "lot_size": int(r.get("lLotSize") or 1),
+                })
+                if len(results) >= 25:
+                    break
+        except Exception:
+            pass
+
+    return {"ok": True, "results": results[:25]}
 
 
 @app.get("/api/chart/option-chain")
