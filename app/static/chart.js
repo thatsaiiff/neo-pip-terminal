@@ -1255,13 +1255,13 @@
       if (pane.chart) {
         try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
       }
-      window.addEventListener('pointermove', onMove, { passive: false });
-      window.addEventListener('pointerup', onEnd);
-      window.addEventListener('pointercancel', onEnd);
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onEnd);
-      window.addEventListener('touchmove', onMove, { passive: false });
-      window.addEventListener('touchend', onEnd);
+      window.addEventListener('pointermove', onMove, { capture: true, passive: false });
+      window.addEventListener('pointerup', onEnd, true);
+      window.addEventListener('pointercancel', onEnd, true);
+      window.addEventListener('mousemove', onMove, true);
+      window.addEventListener('mouseup', onEnd, true);
+      window.addEventListener('touchmove', onMove, { capture: true, passive: false });
+      window.addEventListener('touchend', onEnd, true);
     }
 
     function onMove(ev) {
@@ -1281,36 +1281,34 @@
     async function onEnd() {
       if (!dragging) return;
       dragging = false;
-      _isDraggingTradeLine = false;
       lineEl.classList.remove('is-dragging');
       document.body.style.cursor = '';
       if (pane.chart) {
         try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
       }
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onEnd);
-      window.removeEventListener('pointercancel', onEnd);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onEnd);
-      window.removeEventListener('touchmove', onMove);
-      window.removeEventListener('touchend', onEnd);
+      window.removeEventListener('pointermove', onMove, { capture: true });
+      window.removeEventListener('pointerup', onEnd, true);
+      window.removeEventListener('pointercancel', onEnd, true);
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('mouseup', onEnd, true);
+      window.removeEventListener('touchmove', onMove, { capture: true });
+      window.removeEventListener('touchend', onEnd, true);
 
       const finalP = Number(lineEl.dataset.dragPrice || 0);
-      if (finalP > 0) {
-        rule[fieldKey] = finalP;
-        handleEl.textContent = formatPillText(finalP);
-        try {
+      try {
+        if (finalP > 0) {
+          rule[fieldKey] = finalP;
+          handleEl.textContent = formatPillText(finalP);
           await api(`/api/sltp/${rule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
             method: 'PATCH',
             body: JSON.stringify({ [fieldKey]: finalP }),
           });
           toast(`✅ Updated ${labelPrefix} to ${cs}${finalP.toFixed(decs)}`);
-          renderPaneTradeLines(pane, true);
-        } catch (err) {
-          toast(`❌ ${err.message}`);
-          renderPaneTradeLines(pane, true);
         }
-      } else {
+      } catch (err) {
+        toast(`❌ ${err.message}`);
+      } finally {
+        _isDraggingTradeLine = false;
         renderPaneTradeLines(pane, true);
       }
     }
@@ -1657,11 +1655,11 @@
         pendLine.classList.add('is-dragging');
         if (pane.chart) try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
         window.addEventListener('pointermove', pMove, { passive: false });
-        window.addEventListener('pointerup', pEnd);
-        window.addEventListener('mousemove', pMove);
-        window.addEventListener('mouseup', pEnd);
-        window.addEventListener('touchmove', pMove, { passive: false });
-        window.addEventListener('touchend', pEnd);
+        window.addEventListener('pointerup', pEnd, true);
+        window.addEventListener('mousemove', pMove, true);
+        window.addEventListener('mouseup', pEnd, true);
+        window.addEventListener('touchmove', pMove, { capture: true, passive: false });
+        window.addEventListener('touchend', pEnd, true);
       }
       function pMove(ev) {
         if (!pDrag || !pane.candleSeries || !pane.canvasWrap) return;
@@ -1681,30 +1679,30 @@
       async function pEnd() {
         if (!pDrag) return;
         pDrag = false;
-        _isDraggingTradeLine = false;
         pendLine.classList.remove('is-dragging');
         if (pane.chart) try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
-        window.removeEventListener('pointermove', pMove);
-        window.removeEventListener('pointerup', pEnd);
-        window.removeEventListener('mousemove', pMove);
-        window.removeEventListener('mouseup', pEnd);
-        window.removeEventListener('touchmove', pMove);
-        window.removeEventListener('touchend', pEnd);
+        window.removeEventListener('pointermove', pMove, true);
+        window.removeEventListener('pointerup', pEnd, true);
+        window.removeEventListener('mousemove', pMove, true);
+        window.removeEventListener('mouseup', pEnd, true);
+        window.removeEventListener('touchmove', pMove, { capture: true });
+        window.removeEventListener('touchend', pEnd, true);
         const fp = Number(pendLine.dataset.dragPrice || 0);
-        if (fp > 0) {
-          try {
+        try {
+          if (fp > 0) {
             const patchRes = await api(`/api/orders/${po.id}?market=${encodeURIComponent(currentMarketMode)}`, {
               method: 'PATCH',
               body: JSON.stringify({ price: fp, trigger_price: fp }),
             });
             const updKind = String(patchRes.order_type || '').startsWith('SL') ? 'STOP' : 'LIMIT';
             toast(`✅ ${pSide} ${updKind} moved to ${cs}${fp.toFixed(decs)}`);
-          } catch (err) {
-            toast(`❌ Order update failed: ${err.message}`);
           }
-          fetchPositionsAndOrders();
-        } else {
-          renderPaneTradeLines(pane, true);
+        } catch (err) {
+          toast(`❌ Order update failed: ${err.message}`);
+        } finally {
+          _isDraggingTradeLine = false;
+          if (fp > 0) fetchPositionsAndOrders();
+          else renderPaneTradeLines(pane, true);
         }
       }
       [handle, pendLine.querySelector('.tpl-hit-bar')].filter(Boolean).forEach(el => {
@@ -2190,10 +2188,14 @@
       }
     }
 
-    const sl = Number(candSl.toFixed(decs));
-    const risk = Math.max(tick, Math.abs(entry - sl));
+    const minStep = Math.pow(10, -decs);
+    let sl = Number(candSl.toFixed(decs));
+    if (Math.abs(entry - sl) < minStep) {
+      sl = Number((s === 'BUY' ? Math.max(minStep, entry - minStep) : entry + minStep).toFixed(decs));
+    }
+    const risk = Math.abs(entry - sl);
     let tpRaw = s === 'BUY' ? entry + (2 * risk) : entry - (2 * risk);
-    if (tpRaw <= 0) tpRaw = decs >= 4 ? 0.0001 : 0.05;
+    if (tpRaw <= 0) tpRaw = minStep;
     const tp = Number(tpRaw.toFixed(decs));
     return {
       sl,
@@ -3982,7 +3984,7 @@
           fRealized.style.color = net >= 0 ? 'var(--bull)' : 'var(--bear)';
         }
         if (!closedPositions.length) {
-          closedTbody.innerHTML = '<tr><td colspan="11" class="empty-row">No closed positions recorded.</td></tr>';
+          closedTbody.innerHTML = '<tr><td colspan="10" class="empty-row">No closed positions recorded.</td></tr>';
         } else {
           closedTbody.innerHTML = '';
           closedPositions.forEach((cp, idx) => {
@@ -4000,8 +4002,10 @@
             const closedTime = cp.closed_at ? (cp.closed_at.split('T')[1]?.slice(0, 8) || cp.closed_at) : 'Today';
 
             const tr = document.createElement('tr');
+            tr.className = 'closed-row-clickable';
+            tr.title = 'Click anywhere on row to inspect FIFO fills, Fill IDs & Order IDs';
             tr.innerHTML = `
-              <td><b>${escapeHtml(sym)}</b></td>
+              <td><span class="closed-expand-chev">▸</span><b>${escapeHtml(sym)}</b></td>
               <td>${escapeHtml(cp.product || 'NRML')}</td>
               <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
               <td>${qty}</td>
@@ -4011,12 +4015,9 @@
                 ${grossPnl >= 0 ? '+' : ''}${pc}${grossPnl.toFixed(2)}
               </td>
               <td class="text-dim">${pc}${cpCharges.toFixed(2)}</td>
-              <td style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:800;">
-                ${isPos ? '+' : ''}${pc}${netPnl.toFixed(2)}
-              </td>
               <td>${escapeHtml(closedTime)}</td>
-              <td>
-                <button type="button" class="btn-toggle-matches" data-match-idx="${idx}">FIFO Fills ▾</button>
+              <td class="col-frozen-pnl" style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:800;">
+                ${isPos ? '+' : ''}${pc}${netPnl.toFixed(2)}
               </td>
             `;
 
@@ -4024,25 +4025,27 @@
             detailTr.className = 'matches-details-row hidden';
             detailTr.id = `matches-row-${idx}`;
             const matches = cp.matches || [];
-            let matchesHtml = '<div class="matches-nested-wrap"><h4>FIFO Execution Lot Matches:</h4>';
+            let matchesHtml = '<div class="matches-nested-wrap"><h4>FIFO Execution Fills &amp; Traceability:</h4>';
             if (!matches.length) {
               matchesHtml += '<p style="color:var(--text-dim);font-size:11px;margin:0;">Single lot match executed directly.</p>';
             } else {
-              matchesHtml += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><thead><tr style="color:var(--text-dim);text-align:left;"><th>Matched Qty</th><th>Buy Price</th><th>Sell Price</th><th>Gross P&amp;L</th><th>Matched At</th></tr></thead><tbody>';
+              matchesHtml += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><thead><tr style="color:var(--text-dim);text-align:left;"><th>Fill ID (In ➔ Out)</th><th>Order ID (In ➔ Out)</th><th>Matched Qty</th><th>Buy Price</th><th>Sell Price</th><th>Gross P&amp;L</th><th>Matched At</th></tr></thead><tbody>';
               matches.forEach(m => {
                 const mPnl = Number(m.gross_pnl || 0);
-                matchesHtml += `<tr><td>${m.quantity}</td><td>${pc}${Number(m.buy_price).toFixed(decs)}</td><td>${pc}${Number(m.sell_price).toFixed(decs)}</td><td style="color:${mPnl >= 0 ? 'var(--bull)' : 'var(--bear)'};font-weight:700;">${mPnl >= 0 ? '+' : ''}${pc}${mPnl.toFixed(2)}</td><td>${m.matched_at ? m.matched_at.split('T')[1]?.slice(0, 8) || m.matched_at : 'Today'}</td></tr>`;
+                const fillPair = `${escapeHtml(m.entry_fill_id || '—')} ➔ ${escapeHtml(m.exit_fill_id || '—')}`;
+                const ordPair = `${escapeHtml(m.entry_order_id || '—')} ➔ ${escapeHtml(m.exit_order_id || '—')}`;
+                matchesHtml += `<tr><td style="font-family:var(--font-mono);font-size:10.5px;">${fillPair}</td><td style="font-family:var(--font-mono);font-size:10.5px;">${ordPair}</td><td>${m.quantity}</td><td>${pc}${Number(m.buy_price).toFixed(decs)}</td><td>${pc}${Number(m.sell_price).toFixed(decs)}</td><td style="color:${mPnl >= 0 ? 'var(--bull)' : 'var(--bear)'};font-weight:700;">${mPnl >= 0 ? '+' : ''}${pc}${mPnl.toFixed(2)}</td><td>${m.matched_at ? m.matched_at.split('T')[1]?.slice(0, 8) || m.matched_at : 'Today'}</td></tr>`;
               });
               matchesHtml += '</tbody></table>';
             }
             matchesHtml += '</div>';
-            detailTr.innerHTML = `<td colspan="11">${matchesHtml}</td>`;
+            detailTr.innerHTML = `<td colspan="10">${matchesHtml}</td>`;
 
-            tr.querySelector('.btn-toggle-matches').addEventListener('click', (e) => {
-              e.stopPropagation();
+            tr.addEventListener('click', () => {
               const isHidden = detailTr.classList.contains('hidden');
               detailTr.classList.toggle('hidden', !isHidden);
-              e.currentTarget.textContent = isHidden ? 'FIFO Fills ▴' : 'FIFO Fills ▾';
+              const chev = tr.querySelector('.closed-expand-chev');
+              if (chev) chev.textContent = isHidden ? '▾' : '▸';
             });
 
             closedTbody.appendChild(tr);
@@ -4784,7 +4787,7 @@
       }
       if ($('open-positions-tbody')) $('open-positions-tbody').innerHTML = '<tr><td colspan="8" class="empty-row">Sign in required.</td></tr>';
       if ($('pending-orders-tbody')) $('pending-orders-tbody').innerHTML = '<tr><td colspan="8" class="empty-row">Sign in required.</td></tr>';
-      if ($('closed-trades-tbody')) $('closed-trades-tbody').innerHTML = '<tr><td colspan="11" class="empty-row">Sign in required.</td></tr>';
+      if ($('closed-trades-tbody')) $('closed-trades-tbody').innerHTML = '<tr><td colspan="10" class="empty-row">Sign in required.</td></tr>';
       if ($('trade-history-tbody')) $('trade-history-tbody').innerHTML = '<tr><td colspan="10" class="empty-row">Sign in required.</td></tr>';
       if ($('m-orders-list')) $('m-orders-list').innerHTML = '';
       if ($('ex-acc-balance')) $('ex-acc-balance').textContent = '—';
@@ -5194,6 +5197,7 @@
         $(`${getPanePrefix(targetPane)}-tf`).textContent = tf;
       }
       syncToolbarForPane(targetPane);
+      if (typeof window._updateCountdownsFn === 'function') window._updateCountdownsFn();
       loadCandles(targetPane);
     }
 
@@ -6028,12 +6032,12 @@
               </div>
               <div class="m-card-meta-row">
                 <span>Gross: ${grossPnl >= 0 ? '+' : ''}${pc}${grossPnl.toFixed(2)} | Chg: ${pc}${cpCharges.toFixed(2)}</span>
-                <span class="m-card-expand-toggle" data-idx="${idx}">FIFO Fills ▾</span>
+                <span class="m-card-expand-toggle" data-idx="${idx}">Details ▾</span>
               </div>
               <div class="m-card-fifo-drawer hidden" id="m-fifo-drawer-${idx}">
                 ${matches.length ? matches.map(m => `
                   <div class="m-fifo-item">
-                    <span>${m.quantity} qty @ ${pc}${Number(m.buy_price).toFixed(decs)} ➔ ${pc}${Number(m.sell_price).toFixed(decs)}</span>
+                    <span>${m.quantity} qty @ ${pc}${Number(m.buy_price).toFixed(decs)} ➔ ${pc}${Number(m.sell_price).toFixed(decs)}${(m.entry_fill_id || m.entry_order_id) ? `<br><small style="color:var(--text-dim);font-family:var(--font-mono);">Fill #${escapeHtml(m.entry_fill_id || '—')}➔#${escapeHtml(m.exit_fill_id || '—')} · Ord ${escapeHtml(m.entry_order_id || '—')}</small>` : ''}</span>
                     <span style="color:${Number(m.gross_pnl||0)>=0?'var(--bull)':'var(--bear)'};font-weight:700;">
                       ${Number(m.gross_pnl||0)>=0?'+':''}${pc}${Number(m.gross_pnl||0).toFixed(2)}
                     </span>
@@ -6044,12 +6048,12 @@
 
             const toggleBtn = card.querySelector('.m-card-expand-toggle');
             const drawer = card.querySelector(`#m-fifo-drawer-${idx}`);
-            if (toggleBtn && drawer) {
-              toggleBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
+            if (drawer) {
+              card.addEventListener('click', (e) => {
+                if (e.target && e.target.closest && e.target.closest('button, a')) return;
                 const isHidden = drawer.classList.contains('hidden');
                 drawer.classList.toggle('hidden', !isHidden);
-                toggleBtn.textContent = isHidden ? 'FIFO Fills ▴' : 'FIFO Fills ▾';
+                if (toggleBtn) toggleBtn.textContent = isHidden ? 'Details ▴' : 'Details ▾';
               });
             }
 
@@ -6341,8 +6345,78 @@
     }
   }
 
+  // --- Live Candle Bar Close Countdown Timer (per active TF) ---
+  const TF_SECONDS_MAP = {
+    '5s': 5, '15s': 15, '1m': 60, '3m': 180, '5m': 300,
+    '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400,
+  };
+
+  function formatCountdownClock(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    const p2 = n => (n < 10 ? `0${n}` : `${n}`);
+    return h > 0 ? `${p2(h)}:${p2(m)}:${p2(r)}` : `${p2(m)}:${p2(r)}`;
+  }
+
+  function updatePaneCountdowns() {
+    const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+    const nowSec = Math.floor(Date.now() / 1000);
+    panes.forEach((p, idx) => {
+      const pref = `p${idx + 1}`;
+      const box = $(`${pref}-cd-box`);
+      const tfEl = $(`${pref}-cd-tf`);
+      const timeEl = $(`${pref}-cd-time`);
+      const fillEl = $(`${pref}-cd-fill`);
+      if (!box || !tfEl || !timeEl || !fillEl) return;
+      if (idx >= visibleCount) return;
+
+      const tf = String(p.tf || '1m').toLowerCase();
+      const stepSec = TF_SECONDS_MAP[tf] || 60;
+      tfEl.textContent = tf === '1d' ? '1D' : tf;
+
+      let rem = stepSec - (nowSec % stepSec);
+      let span = stepSec;
+
+      if (tf === '1d' && !isForexSym(p.sym)) {
+        const istSec = nowSec + 19800;
+        const istDaySec = istSec % 86400;
+        const wd = new Date(istSec * 1000).getUTCDay(); // IST weekday (1=Mon..5=Fri)
+        const isOpenDay = wd >= 1 && wd <= 5;
+        if (isOpenDay && istDaySec >= 33300 && istDaySec < 55800) {
+          span = 22500;
+          rem = 55800 - istDaySec;
+        } else {
+          timeEl.textContent = 'Closed';
+          fillEl.style.width = '100%';
+          box.classList.remove('urgent');
+          return;
+        }
+      } else if (p.activeBar && p.activeBar.time > 0 && nowSec >= p.activeBar.time && nowSec < p.activeBar.time + stepSec) {
+        rem = (p.activeBar.time + stepSec) - nowSec;
+      }
+
+      const pct = Math.max(0, Math.min(100, ((span - rem) / span) * 100));
+      timeEl.textContent = formatCountdownClock(rem);
+      fillEl.style.width = `${pct.toFixed(1)}%`;
+      box.classList.toggle('urgent', span <= 3600 && rem <= 5);
+    });
+  }
+  window._updateCountdownsFn = updatePaneCountdowns;
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
+    // Prevent page pinch / double-tap zoom while leaving single-finger + / - taps instant
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
+      document.addEventListener(evt, e => e.preventDefault(), { passive: false });
+    });
+    document.addEventListener('touchstart', e => {
+      if (e.touches && e.touches.length > 1 && !(e.target && e.target.closest && e.target.closest('.chart-canvas-view'))) {
+        if (e.cancelable) e.preventDefault();
+      }
+    }, { passive: false });
+
     initChartPane(panes[0]);
     renderSymbolTabs();
     setupAddTabButton();
@@ -6362,11 +6436,13 @@
     setupMobileFlow();
     syncTradeButtonsForActivePane();
     updateTzBadgeUI();
+    updatePaneCountdowns();
 
     loadCandles(panes[0]);
     startQuotesPolling();
 
-    // Regular position refresh (guarded by isAuthenticated)
+    // Regular position & candle close countdown refresh
     setInterval(fetchPositionsAndOrders, 4000);
+    setInterval(updatePaneCountdowns, 500);
   });
 })();

@@ -70,9 +70,15 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html, body {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
+
 button, input, select {
   font: inherit;
   color: inherit;
+  touch-action: manipulation;
 }
 
 button {

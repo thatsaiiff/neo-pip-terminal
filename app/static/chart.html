@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-ord7">
+  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord9">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -49,13 +49,13 @@
       <!-- Admin Users & Trading Analytics Button (Admin Only) -->
       <button type="button" id="btn-admin-users" class="ex-admin-pill admin-only-ctrl hidden" title="Admin: View Users &amp; Analytics">
         <span>🛡️</span>
-        <span>Admin Users</span>
+        <span><span class="adm-full-lbl">Admin </span>Users</span>
       </button>
 
       <!-- Real-Time Option Chain Button directly in Header beside Funds -->
       <button type="button" id="btn-header-opt-chain" class="ex-header-opt-chain-btn" title="Open Real-time Option Chain">
         <span class="chain-icon">📊</span>
-        <span>Option Chain</span>
+        <span><span class="oc-full-lbl">Option </span>Chain</span>
       </button>
 
       <!-- Account Badge -->
@@ -106,10 +106,15 @@
         </div>
       </div>
 
-      <!-- Run on Your System Guide Button -->
-      <button type="button" id="btn-setup-guide" class="ex-btn-guide" title="How to run on your system with Kotak Neo &amp; Upstox">
-        <span class="guide-icon">🚀</span>
-        <span>Run on Your System</span>
+      <!-- Run on Your System Guide Icon Button (Compact across all viewports) -->
+      <button type="button" id="btn-setup-guide" class="ex-btn-guide ex-icon-pill-btn" title="Run on Your System (Kotak Neo &amp; Upstox Setup Guide)" aria-label="Run on Your System">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="12" rx="2"/>
+          <line x1="2" y1="20" x2="22" y2="20"/>
+          <polyline points="8 9 11 12 8 15"/>
+          <line x1="13" y1="15" x2="16" y2="15"/>
+        </svg>
+        <span class="sr-only">Run on Your System</span>
       </button>
 
       <!-- Upstox Token Setup Button (Admin Only) -->
@@ -366,6 +371,10 @@
             <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p1-trade-overlay" class="pane-trade-overlay"></div>
             <button type="button" id="p1-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
+            <div id="p1-cd-box" class="pane-cd-box" title="Countdown to current candle close">
+              <div class="pane-cd-top"><span class="pane-cd-tf" id="p1-cd-tf">1m</span><span class="pane-cd-time" id="p1-cd-time">00:00</span></div>
+              <div class="pane-cd-track"><div class="pane-cd-fill" id="p1-cd-fill"></div></div>
+            </div>
           </div>
         </section>
 
@@ -391,6 +400,10 @@
             <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p2-trade-overlay" class="pane-trade-overlay"></div>
             <button type="button" id="p2-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
+            <div id="p2-cd-box" class="pane-cd-box" title="Countdown to current candle close">
+              <div class="pane-cd-top"><span class="pane-cd-tf" id="p2-cd-tf">1m</span><span class="pane-cd-time" id="p2-cd-time">00:00</span></div>
+              <div class="pane-cd-track"><div class="pane-cd-fill" id="p2-cd-fill"></div></div>
+            </div>
           </div>
         </section>
 
@@ -416,6 +429,10 @@
             <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p3-trade-overlay" class="pane-trade-overlay"></div>
             <button type="button" id="p3-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
+            <div id="p3-cd-box" class="pane-cd-box" title="Countdown to current candle close">
+              <div class="pane-cd-top"><span class="pane-cd-tf" id="p3-cd-tf">5m</span><span class="pane-cd-time" id="p3-cd-time">00:00</span></div>
+              <div class="pane-cd-track"><div class="pane-cd-fill" id="p3-cd-fill"></div></div>
+            </div>
           </div>
         </section>
 
@@ -551,26 +568,27 @@
                 <span class="cs-value" id="cs-sharpe">0.00</span>
               </div>
             </div>
-            <table class="ex-data-table" id="closed-positions-table">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Product</th>
-                  <th>Side</th>
-                  <th>Total Qty</th>
-                  <th>Avg Entry</th>
-                  <th>Avg Exit</th>
-                  <th>Gross P&amp;L</th>
-                  <th>Charges</th>
-                  <th>Net P&amp;L</th>
-                  <th>Closed Time</th>
-                  <th>Details</th>
-                </tr>
-              </thead>
-              <tbody id="closed-trades-tbody">
-                <tr><td colspan="11" class="empty-row">Showing closed trades for today.</td></tr>
-              </tbody>
-            </table>
+            <div class="table-scroll-x">
+              <table class="ex-data-table" id="closed-positions-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Product</th>
+                    <th>Side</th>
+                    <th>Total Qty</th>
+                    <th>Avg Entry</th>
+                    <th>Avg Exit</th>
+                    <th>Gross P&amp;L</th>
+                    <th>Charges</th>
+                    <th>Closed Time</th>
+                    <th class="col-frozen-pnl">Net P&amp;L</th>
+                  </tr>
+                </thead>
+                <tbody id="closed-trades-tbody">
+                  <tr><td colspan="10" class="empty-row">Showing closed trades for today.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <!-- Trade History Tab Content (Immutable Executions Audit Trail) -->
@@ -1784,6 +1802,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-ord6"></script>
+  <script src="/static/chart.js?v=20261111-ord9"></script>
 </body>
 </html>

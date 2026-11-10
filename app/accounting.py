@@ -700,9 +700,17 @@ def get_closed_positions(
         elif net < Decimal("0.00"):
             losing_count += 1
 
-        # Fetch FIFO matches
+        # Fetch FIFO matches with fill & order traceability (shown on demand when row expanded)
         matches = cursor.execute("""
-            SELECT pm.*, e_entry.execution_time as entry_time, e_exit.execution_time as exit_time
+            SELECT pm.*,
+                   e_entry.execution_time AS entry_time,
+                   e_exit.execution_time AS exit_time,
+                   e_entry.broker_execution_id AS entry_fill_id,
+                   e_exit.broker_execution_id AS exit_fill_id,
+                   e_entry.order_id AS entry_order_id,
+                   e_exit.order_id AS exit_order_id,
+                   e_entry.id AS entry_exec_id,
+                   e_exit.id AS exit_exec_id
             FROM position_matches pm
             JOIN executions e_entry ON pm.entry_execution_id = e_entry.id
             JOIN executions e_exit ON pm.exit_execution_id = e_exit.id
@@ -724,6 +732,10 @@ def get_closed_positions(
             "allocated_exit_charges": m["allocated_exit_charges"],
             "net_realised_pnl": m["net_realised_pnl"],
             "matched_at": m["matched_at"],
+            "entry_fill_id": m["entry_fill_id"] or m["entry_exec_id"],
+            "exit_fill_id": m["exit_fill_id"] or m["exit_exec_id"],
+            "entry_order_id": m["entry_order_id"] or "",
+            "exit_order_id": m["exit_order_id"] or "",
         } for m in matches]
 
         # Calculate average exit price across matches

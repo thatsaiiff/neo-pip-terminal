@@ -31,6 +31,16 @@
   padding: 0;
 }
 
+html, body {
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+button, a, input, select, label {
+  touch-action: manipulation;
+}
+
 body.ex-theme-dark {
   background-color: var(--bg-darkest);
   color: var(--text-main);
@@ -42,6 +52,7 @@ body.ex-theme-dark {
   display: flex;
   flex-direction: column;
   user-select: none;
+  touch-action: manipulation;
 }
 
 /* ==================== 1. TOP HEADER (Exness Style) ==================== */
@@ -52,15 +63,27 @@ body.ex-theme-dark {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 0 12px;
   flex-shrink: 0;
   z-index: 120;
+  touch-action: manipulation;
 }
 
-.ex-header-left, .ex-header-right {
+.ex-header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ex-header-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .ex-brand {
@@ -304,8 +327,9 @@ body.ex-theme-dark {
 }
 
 .ex-btn-guide {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   background: linear-gradient(135deg, rgba(255, 183, 3, 0.15), rgba(251, 133, 0, 0.15));
   border: 1px solid rgba(255, 183, 3, 0.4);
@@ -315,10 +339,25 @@ body.ex-theme-dark {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ex-btn-guide.ex-icon-pill-btn {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
 }
 
 .ex-btn-guide:hover {
   background: rgba(255, 183, 3, 0.25);
+}
+
+@media (max-width: 1180px) {
+  .ex-admin-pill .adm-full-lbl,
+  .ex-header-opt-chain-btn .oc-full-lbl {
+    display: none;
+  }
 }
 
 .session-timer-badge {
@@ -2798,20 +2837,77 @@ body.ex-theme-dark {
     gap: 2px !important;
   }
 
-  /* Compact Header */
+  /* Compact Header (Portrait Phone & Tablet Optimized — All controls reachable) */
   .ex-header {
     height: 44px;
-    padding: 0 10px;
+    padding: 0 8px;
+    gap: 6px;
     justify-content: space-between;
   }
 
+  .ex-header-left {
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
   .ex-header-right {
-    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-end;
+    gap: 5px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ex-header-right::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ex-market-pill {
+    padding: 3px 6px;
+    font-size: 10px;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .ex-admin-pill,
+  .ex-header-opt-chain-btn {
+    padding: 4px 7px;
+    font-size: 10.5px;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .ex-admin-pill .adm-full-lbl,
+  .ex-header-opt-chain-btn .oc-full-lbl {
+    display: none;
+  }
+
+  .ex-account-badge-wrap {
+    flex-shrink: 0;
+  }
+
+  .ex-account-btn {
+    padding: 3px 7px;
+    gap: 4px;
+  }
+
+  .ex-acc-id {
+    display: none !important;
+  }
+
+  .ex-acc-balance {
+    font-size: 11.5px;
   }
 
   .acc-badge-btn {
     padding: 3px 7px;
     font-size: 11px;
+  }
+
+  @media (max-width: 440px) {
+    .ex-brand .ex-logo-name {
+      display: none;
+    }
   }
 
   /* Center Chart Area on Mobile */
@@ -5020,6 +5116,132 @@ input:checked + .ex-switch-mini::after {
   .ex-active-pnl {
     padding: 2px 6px;
     font-size: 10.5px;
+  }
+  /* Prevent Safari/iOS input-focus auto-zoom while keeping + / - rapid clicks zoom-free */
+  .order-win-card input,
+  .ex-modal-card input,
+  .m-search-box input {
+    font-size: 16px !important;
+  }
+}
+
+/* Closed Position Table: Scrollable X + Frozen Net P&L Column on Right + Clickable Row */
+.table-scroll-x {
+  width: 100%;
+  overflow-x: auto;
+  position: relative;
+}
+
+#closed-positions-table th.col-frozen-pnl,
+#closed-positions-table td.col-frozen-pnl {
+  position: sticky;
+  right: 0;
+  text-align: right;
+  background: #141923;
+  z-index: 3;
+  box-shadow: -6px 0 14px rgba(0, 0, 0, 0.48);
+  white-space: nowrap;
+}
+
+#closed-positions-table th.col-frozen-pnl {
+  z-index: 6;
+  background: var(--bg-surface);
+}
+
+tr.closed-row-clickable {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+tr.closed-row-clickable:hover td {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+tr.closed-row-clickable:hover td.col-frozen-pnl {
+  background: #1d2433;
+}
+
+.closed-expand-chev {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-right: 4px;
+}
+
+.m-order-card.closed {
+  cursor: pointer;
+}
+
+/* Candle Bar Countdown Timer + Progress Bar on Chart Canvas (clear of right-side trade badges & Y-axis) */
+.pane-cd-box {
+  position: absolute;
+  left: 52px;
+  bottom: 28px;
+  z-index: 22;
+  pointer-events: none;
+  background: rgba(14, 17, 23, 0.88);
+  border: 1px solid #283246;
+  border-radius: 5px;
+  padding: 3px 7px 4px;
+  min-width: 72px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.pane-cd-box.urgent {
+  border-color: rgba(255, 183, 3, 0.65);
+}
+
+.pane-cd-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+.pane-cd-tf {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.pane-cd-time {
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.pane-cd-box.urgent .pane-cd-time {
+  color: var(--accent-gold);
+}
+
+.pane-cd-track {
+  margin-top: 3px;
+  width: 100%;
+  height: 2.5px;
+  background: #232b3b;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.pane-cd-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #00b074, #ffb703);
+  border-radius: 999px;
+  transition: width 0.35s linear;
+}
+
+@media (max-width: 768px) {
+  .pane-cd-box {
+    left: 48px;
+    right: auto;
+    bottom: 26px;
+    min-width: 64px;
+    padding: 2px 6px 3px;
   }
 }
 
