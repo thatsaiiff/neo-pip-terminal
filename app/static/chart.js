@@ -3495,16 +3495,25 @@
     const railBtnInst = $('rail-btn-instruments');
     const railBtnSettings = $('rail-btn-settings');
 
+    function toggleWatchDrawer(forceOpen = null) {
+      if (!leftPanel) return;
+      if (forceOpen === true) leftPanel.classList.remove('collapsed');
+      else if (forceOpen === false) leftPanel.classList.add('collapsed');
+      else leftPanel.classList.toggle('collapsed');
+      const isExpanded = !leftPanel.classList.contains('collapsed');
+      if (railBtnInst) railBtnInst.classList.toggle('active', isExpanded);
+      setTimeout(() => {
+        panes.forEach(p => { if (p.chart) { resizePaneChart(p); renderPaneTradeLines(p); } });
+      }, 240);
+    }
+
     if (btnCollapse && leftPanel) {
-      btnCollapse.addEventListener('click', () => {
-        leftPanel.classList.toggle('collapsed');
-      });
+      btnCollapse.addEventListener('click', () => toggleWatchDrawer(false));
     }
 
     if (railBtnInst && leftPanel) {
-      railBtnInst.addEventListener('click', () => {
-        leftPanel.classList.toggle('collapsed');
-      });
+      railBtnInst.classList.toggle('active', !leftPanel.classList.contains('collapsed'));
+      railBtnInst.addEventListener('click', () => toggleWatchDrawer());
     }
 
     if (railBtnSettings) {
@@ -3727,7 +3736,23 @@
     const vClosed = $('view-closed-trades');
     const vHistory = $('view-trade-history');
 
-    function switchDockTab(tab) {
+    const toggleDockBtn = $('btn-toggle-dock');
+    const bottomPanel = $('ex-bottom-panel');
+
+    function refitPanesAfterDockChange() {
+      setTimeout(() => {
+        panes.forEach(p => { if (p.chart) { resizePaneChart(p); renderPaneTradeLines(p); } });
+      }, 220);
+    }
+
+    function setDockMinimized(minState) {
+      if (!bottomPanel) return;
+      bottomPanel.classList.toggle('minimized', Boolean(minState));
+      if (toggleDockBtn) toggleDockBtn.textContent = bottomPanel.classList.contains('minimized') ? '+' : '−';
+      refitPanesAfterDockChange();
+    }
+
+    function switchDockTab(tab, autoExpand = false) {
       [btnOpen, btnPending, btnClosed, btnHistory].forEach(b => b && b.classList.remove('active'));
       [vOpen, vPending, vClosed, vHistory].forEach(v => v && v.classList.add('hidden'));
 
@@ -3744,24 +3769,21 @@
         if (btnHistory) btnHistory.classList.add('active');
         if (vHistory) vHistory.classList.remove('hidden');
       }
+      if (autoExpand && bottomPanel && bottomPanel.classList.contains('minimized')) {
+        setDockMinimized(false);
+      }
     }
 
-    if (btnOpen) btnOpen.addEventListener('click', () => switchDockTab('open'));
-    if (btnPending) btnPending.addEventListener('click', () => switchDockTab('pending'));
-    if (btnClosed) btnClosed.addEventListener('click', () => switchDockTab('closed'));
-    if (btnHistory) btnHistory.addEventListener('click', () => switchDockTab('history'));
+    if (btnOpen) btnOpen.addEventListener('click', () => switchDockTab('open', true));
+    if (btnPending) btnPending.addEventListener('click', () => switchDockTab('pending', true));
+    if (btnClosed) btnClosed.addEventListener('click', () => switchDockTab('closed', true));
+    if (btnHistory) btnHistory.addEventListener('click', () => switchDockTab('history', true));
 
-    // Toggle minimize (Fix #7: '+' to expand, '−' to collapse + refit chart panes)
-    const toggleDockBtn = $('btn-toggle-dock');
-    const bottomPanel = $('ex-bottom-panel');
+    // Toggle minimize (Default minimized '+' for max chart size; click '+' to expand, '−' to collapse)
     if (toggleDockBtn && bottomPanel) {
       toggleDockBtn.textContent = bottomPanel.classList.contains('minimized') ? '+' : '−';
       toggleDockBtn.addEventListener('click', () => {
-        bottomPanel.classList.toggle('minimized');
-        toggleDockBtn.textContent = bottomPanel.classList.contains('minimized') ? '+' : '−';
-        setTimeout(() => {
-          panes.forEach(p => { if (p.chart) { resizePaneChart(p); renderPaneTradeLines(p); } });
-        }, 50);
+        setDockMinimized(!bottomPanel.classList.contains('minimized'));
       });
     }
 

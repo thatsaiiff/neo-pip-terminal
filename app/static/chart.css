@@ -1195,11 +1195,16 @@ body.ex-theme-dark {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  transition: height 0.2s ease;
+  overflow: hidden;
+  transition: height 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ex-bottom-panel.minimized {
   height: 34px !important;
+}
+
+.ex-bottom-panel.minimized .ex-panel-content {
+  display: none;
 }
 
 .ex-panel-header {
