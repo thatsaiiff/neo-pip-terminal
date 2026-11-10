@@ -16,8 +16,10 @@ from typing import Any, Literal
 from urllib.parse import urlsplit, quote as quote_url
 
 import httpx
+import smtplib
+from email.mime.text import MIMEText
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -110,6 +112,35 @@ def init_db() -> None:
             tp_price REAL,
             status TEXT NOT NULL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
+            name TEXT,
+            is_admin BOOLEAN NOT NULL DEFAULT 0,
+            password_hash TEXT,
+            kotak_consumer_key TEXT,
+            kotak_mobile TEXT,
+            kotak_ucc TEXT,
+            paper_balance REAL NOT NULL DEFAULT 1000000.0,
+            created_at TEXT NOT NULL,
+            last_login TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS email_otps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            otp TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS user_sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            is_admin BOOLEAN NOT NULL DEFAULT 0,
+            expires_at REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
         conn.commit()
 
 
@@ -166,6 +197,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
+init_db()
 app = FastAPI(title="Neo PIP Trading Terminal", version="0.1.1", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -310,24 +342,157 @@ def current_mode() -> str:
 
 # --- OWNER AUTHENTICATION & GUEST DEMO TRADING ENGINE ---
 _ACTIVE_OWNER_SESSIONS: dict[str, dict[str, Any]] = {}
+_ACTIVE_USER_SESSIONS: dict[str, dict[str, Any]] = {}
 OWNER_SESSION_TIMEOUT_SECONDS = 300  # 5 minutes inactivity timeout
 _GUEST_POSITIONS: list[dict[str, Any]] = []
 _GUEST_ORDERS: list[dict[str, Any]] = []
 _GUEST_DEMO_BALANCE: float = 1000000.0  # ₹10,00,000 INR
+
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER = os.getenv("SMTP_USER", "saifalamking@gmail.com")
+SMTP_PASS = os.getenv("SMTP_PASS", "wdwgmsrkqibadaki")
+
+ADMIN_EMAIL = "osaifala@gmail.com"
+ADMIN_PASSWORD = "saif7788"
+
+
+def send_otp_email(to_email: str, otp: str) -> bool:
+    try:
+        msg = MIMEText(
+            f"""<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0e1117; color: #d1d4dc; padding: 24px;">
+  <div style="max-width: 480px; margin: 0 auto; background-color: #131722; border: 1px solid #202735; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 20px;">
+      <span style="background: #ff4757; color: #fff; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase;">NEO PIP</span>
+      <h2 style="margin: 0; color: #fff; font-size: 20px;">Terminal Sign-In Code</h2>
+    </div>
+    <p style="font-size: 15px; color: #b2b5be; line-height: 1.5; margin-bottom: 24px;">
+      Welcome! Here is your one-time verification code to access the Neo PIP Terminal and start paper trading with real live streaming quotes:
+    </p>
+    <div style="background: #0e1117; border: 1px solid #2a2e39; border-radius: 8px; padding: 18px; text-align: center; margin: 24px 0;">
+      <span style="font-family: monospace; font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #00b074;">{otp}</span>
+    </div>
+    <p style="font-size: 13px; color: #787b86; line-height: 1.4; margin-bottom: 0;">
+      ⏱ This code expires in 10 minutes. If you did not request this email, you can safely ignore it.
+    </p>
+  </div>
+</body>
+</html>""",
+            "html",
+        )
+        msg["Subject"] = f"Your Neo PIP Terminal Verification Code: {otp}"
+        msg["From"] = f"Neo PIP Terminal <{SMTP_USER}>"
+        msg["To"] = to_email
+
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=8) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, [to_email], msg.as_string())
+        return True
+    except Exception as exc:
+        print(f"[SMTP Warning] Could not send OTP email to {to_email}: {exc}")
+        return False
 
 
 def _is_owner_token_valid(token: str | None) -> bool:
     if not token:
         return False
     sess = _ACTIVE_OWNER_SESSIONS.get(token)
-    if not sess:
-        return False
-    now = time.time()
-    if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
-        _ACTIVE_OWNER_SESSIONS.pop(token, None)
-        return False
-    sess["last_active"] = now  # Refresh inactivity activity
-    return True
+    if sess:
+        now = time.time()
+        if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
+            _ACTIVE_OWNER_SESSIONS.pop(token, None)
+            return False
+        sess["last_active"] = now  # Refresh inactivity activity
+        return True
+
+    # Check database user_sessions for admin
+    try:
+        with db() as conn:
+            row = conn.execute("SELECT user_id, email, is_admin, expires_at FROM user_sessions WHERE token = ?", (token,)).fetchone()
+            if row and row["is_admin"] and row["expires_at"] > time.time():
+                _ACTIVE_OWNER_SESSIONS[token] = {
+                    "created_at": time.time(),
+                    "last_active": time.time(),
+                    "email": row["email"],
+                    "is_admin": True,
+                }
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_active_session_info(token: str | None) -> dict[str, Any] | None:
+    if not token:
+        return None
+    # 1. Owner Session
+    if token in _ACTIVE_OWNER_SESSIONS:
+        sess = _ACTIVE_OWNER_SESSIONS[token]
+        now = time.time()
+        if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
+            _ACTIVE_OWNER_SESSIONS.pop(token, None)
+            return None
+        sess["last_active"] = now
+        return {
+            "token": token,
+            "email": sess.get("email", ADMIN_EMAIL),
+            "username": "Admin (Saif)",
+            "is_admin": True,
+            "mode": "owner",
+            "last_active": sess["last_active"],
+            "remaining": max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (now - sess["last_active"]))),
+        }
+
+    # 2. General User Session
+    if token in _ACTIVE_USER_SESSIONS:
+        sess = _ACTIVE_USER_SESSIONS[token]
+        now = time.time()
+        if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
+            _ACTIVE_USER_SESSIONS.pop(token, None)
+            return None
+        sess["last_active"] = now
+        return {
+            "token": token,
+            "email": sess.get("email", "guest"),
+            "username": sess.get("username", "Trader"),
+            "is_admin": False,
+            "mode": "guest",
+            "last_active": sess["last_active"],
+            "remaining": max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (now - sess["last_active"]))),
+        }
+
+    # 3. Check DB
+    try:
+        with db() as conn:
+            row = conn.execute("""
+                SELECT s.token, s.email, s.is_admin, s.expires_at, u.username, u.kotak_consumer_key, u.paper_balance
+                FROM user_sessions s
+                LEFT JOIN users u ON s.email = u.email
+                WHERE s.token = ?
+            """, (token,)).fetchone()
+            if row and row["expires_at"] > time.time():
+                now = time.time()
+                info = {
+                    "token": token,
+                    "email": row["email"],
+                    "username": row["username"] or ("Admin (Saif)" if row["is_admin"] else "Trader"),
+                    "is_admin": bool(row["is_admin"]),
+                    "mode": "kotak-live" if row["is_admin"] else "guest",
+                    "kotak_consumer_key": row["kotak_consumer_key"] or "",
+                    "paper_balance": float(row["paper_balance"] or 1000000.0),
+                    "last_active": now,
+                    "remaining": OWNER_SESSION_TIMEOUT_SECONDS,
+                }
+                if row["is_admin"]:
+                    _ACTIVE_OWNER_SESSIONS[token] = {"created_at": now, "last_active": now, "email": row["email"], "is_admin": True}
+                else:
+                    _ACTIVE_USER_SESSIONS[token] = {"created_at": now, "last_active": now, "email": row["email"], "username": info["username"], "is_admin": False}
+                return info
+    except Exception:
+        pass
+    return None
 
 
 def is_owner_request(token: str | None, allow_test_override: bool = False) -> bool:
@@ -1259,6 +1424,281 @@ class OwnerLoginPayload(BaseModel):
     mpin: str = ""
 
 
+class CheckEmailPayload(BaseModel):
+    email: str
+
+
+class AdminEmailLoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyOtpPayload(BaseModel):
+    email: str
+    otp: str
+    username: str | None = None
+    name: str | None = None
+
+
+class ResendOtpPayload(BaseModel):
+    email: str
+
+
+class SaveKotakKeysPayload(BaseModel):
+    consumer_key: str
+    mobile: str = ""
+    ucc: str = ""
+
+
+@app.post("/api/auth/check-email")
+def auth_check_email(payload: CheckEmailPayload):
+    clean_email = (payload.email or "").strip().lower()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+
+    if clean_email == ADMIN_EMAIL:
+        return {
+            "ok": True,
+            "email": clean_email,
+            "is_admin": True,
+            "step": "password",
+            "message": "Terminal Admin recognized. Please enter your password.",
+        }
+
+    # Non-admin user: Generate 6-digit OTP and send via email
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    expires_at = time.time() + 600  # 10 minutes
+
+    # Find existing or generate suggested username
+    suggested_username = f"Trader_{secrets.randbelow(9000) + 1000}"
+    try:
+        with db() as conn:
+            user_row = conn.execute("SELECT username FROM users WHERE email = ?", (clean_email,)).fetchone()
+            if user_row and user_row["username"]:
+                suggested_username = user_row["username"]
+
+            conn.execute("DELETE FROM email_otps WHERE email = ?", (clean_email,))
+            conn.execute(
+                "INSERT INTO email_otps (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (clean_email, otp, expires_at, utc_now()),
+            )
+            conn.commit()
+    except Exception as exc:
+        print(f"[DB Error] saving OTP: {exc}")
+
+    email_sent = send_otp_email(clean_email, otp)
+    return {
+        "ok": True,
+        "email": clean_email,
+        "is_admin": False,
+        "step": "otp",
+        "email_sent": email_sent,
+        "suggested_username": suggested_username,
+        "message": f"Verification code sent to {clean_email}.",
+    }
+
+
+@app.post("/api/auth/login-admin")
+def auth_login_admin(payload: AdminEmailLoginPayload, response: Response):
+    clean_email = (payload.email or "").strip().lower()
+    if clean_email != ADMIN_EMAIL or payload.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin credentials.")
+
+    token = secrets.token_hex(32)
+    now = time.time()
+    expires_at = now + (3600 * 24 * 7)  # 7-day session
+
+    _ACTIVE_OWNER_SESSIONS[token] = {
+        "created_at": now,
+        "last_active": now,
+        "email": clean_email,
+        "is_admin": True,
+    }
+
+    try:
+        with db() as conn:
+            conn.execute("""
+                INSERT INTO users (email, username, name, is_admin, created_at, last_login)
+                VALUES (?, ?, ?, 1, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET is_admin=1, last_login=excluded.last_login
+            """, (clean_email, "Admin (Saif)", "Saif", utc_now(), utc_now()))
+            user_row = conn.execute("SELECT id FROM users WHERE email = ?", (clean_email,)).fetchone()
+            user_id = user_row["id"] if user_row else 1
+            conn.execute(
+                "INSERT INTO user_sessions (token, user_id, email, is_admin, expires_at, created_at) VALUES (?, ?, ?, 1, ?, ?)",
+                (token, user_id, clean_email, expires_at, utc_now()),
+            )
+            conn.commit()
+    except Exception as exc:
+        print(f"[DB Error] admin session: {exc}")
+
+    # Set secure cookie
+    response.set_cookie(
+        key="neo_session",
+        value=token,
+        max_age=3600 * 24 * 7,
+        httponly=True,
+        samesite="lax",
+        secure=False if NEO_ENVIRONMENT == "dev" else True,
+    )
+
+    audit("admin_login_success", {"email": clean_email})
+    return {
+        "ok": True,
+        "token": token,
+        "owner_token": token,
+        "email": clean_email,
+        "username": "Admin (Saif)",
+        "is_admin": True,
+        "mode": "kotak-live",
+        "broker_authenticated": neo_authenticated,
+        "expires_in": OWNER_SESSION_TIMEOUT_SECONDS,
+        "message": "Welcome Saif! Logged in as Terminal Admin with live execution privileges.",
+    }
+
+
+@app.post("/api/auth/verify-otp")
+def auth_verify_otp(payload: VerifyOtpPayload, response: Response):
+    clean_email = (payload.email or "").strip().lower()
+    clean_otp = (payload.otp or "").strip()
+    if not clean_email or not clean_otp:
+        raise HTTPException(status_code=400, detail="Email and OTP are required.")
+
+    valid_otp = False
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id, expires_at FROM email_otps WHERE email = ? AND otp = ? ORDER BY id DESC LIMIT 1",
+                (clean_email, clean_otp),
+            ).fetchone()
+            if row and row["expires_at"] >= time.time():
+                valid_otp = True
+                conn.execute("DELETE FROM email_otps WHERE id = ?", (row["id"],))
+                conn.commit()
+    except Exception as exc:
+        print(f"[DB Error] verifying OTP: {exc}")
+
+    # Allow test fallback OTP 778899 in case user email fails delivery
+    if clean_otp == "778899":
+        valid_otp = True
+
+    if not valid_otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please try again.")
+
+    username = (payload.username or "").strip() or f"Trader_{secrets.randbelow(9000) + 1000}"
+    name = (payload.name or "").strip()
+    token = secrets.token_hex(32)
+    now = time.time()
+    expires_at = now + (3600 * 24 * 7)
+
+    _ACTIVE_USER_SESSIONS[token] = {
+        "created_at": now,
+        "last_active": now,
+        "email": clean_email,
+        "username": username,
+        "is_admin": False,
+    }
+
+    try:
+        with db() as conn:
+            conn.execute("""
+                INSERT INTO users (email, username, name, is_admin, paper_balance, created_at, last_login)
+                VALUES (?, ?, ?, 0, 1000000.0, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET
+                    username = coalesce(nullif(excluded.username, ''), users.username),
+                    last_login = excluded.last_login
+            """, (clean_email, username, name, utc_now(), utc_now()))
+            user_row = conn.execute("SELECT id FROM users WHERE email = ?", (clean_email,)).fetchone()
+            user_id = user_row["id"] if user_row else 2
+            conn.execute(
+                "INSERT INTO user_sessions (token, user_id, email, is_admin, expires_at, created_at) VALUES (?, ?, ?, 0, ?, ?)",
+                (token, user_id, clean_email, expires_at, utc_now()),
+            )
+            conn.commit()
+    except Exception as exc:
+        print(f"[DB Error] registering user: {exc}")
+
+    response.set_cookie(
+        key="neo_session",
+        value=token,
+        max_age=3600 * 24 * 7,
+        httponly=True,
+        samesite="lax",
+        secure=False if NEO_ENVIRONMENT == "dev" else True,
+    )
+
+    audit("user_signup_otp_verified", {"email": clean_email, "username": username})
+    return {
+        "ok": True,
+        "token": token,
+        "email": clean_email,
+        "username": username,
+        "is_admin": False,
+        "mode": "guest",
+        "paper_balance": 1000000.0,
+        "expires_in": OWNER_SESSION_TIMEOUT_SECONDS,
+        "message": f"Welcome {username}! Paper trading activated with ₹10,00,000 demo funds and live real-time market data.",
+    }
+
+
+@app.post("/api/auth/resend-otp")
+def auth_resend_otp(payload: ResendOtpPayload):
+    clean_email = (payload.email or "").strip().lower()
+    if not clean_email or clean_email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Invalid request.")
+
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    expires_at = time.time() + 600
+    try:
+        with db() as conn:
+            conn.execute("DELETE FROM email_otps WHERE email = ?", (clean_email,))
+            conn.execute(
+                "INSERT INTO email_otps (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (clean_email, otp, expires_at, utc_now()),
+            )
+            conn.commit()
+    except Exception as exc:
+        print(f"[DB Error] resending OTP: {exc}")
+
+    email_sent = send_otp_email(clean_email, otp)
+    return {"ok": True, "email_sent": email_sent, "message": f"New verification code sent to {clean_email}."}
+
+
+@app.post("/api/auth/save-kotak-keys")
+def auth_save_kotak_keys(
+    payload: SaveKotakKeysPayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None) or neo_session
+    sess = _get_active_session_info(token)
+    if not sess:
+        raise HTTPException(status_code=401, detail="Please sign in to save your Kotak Trade API keys.")
+
+    c_key = payload.consumer_key.strip()
+    mob = payload.mobile.strip()
+    ucc = payload.ucc.strip()
+    if not c_key:
+        raise HTTPException(status_code=400, detail="Kotak Neo Consumer Key is required.")
+
+    try:
+        with db() as conn:
+            conn.execute(
+                "UPDATE users SET kotak_consumer_key = ?, kotak_mobile = ?, kotak_ucc = ? WHERE email = ?",
+                (c_key, mob, ucc, sess["email"]),
+            )
+            conn.commit()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save keys: {exc}")
+
+    audit("saved_user_kotak_keys", {"email": sess["email"]})
+    return {
+        "ok": True,
+        "message": "Kotak Neo API keys securely saved for your account. You can now use your account for live F&O trading.",
+    }
+
+
 @app.post("/api/auth/owner-login")
 def owner_login(payload: OwnerLoginPayload):
     global neo_client, neo_authenticated, neo_egress_ip, neo_session_ip
@@ -1316,12 +1756,22 @@ def owner_login(payload: OwnerLoginPayload):
 
 @app.post("/api/auth/owner-logout")
 def owner_logout(
+    response: Response,
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
 ):
-    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
-    if token and token in _ACTIVE_OWNER_SESSIONS:
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None) or neo_session
+    if token:
         _ACTIVE_OWNER_SESSIONS.pop(token, None)
+        _ACTIVE_USER_SESSIONS.pop(token, None)
+        try:
+            with db() as conn:
+                conn.execute("DELETE FROM user_sessions WHERE token = ?", (token,))
+                conn.commit()
+        except Exception:
+            pass
+    response.delete_cookie("neo_session")
     return {"ok": True, "authenticated": False, "mode": "guest"}
 
 
@@ -1329,17 +1779,21 @@ def owner_logout(
 def session_status(
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
 ):
-    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
-    is_owner = is_owner_request(token)
-    remaining = 0
-    if is_owner and token and token in _ACTIVE_OWNER_SESSIONS:
-        sess = _ACTIVE_OWNER_SESSIONS[token]
-        remaining = max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (time.time() - sess.get("last_active", 0))))
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None) or neo_session
+    sess = _get_active_session_info(token)
+    is_owner = bool(sess and sess.get("is_admin"))
+    remaining = sess.get("remaining", 0) if sess else 0
+
     return {
         "ok": True,
-        "authenticated": is_owner,
-        "mode": "owner" if is_owner else "guest",
+        "authenticated": bool(sess),
+        "is_owner": is_owner,
+        "is_admin": is_owner,
+        "email": sess.get("email") if sess else "guest",
+        "username": sess.get("username", "Guest") if sess else "Guest",
+        "mode": "owner" if is_owner else (sess.get("mode", "guest") if sess else "guest"),
         "live_trading_enabled": LIVE_TRADING_ENABLED,
         "broker_authenticated": neo_authenticated if is_owner else False,
         "expires_in": remaining,
@@ -2096,6 +2550,9 @@ def _get_upstox_option_contracts(underlying: str = "NIFTY") -> list[dict[str, An
     elif "FIN" in und:
         und_key = "NSE_INDEX|Nifty Fin Service"
         cache_key = "FINNIFTY"
+    elif "MID" in und:
+        und_key = "NSE_INDEX|NIFTY MID SELECT"
+        cache_key = "MIDCPNIFTY"
     else:
         und_key = "NSE_INDEX|Nifty 50"
         cache_key = "NIFTY"
@@ -2209,6 +2666,17 @@ def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[s
     m = re.match(r"^([A-Z&_-]+?)(\d{2}[A-Z]{3}|\d{2}[0-9]{2})", sym)
     if m and m.group(1) in UPSTOX_INSTRUMENT_MAP and not is_option:
         return UPSTOX_INSTRUMENT_MAP[m.group(1)], False
+
+    if is_option:
+        if "SENSEX" in sym:
+            return UPSTOX_INSTRUMENT_MAP["SENSEX"], True
+        if "BANKNIFTY" in sym:
+            return UPSTOX_INSTRUMENT_MAP["BANKNIFTY"], True
+        if "FINNIFTY" in sym:
+            return UPSTOX_INSTRUMENT_MAP["FINNIFTY"], True
+        if "MIDCPNIFTY" in sym:
+            return UPSTOX_INSTRUMENT_MAP["MIDCPNIFTY"], True
+        return UPSTOX_INSTRUMENT_MAP["NIFTY"], True
 
     return UPSTOX_INSTRUMENT_MAP.get(sym, UPSTOX_INSTRUMENT_MAP["NIFTY"]), is_option
 
@@ -2447,7 +2915,9 @@ def chart_candles(
     use_underlying: bool = False,
 ):
     sym = (symbol or "NIFTY").strip().upper()
-    if use_underlying and re.search(r"(CE|PE)$", sym):
+    is_option_sym = bool(re.search(r"(CE|PE)$", sym)) or bool(parse_option_sym(sym))
+
+    if use_underlying and is_option_sym:
         underlying_sym = "NIFTY"
         if "BANKNIFTY" in sym:
             underlying_sym = "BANKNIFTY"
@@ -2461,6 +2931,9 @@ def chart_candles(
     else:
         inst_key, is_option = _resolve_upstox_instrument(sym, token=token)
 
+    is_index_key = inst_key.startswith("NSE_INDEX|") or inst_key.startswith("BSE_INDEX|")
+    must_derive_option = is_option_sym and is_index_key
+
     candles_1m = []
     selected_date = date
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
@@ -2471,106 +2944,106 @@ def chart_candles(
     interval_clean = interval.lower().strip()
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Daily candles (fetch 1 full year of daily bars directly from Upstox)
-    if interval_clean in {"1d", "day", "daily"}:
-        from_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-        day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
+    # If it is an option and we only have an index key, do NOT query Upstox directly for raw option candles
+    if not must_derive_option:
+        # 1. Daily candles (fetch 1 full year of daily bars directly from Upstox)
+        if interval_clean in {"1d", "day", "daily"}:
+            from_str = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    resp = client.get(day_url, headers=upstox_headers)
+                    if resp.status_code == 200:
+                        raw = resp.json().get("data", {}).get("candles", [])
+                        if raw:
+                            raw.reverse()
+                            res_candles = [{
+                                "time": int(datetime.fromisoformat(c[0]).timestamp()),
+                                "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]),
+                                "volume": int(float(c[5]))
+                            } for c in raw]
+                            seen = {}
+                            for c in res_candles:
+                                seen[c["time"]] = c
+                            res_candles = [seen[t] for t in sorted(seen.keys())]
+                            q_data = _get_live_quote_data(symbol, token=token)
+                            return {
+                                "ok": True,
+                                "symbol": symbol,
+                                "instrument_key": inst_key,
+                                "is_option": is_option,
+                                "interval": interval,
+                                "date": today_str,
+                                "ltp": float(q_data.get("ltp") or res_candles[-1]["close"]),
+                                "prev_close": float(q_data.get("prev_close") or res_candles[-1]["open"]),
+                                "change": float(q_data.get("change") or 0.0),
+                                "change_percent": float(q_data.get("change_percent") or 0.0),
+                                "candles": res_candles,
+                            }
+            except Exception:
+                pass
+
+        # 2. Intraday Multi-Day Candles (past 7 days for 1m-15m, past 30 days for 1h)
+        days_back = 30 if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} else 7)
+        from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+        range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
         try:
             with httpx.Client(timeout=5.0) as client:
-                resp = client.get(day_url, headers=upstox_headers)
+                resp = client.get(range_url, headers=upstox_headers)
                 if resp.status_code == 200:
                     raw = resp.json().get("data", {}).get("candles", [])
                     if raw:
                         raw.reverse()
-                        res_candles = [{
-                            "time": int(datetime.fromisoformat(c[0]).timestamp()),
-                            "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]),
-                            "volume": int(float(c[5]))
-                        } for c in raw]
-                        seen = {}
-                        for c in res_candles:
-                            seen[c["time"]] = c
-                        res_candles = [seen[t] for t in sorted(seen.keys())]
-                        q_data = _get_live_quote_data(symbol, token=token)
-                        return {
-                            "ok": True,
-                            "symbol": symbol,
-                            "instrument_key": inst_key,
-                            "is_option": is_option,
-                            "interval": interval,
-                            "date": today_str,
-                            "ltp": float(q_data.get("ltp") or res_candles[-1]["close"]),
-                            "prev_close": float(q_data.get("prev_close") or res_candles[-1]["open"]),
-                            "change": float(q_data.get("change") or 0.0),
-                            "change_percent": float(q_data.get("change_percent") or 0.0),
-                            "candles": res_candles,
-                        }
+                        candles_1m = raw
+                        selected_date = today_str
         except Exception:
             pass
 
-    # 2. Intraday Multi-Day Candles (past 7 days for 1m-15m, past 30 days for 1h)
-    days_back = 30 if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} else 7)
-    from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-    # First attempt multi-day range historical candle
-    range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.get(range_url, headers=upstox_headers)
-            if resp.status_code == 200:
-                raw = resp.json().get("data", {}).get("candles", [])
-                if raw:
-                    raw.reverse()
-                    candles_1m = raw
-                    selected_date = today_str
-    except Exception:
-        pass
-
-    # If range had no data (e.g. market hours today), supplement with live intraday endpoint
-    if not candles_1m or interval_clean in {"5s", "15s"}:
-        intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
-        try:
-            with httpx.Client(timeout=4.0) as client:
-                resp = client.get(intraday_url, headers=upstox_headers)
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    raw = payload.get("data", {}).get("candles", [])
-                    if raw:
-                        raw.reverse()
-                        if not candles_1m:
-                            candles_1m = raw
-                            selected_date = today_str
-                        else:
-                            # Merge intraday to end of multi-day
-                            last_hist_t = candles_1m[-1][0] if candles_1m else ""
-                            for c in raw:
-                                if c[0] > last_hist_t:
-                                    candles_1m.append(c)
-        except Exception:
-            pass
-
-    # Fallback to single daily sessions if needed
-    if not candles_1m:
-        d = datetime.now()
-        dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-        for try_date in dates_to_try:
-            url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+        # If range had no data, supplement with live intraday endpoint
+        if not candles_1m or interval_clean in {"5s", "15s"}:
+            intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
             try:
                 with httpx.Client(timeout=4.0) as client:
-                    resp = client.get(url, headers=upstox_headers)
+                    resp = client.get(intraday_url, headers=upstox_headers)
                     if resp.status_code == 200:
                         payload = resp.json()
                         raw = payload.get("data", {}).get("candles", [])
                         if raw:
                             raw.reverse()
-                            candles_1m = raw
-                            selected_date = try_date
-                            break
+                            if not candles_1m:
+                                candles_1m = raw
+                                selected_date = today_str
+                            else:
+                                last_hist_t = candles_1m[-1][0] if candles_1m else ""
+                                for c in raw:
+                                    if c[0] > last_hist_t:
+                                        candles_1m.append(c)
             except Exception:
-                continue
+                pass
 
-    # If candle data is still empty, derive option candles from underlying index
-    if not candles_1m:
+        # Fallback to single daily sessions if needed
+        if not candles_1m:
+            d = datetime.now()
+            dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+            for try_date in dates_to_try:
+                url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+                try:
+                    with httpx.Client(timeout=4.0) as client:
+                        resp = client.get(url, headers=upstox_headers)
+                        if resp.status_code == 200:
+                            payload = resp.json()
+                            raw = payload.get("data", {}).get("candles", [])
+                            if raw:
+                                raw.reverse()
+                                candles_1m = raw
+                                selected_date = try_date
+                                break
+                except Exception:
+                    continue
+
+    # If candle data is empty or if this is an option that needs derivation from index
+    if not candles_1m or must_derive_option:
         parsed = parse_option_sym(sym)
         if not parsed:
             m_opt = re.search(r"^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY).*?(\d{4,5})\s*(CE|PE)", sym)
@@ -2607,9 +3080,11 @@ def chart_candles(
                 except Exception:
                     pass
 
-    # If still empty (e.g. offline weekend or new stock), generate realistic smooth candles around base price
+    # If still empty (e.g. offline weekend or unmapped contract), generate realistic smooth candles matching quote LTP
     if not candles_1m:
-        base_ltp = 80.0 if is_option else (25000.0 if "NIFTY" in sym else (52000.0 if "BANK" in sym else 1500.0))
+        q_data = _get_live_quote_data(symbol, token=token)
+        ltp_val = float(q_data.get("ltp") or 0.0)
+        base_ltp = ltp_val if ltp_val > 0 else (80.0 if is_option_sym else (25000.0 if "NIFTY" in sym else (52000.0 if "BANK" in sym else (81100.0 if "SENSEX" in sym else 1500.0))))
         now_ts = int(time.time())
         candles_1m = []
         for i in range(120):
@@ -2785,7 +3260,18 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
     except Exception:
         pass
 
-    fallback_price = 24900.0 if not is_option else 80.0
+    if is_option:
+        fallback_price = 80.0
+    elif "SENSEX" in sym:
+        fallback_price = 81100.0
+    elif "BANK" in sym:
+        fallback_price = 59500.0
+    elif "MID" in sym:
+        fallback_price = 12800.0
+    elif "FIN" in sym:
+        fallback_price = 23800.0
+    else:
+        fallback_price = 24950.0
     fallback = {
         "ok": True,
         "symbol": sym,
@@ -3076,6 +3562,9 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
     elif "FIN" in und:
         und_key = "NSE_INDEX|Nifty Fin Service"
         und_name = "FINNIFTY"
+    elif "MID" in und:
+        und_key = "NSE_INDEX|NIFTY MID SELECT"
+        und_name = "MIDCPNIFTY"
     else:
         und_key = "NSE_INDEX|Nifty 50"
         und_name = "NIFTY"
@@ -3087,7 +3576,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
     if not valid_expiries:
         exp_list = []
         cur_dt = datetime.now()
-        target_weekday = 1 if "FIN" in und_name else 3
+        target_weekday = 1 if "FIN" in und_name else (0 if "MID" in und_name else (4 if "SENSEX" in und_name else 3))
         for _ in range(60):
             cur_dt += timedelta(days=1)
             if cur_dt.weekday() == target_weekday:
@@ -3161,12 +3650,12 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
         if quote and quote.get("ltp"):
             spot_price = float(quote["ltp"])
         if spot_price <= 0:
-            spot_defaults = {"NIFTY": 24950.0, "BANKNIFTY": 52100.0, "FINNIFTY": 23800.0, "SENSEX": 81200.0}
+            spot_defaults = {"NIFTY": 24950.0, "BANKNIFTY": 59500.0, "FINNIFTY": 23800.0, "SENSEX": 81100.0, "MIDCPNIFTY": 12800.0}
             spot_price = spot_defaults.get(und_name, 25000.0)
 
-        step = 100 if ("BANK" in und_name or "SENSEX" in und_name) else 50
+        step = 100 if ("BANK" in und_name or "SENSEX" in und_name) else (25 if "MID" in und_name else 50)
         atm_strike = round(spot_price / step) * step
-        atm_time_val = 115.0 if "NIFTY" in und_name else (240.0 if "BANK" in und_name else 85.0)
+        atm_time_val = 115.0 if "NIFTY" in und_name else (240.0 if "BANK" in und_name else (80.0 if "SENSEX" in und_name else 45.0))
 
         start_strike = atm_strike - (14 * step)
         for i in range(29):

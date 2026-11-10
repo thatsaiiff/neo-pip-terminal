@@ -34,6 +34,9 @@
   let selectedOrderType = 'MKT'; // MKT, L, SL
   let selectedLots = 1;
   let updateLotDisplayFn = null;
+  let cachedPositions = [];
+  let cachedOrders = [];
+  let updateMobileOrdersFn = null;
 
   // Open Symbol Tabs
   let openTabs = [
@@ -702,15 +705,22 @@
 
       applyPaneIndicators(pane);
 
-      // Fit container dimensions and content
-      const canvasWrap = $(`${pane.id}-canvas-wrap`);
-      if (canvasWrap && pane.chart) {
-        const cr = canvasWrap.getBoundingClientRect();
-        if (cr.width > 50 && cr.height > 50) {
-          pane.chart.applyOptions({ width: Math.floor(cr.width), height: Math.floor(cr.height) });
+      // Fit container dimensions and content robustly
+      function refitPane() {
+        const canvasWrap = $(`${pane.id}-canvas-wrap`);
+        const container = $(`${pane.id}-chart-container`);
+        if (canvasWrap && pane.chart) {
+          const cr = canvasWrap.getBoundingClientRect();
+          const targetW = Math.max(280, Math.floor(cr.width || (container ? container.clientWidth : 0) || window.innerWidth));
+          const targetH = Math.max(220, Math.floor(cr.height || (container ? container.clientHeight : 0) || (window.innerHeight - 300)));
+          pane.chart.applyOptions({ width: targetW, height: targetH });
+          pane.chart.timeScale().fitContent();
         }
-        pane.chart.timeScale().fitContent();
       }
+      refitPane();
+      requestAnimationFrame(refitPane);
+      setTimeout(refitPane, 60);
+      setTimeout(refitPane, 250);
 
       const lastBar = pane.candles[pane.candles.length - 1];
       if (lastBar) {
@@ -1563,6 +1573,12 @@
           });
         }
       }
+
+      cachedPositions = positions;
+      cachedOrders = allOrders;
+      if (typeof updateMobileOrdersFn === 'function') {
+        updateMobileOrdersFn();
+      }
     } catch (e) {
       // quiet
     }
@@ -1575,15 +1591,25 @@
     const headerBtn = $('btn-header-opt-chain');
     const railBtn = $('rail-btn-option-chain');
     const closeBtn = $('close-oc-modal');
+    const undSelect = $('oc-und-select');
     const expirySelect = $('oc-expiry-select');
     const spotBadge = $('oc-spot-badge');
     const tbody = $('oc-table-body');
 
-    let currentUnd = 'NIFTY';
+    let currentUnd = (undSelect && undSelect.value) ? undSelect.value : 'NIFTY';
+
+    function formatOI(val) {
+      const n = Number(val) || 0;
+      if (n >= 10000000) return (n / 10000000).toFixed(2) + 'Cr';
+      if (n >= 100000) return (n / 100000).toFixed(2) + 'L';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return n > 0 ? n.toString() : '—';
+    }
 
     function openModal() {
       if (!modal) return;
       modal.classList.remove('hidden');
+      if (undSelect) currentUnd = undSelect.value;
       loadOptionChain(currentUnd);
     }
 
@@ -1597,14 +1623,12 @@
     if (railBtn) railBtn.addEventListener('click', openModal);
     if (closeBtn) closeBtn.addEventListener('click', closeModal);
 
-    document.querySelectorAll('.oc-und-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.oc-und-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentUnd = btn.dataset.und;
+    if (undSelect) {
+      undSelect.addEventListener('change', () => {
+        currentUnd = undSelect.value;
         loadOptionChain(currentUnd);
       });
-    });
+    }
 
     if (expirySelect) {
       expirySelect.addEventListener('change', () => {
@@ -1649,28 +1673,45 @@
           return;
         }
 
+        // Find max OI across chain for proportional visual bars
+        let maxOi = 1;
+        chainRows.forEach(row => {
+          const cOi = Number(row.call_oi !== undefined ? row.call_oi : (row.call && row.call.oi ? row.call.oi : 0));
+          const pOi = Number(row.put_oi !== undefined ? row.put_oi : (row.put && row.put.oi ? row.put.oi : 0));
+          if (cOi > maxOi) maxOi = cOi;
+          if (pOi > maxOi) maxOi = pOi;
+        });
+
         chainRows.forEach(row => {
           const strike = row.strike;
           const callSym = row.call_symbol || (row.call && row.call.symbol) || `${underlying} ${strike} CE`;
           const callTok = row.call_token || (row.call && row.call.instrument_key) || '';
           const callLtp = Number(row.call_ltp !== undefined ? row.call_ltp : (row.call && row.call.ltp ? row.call.ltp : 0));
-          const callOi = row.call_oi || (row.call && row.call.oi) || 0;
+          const callOi = Number(row.call_oi !== undefined ? row.call_oi : (row.call && row.call.oi ? row.call.oi : 0));
           const callVol = row.call_vol || (row.call && row.call.volume) || 0;
 
           const putSym = row.put_symbol || (row.put && row.put.symbol) || `${underlying} ${strike} PE`;
           const putTok = row.put_token || (row.put && row.put.instrument_key) || '';
           const putLtp = Number(row.put_ltp !== undefined ? row.put_ltp : (row.put && row.put.ltp ? row.put.ltp : 0));
-          const putOi = row.put_oi || (row.put && row.put.oi) || 0;
+          const putOi = Number(row.put_oi !== undefined ? row.put_oi : (row.put && row.put.oi ? row.put.oi : 0));
           const putVol = row.put_vol || (row.put && row.put.volume) || 0;
+
+          const callOiPct = Math.min(100, Math.max(3, Math.round((callOi / maxOi) * 100)));
+          const putOiPct = Math.min(100, Math.max(3, Math.round((putOi / maxOi) * 100)));
 
           const tr = document.createElement('tr');
           tr.className = `oc-strike-row ${row.is_atm ? 'atm-row' : ''}`;
           tr.innerHTML = `
-            <td class="col-oi">${callOi ? callOi.toLocaleString('en-IN') : '—'}</td>
-            <td class="col-vol">${callVol ? callVol.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-oi">
+              <div class="oi-cell-wrap">
+                <div class="oi-bar ce-bar" style="width: ${callOi ? callOiPct : 0}%"></div>
+                <span class="oi-val">${formatOI(callOi)}</span>
+              </div>
+            </td>
+            <td class="col-vol">${callVol ? formatOI(callVol) : '—'}</td>
             <td class="col-ltp">
               <button type="button" class="oc-ltp-btn call-ltp" data-sym="${callSym}" data-tok="${callTok}">
-                ${callLtp ? callLtp.toFixed(2) : '—'}
+                ₹${callLtp ? callLtp.toFixed(2) : '—'}
               </button>
             </td>
             <td class="col-strike">
@@ -1679,11 +1720,16 @@
             </td>
             <td class="col-ltp">
               <button type="button" class="oc-ltp-btn put-ltp" data-sym="${putSym}" data-tok="${putTok}">
-                ${putLtp ? putLtp.toFixed(2) : '—'}
+                ₹${putLtp ? putLtp.toFixed(2) : '—'}
               </button>
             </td>
-            <td class="col-vol">${putVol ? putVol.toLocaleString('en-IN') : '—'}</td>
-            <td class="col-oi">${putOi ? putOi.toLocaleString('en-IN') : '—'}</td>
+            <td class="col-vol">${putVol ? formatOI(putVol) : '—'}</td>
+            <td class="col-oi">
+              <div class="oi-cell-wrap pe-wrap">
+                <div class="oi-bar pe-bar" style="width: ${putOi ? putOiPct : 0}%"></div>
+                <span class="oi-val">${formatOI(putOi)}</span>
+              </div>
+            </td>
           `;
 
           // Click Call LTP
@@ -1714,13 +1760,21 @@
     }
   }
 
-  // --- Gatekeeper & Owner Auth ---
+  // --- Gatekeeper & Modern Auth Flow (Email Check -> Admin Password or User OTP) ---
   function setupGatekeeper() {
     const gateModal = $('modal-gatekeeper');
+    const emailStep = $('auth-email-step');
+    const adminStep = $('auth-admin-step');
+    const otpStep = $('auth-otp-step');
+
+    const emailInput = $('auth-email-input');
+    const adminPwdInput = $('auth-admin-pwd');
+    const otpInput = $('auth-otp-input');
+    const usernameInput = $('auth-username-input');
+    const otpEmailLabel = $('auth-otp-email-label');
+
     const btnEnterGuest = $('btn-enter-guest');
-    const btnOwnerSubmit = $('btn-owner-login-submit');
-    const ownerTotp = $('owner-totp-input');
-    const ownerMpin = $('owner-mpin-input');
+    const btnResendOtp = $('btn-auth-resend-otp');
 
     const accBtn = $('ex-account-btn');
     const accMenu = $('ex-account-menu');
@@ -1729,6 +1783,37 @@
     const btnLogout = $('btn-logout');
     const sessionBadge = $('session-timer-badge');
     const sessionTimerText = $('session-timer-text');
+
+    let pendingEmail = '';
+
+    function showEmailStep() {
+      if (emailStep) emailStep.classList.remove('hidden');
+      if (adminStep) adminStep.classList.add('hidden');
+      if (otpStep) otpStep.classList.add('hidden');
+      if (emailInput) setTimeout(() => emailInput.focus(), 100);
+    }
+
+    function showAdminStep() {
+      if (emailStep) emailStep.classList.add('hidden');
+      if (adminStep) adminStep.classList.remove('hidden');
+      if (otpStep) otpStep.classList.add('hidden');
+      if (adminPwdInput) {
+        adminPwdInput.value = '';
+        setTimeout(() => adminPwdInput.focus(), 100);
+      }
+    }
+
+    function showOtpStep(email, suggestedUser = '') {
+      if (emailStep) emailStep.classList.add('hidden');
+      if (adminStep) adminStep.classList.add('hidden');
+      if (otpStep) otpStep.classList.remove('hidden');
+      if (otpEmailLabel) otpEmailLabel.textContent = email;
+      if (usernameInput && suggestedUser) usernameInput.value = suggestedUser;
+      if (otpInput) {
+        otpInput.value = '';
+        setTimeout(() => otpInput.focus(), 100);
+      }
+    }
 
     // Toggle Account Menu
     if (accBtn && accMenu) {
@@ -1743,6 +1828,7 @@
 
     if (btnOpenOwner) {
       btnOpenOwner.addEventListener('click', () => {
+        showEmailStep();
         if (gateModal) gateModal.classList.remove('hidden');
       });
     }
@@ -1758,50 +1844,79 @@
       btnLogout.addEventListener('click', async () => {
         await api('/api/auth/owner-logout', { method: 'POST' }).catch(() => ({}));
         localStorage.removeItem('neo_owner_token');
+        localStorage.removeItem('neo_guest_handle');
         ownerToken = '';
         isOwner = false;
-        updateAuthModeUI(false);
+        updateAuthModeUI(false, 'Guest');
         toast('Logged out. Switched to Guest Demo Mode.');
+        showEmailStep();
         if (gateModal) gateModal.classList.remove('hidden');
       });
     }
 
-    // Guest Entry
-    if (btnEnterGuest) {
-      btnEnterGuest.addEventListener('click', () => {
-        gateModal.classList.add('hidden');
-        localStorage.setItem('neo_visited_as_guest', 'true');
-        updateAuthModeUI(false);
-        toast('Welcome! You are trading in Guest Demo Mode with ₹10,00,000 virtual balance.');
+    // 1. Submit Email Step
+    if (emailStep) {
+      emailStep.addEventListener('submit', async e => {
+        e.preventDefault();
+        const email = (emailInput ? emailInput.value : '').trim().toLowerCase();
+        if (!email || !email.includes('@')) {
+          toast('Please enter a valid email address');
+          return;
+        }
+        pendingEmail = email;
+        toast('Checking email address…');
+
+        try {
+          const res = await api('/api/auth/check-email', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+          });
+
+          if (res && res.ok) {
+            if (res.is_admin) {
+              showAdminStep();
+              toast('Admin recognized! Please enter password.');
+            } else {
+              showOtpStep(email, res.suggested_username || '');
+              toast(res.email_sent ? `Verification OTP sent to ${email}` : `OTP prepared for ${email}`);
+            }
+          } else {
+            toast(`Error: ${(res && res.message) || 'Failed to verify email'}`);
+          }
+        } catch (err) {
+          toast(`Error: ${err.message}`);
+        }
       });
     }
 
-    // Owner Login Submit
-    if (btnOwnerSubmit) {
-      btnOwnerSubmit.addEventListener('click', async () => {
-        const totp = (ownerTotp ? ownerTotp.value : '').trim();
-        const mpin = (ownerMpin ? ownerMpin.value : '').trim();
-        if (!mpin) {
-          toast('Please enter your 6-digit MPIN');
+    // 2. Submit Admin Password Step
+    if (adminStep) {
+      adminStep.addEventListener('submit', async e => {
+        e.preventDefault();
+        const pwd = (adminPwdInput ? adminPwdInput.value : '').trim();
+        if (!pwd) {
+          toast('Please enter your admin password');
           return;
         }
 
+        toast('Verifying admin credentials…');
         try {
-          toast('Verifying credentials...');
-          const res = await api('/api/auth/owner-login', {
+          const res = await api('/api/auth/login-admin', {
             method: 'POST',
-            body: JSON.stringify({ totp, mpin }),
+            body: JSON.stringify({ email: pendingEmail, password: pwd }),
           });
 
-          if (res.ok && res.token) {
+          if (res && res.ok && res.token) {
             ownerToken = res.token;
             localStorage.setItem('neo_owner_token', ownerToken);
             recordUserActivity();
             isOwner = true;
-            updateAuthModeUI(true);
-            gateModal.classList.add('hidden');
-            toast('✅ Authenticated as Owner! Live Kotak 0-Brokerage Active.');
+            updateAuthModeUI(true, 'Admin (Saif)');
+            if (gateModal) gateModal.classList.add('hidden');
+            toast('✅ Welcome Saif! Admin Terminal Unlocked with Live Kotak F&O.');
             fetchPositionsAndOrders();
+          } else {
+            toast(`❌ ${(res && res.message) || 'Invalid admin password'}`);
           }
         } catch (err) {
           toast(`❌ Authentication failed: ${err.message}`);
@@ -1809,27 +1924,108 @@
       });
     }
 
+    // 3. Submit OTP Step (Guest / New User Signup)
+    if (otpStep) {
+      otpStep.addEventListener('submit', async e => {
+        e.preventDefault();
+        const otp = (otpInput ? otpInput.value : '').trim();
+        const handle = (usernameInput ? usernameInput.value : '').trim();
+        if (!otp || otp.length < 6) {
+          toast('Please enter the 6-digit verification code');
+          return;
+        }
+
+        toast('Verifying code…');
+        try {
+          const res = await api('/api/auth/verify-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email: pendingEmail, otp, username: handle }),
+          });
+
+          if (res && res.ok && res.token) {
+            ownerToken = res.token;
+            localStorage.setItem('neo_owner_token', ownerToken);
+            localStorage.setItem('neo_guest_handle', res.username || handle);
+            recordUserActivity();
+            isOwner = false;
+            updateAuthModeUI(false, res.username || handle);
+            if (gateModal) gateModal.classList.add('hidden');
+            toast(`✅ Welcome ${res.username || handle}! Paper trading active with ₹10,00,000 balance.`);
+            fetchPositionsAndOrders();
+          } else {
+            toast(`❌ ${(res && res.message) || 'Invalid verification code'}`);
+          }
+        } catch (err) {
+          toast(`❌ Verification failed: ${err.message}`);
+        }
+      });
+    }
+
+    // Back Buttons
+    document.querySelectorAll('.auth-back-to-email').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        showEmailStep();
+      });
+    });
+
+    // Resend OTP
+    if (btnResendOtp) {
+      btnResendOtp.addEventListener('click', async e => {
+        e.preventDefault();
+        if (!pendingEmail) {
+          showEmailStep();
+          return;
+        }
+        toast('Resending verification code…');
+        try {
+          const res = await api('/api/auth/resend-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email: pendingEmail }),
+          });
+          if (res && res.ok) {
+            toast(`A new 6-digit code has been sent to ${pendingEmail}`);
+          }
+        } catch (err) {
+          toast(`Failed to resend: ${err.message}`);
+        }
+      });
+    }
+
+    // Quick Demo / Skip Login
+    if (btnEnterGuest) {
+      btnEnterGuest.addEventListener('click', () => {
+        if (gateModal) gateModal.classList.add('hidden');
+        localStorage.setItem('neo_visited_as_guest', 'true');
+        const handle = localStorage.getItem('neo_guest_handle') || 'DemoTrader';
+        updateAuthModeUI(false, handle);
+        toast('Welcome! You are trading in Guest Demo Mode with ₹10,00,000 virtual balance.');
+      });
+    }
+
     // Check Initial Session
     async function checkSession() {
       try {
         const st = await api('/api/auth/session-status');
-        if (st.authenticated) {
-          isOwner = true;
-          updateAuthModeUI(true);
+        if (st && st.authenticated) {
+          isOwner = bool(st.is_owner || st.is_admin);
+          updateAuthModeUI(isOwner, st.username || (isOwner ? 'Admin (Saif)' : 'Trader'));
+          if (gateModal) gateModal.classList.add('hidden');
         } else {
           isOwner = false;
-          updateAuthModeUI(false);
+          updateAuthModeUI(false, 'Guest');
           const hasVisited = localStorage.getItem('neo_visited_as_guest');
           if (!hasVisited && gateModal) {
+            showEmailStep();
             gateModal.classList.remove('hidden');
           }
         }
       } catch (e) {
-        updateAuthModeUI(false);
+        updateAuthModeUI(false, 'Guest');
       }
     }
 
-    function updateAuthModeUI(ownerActive) {
+    function updateAuthModeUI(ownerActive, username = 'Guest') {
       const pill = $('ex-acc-pill');
       const idEl = $('ex-acc-id');
       const modeBadge = $('op-mode-badge');
@@ -1837,6 +2033,30 @@
       const btnOwnerLoginEl = $('btn-open-owner-login');
       const menuTitle = $('menu-mode-title');
       const menuSub = $('menu-mode-sub');
+      const profileLogin = $('m-profile-login');
+
+      if (ownerActive) {
+        if (pill) { pill.className = 'ex-acc-pill live'; pill.textContent = 'Live'; }
+        if (idEl) idEl.textContent = '#KOTAK-LIVE';
+        if (modeBadge) { modeBadge.textContent = 'Kotak Live (0 Brokerage)'; modeBadge.className = 'text-green'; }
+        if (btnLogoutEl) btnLogoutEl.classList.remove('hidden');
+        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.add('hidden');
+        if (menuTitle) menuTitle.textContent = 'Kotak Live Account';
+        if (menuSub) menuSub.textContent = 'Admin: Saif (0 Brokerage F&O)';
+        if (sessionBadge) sessionBadge.classList.remove('hidden');
+        if (profileLogin) profileLogin.textContent = 'osaifala@gmail.com (Owner)';
+      } else {
+        if (pill) { pill.className = 'ex-acc-pill demo'; pill.textContent = 'Demo'; }
+        if (idEl) idEl.textContent = `#${(username || 'GUEST').toUpperCase().slice(0, 10)}`;
+        if (modeBadge) { modeBadge.textContent = 'Demo Paper Trading'; modeBadge.className = 'mode-badge-demo'; }
+        if (btnLogoutEl) btnLogoutEl.classList.add('hidden');
+        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.remove('hidden');
+        if (menuTitle) menuTitle.textContent = 'Guest Paper Trading';
+        if (menuSub) menuSub.textContent = `${username || 'Guest'} (₹10,00,000 Virtual Funds)`;
+        if (sessionBadge) sessionBadge.classList.add('hidden');
+        if (profileLogin) profileLogin.textContent = `${(username || 'guest').toLowerCase()}@pip-terminal`;
+      }
+    }
 
       if (ownerActive) {
         if (pill) { pill.className = 'ex-acc-pill live'; pill.textContent = 'Live'; }
@@ -2123,6 +2343,17 @@
             body: JSON.stringify(payload),
           });
 
+          if (ck) {
+            await api('/api/auth/save-kotak-keys', {
+              method: 'POST',
+              body: JSON.stringify({
+                consumer_key: ck,
+                mobile: ($('input-kotak-mobile') ? $('input-kotak-mobile').value : '').trim(),
+                ucc: ($('input-kotak-ucc') ? $('input-kotak-ucc').value : '').trim(),
+              }),
+            }).catch(() => {});
+          }
+
           if (res.ok) {
             toast(`✅ ${res.message || 'API keys successfully saved and applied!'}`);
             closeKeysModal();
@@ -2203,12 +2434,13 @@
         // Trigger chart canvas resize and fit
         setTimeout(() => {
           const canvasWrap = $(`${panes[0].id}-canvas-wrap`);
+          const cont = $(`${panes[0].id}-chart-container`);
           if (canvasWrap && panes[0].chart) {
             const cr = canvasWrap.getBoundingClientRect();
-            if (cr.width > 50 && cr.height > 50) {
-              panes[0].chart.applyOptions({ width: Math.floor(cr.width), height: Math.floor(cr.height) });
-              panes[0].chart.timeScale().fitContent();
-            }
+            const targetW = Math.max(280, Math.floor(cr.width || (cont ? cont.clientWidth : 0) || window.innerWidth));
+            const targetH = Math.max(220, Math.floor(cr.height || (cont ? cont.clientHeight : 0) || (window.innerHeight - 300)));
+            panes[0].chart.applyOptions({ width: targetW, height: targetH });
+            panes[0].chart.timeScale().fitContent();
           }
         }, 50);
       } else {
@@ -2221,6 +2453,9 @@
           renderMobileTradeList();
         } else if (tabKey === 'accounts') {
           updateMobileAccountsView();
+          if (typeof renderMobileOrdersList === 'function') {
+            renderMobileOrdersList(activeOrdersTab);
+          }
         } else if (tabKey === 'performance') {
           updateMobilePerformanceView();
         } else if (tabKey === 'profile') {
@@ -2236,6 +2471,25 @@
     // Accounts screen Trade button
     const mTradeBtn = $('m-action-trade');
     if (mTradeBtn) mTradeBtn.addEventListener('click', () => switchMobileTab('chart'));
+
+    const mDepositBtn = $('m-action-deposit');
+    if (mDepositBtn) {
+      mDepositBtn.addEventListener('click', () => {
+        toast('💡 Deposit funds directly via your Kotak Neo netbanking / UPI portal.');
+      });
+    }
+
+    const mWithdrawBtn = $('m-action-withdraw');
+    if (mWithdrawBtn) {
+      mWithdrawBtn.addEventListener('click', () => {
+        toast('💡 Withdrawals are settled to your linked primary bank account by Kotak Neo.');
+      });
+    }
+
+    const mAccCog = $('m-btn-acc-settings');
+    if (mAccCog && keysModal) {
+      mAccCog.addEventListener('click', () => keysModal.classList.remove('hidden'));
+    }
 
     // Performance screen Start Trading button
     const mPerfTrade = $('m-btn-perf-trade');
@@ -2261,6 +2515,239 @@
 
     const mRowReddit = $('m-row-reddit');
     if (mRowReddit) mRowReddit.addEventListener('click', () => window.open('https://reddit.com/user/thatsaiiff', '_blank'));
+
+    // Mobile Accounts Open / Pending / Closed Tabs
+    let activeOrdersTab = 'open';
+    const otabs = document.querySelectorAll('.m-otab');
+    otabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        otabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeOrdersTab = tab.dataset.otab || 'open';
+        renderMobileOrdersList(activeOrdersTab);
+      });
+    });
+
+    function renderMobileOrdersList(tab = activeOrdersTab) {
+      const container = $('m-orders-list');
+      if (!container) return;
+
+      const mOpenTab = $('m-otab-open');
+      const mPendingTab = $('m-otab-pending');
+      const mClosedTab = $('m-otab-closed');
+
+      const pendingList = cachedOrders.filter(o => o.status === 'pending');
+      const closedList = cachedOrders.filter(o => o.status === 'completed' || o.status === 'simulated');
+
+      if (mOpenTab) {
+        mOpenTab.innerHTML = 'Open' + (cachedPositions.length ? ` <span class="m-tab-badge">${cachedPositions.length}</span>` : '');
+      }
+      if (mPendingTab) {
+        mPendingTab.innerHTML = 'Pending' + (pendingList.length ? ` <span class="m-tab-badge">${pendingList.length}</span>` : '');
+      }
+      if (mClosedTab) {
+        mClosedTab.innerHTML = 'Closed' + (closedList.length ? ` <span class="m-tab-badge">${closedList.length}</span>` : '');
+      }
+
+      container.innerHTML = '';
+
+      if (tab === 'open') {
+        if (!cachedPositions.length) {
+          container.innerHTML = `
+            <div class="m-orders-empty-msg">No open orders. Find your next trade:</div>
+            <div class="m-quick-carousel" id="m-quick-carousel">
+              <div class="m-quick-card" data-sym="NIFTY">
+                <div class="m-qc-title">NIFTY 50</div>
+                <div class="m-qc-icon">🇮🇳</div>
+                <div class="m-qc-price" id="qc-nifty-ltp">25,023.70</div>
+                <div class="m-qc-chg neg" id="qc-nifty-chg">▼ 0.28%</div>
+              </div>
+              <div class="m-quick-card" data-sym="BANKNIFTY">
+                <div class="m-qc-title">BANK NIFTY</div>
+                <div class="m-qc-icon">🏦</div>
+                <div class="m-qc-price" id="qc-bank-ltp">52,100.00</div>
+                <div class="m-qc-chg pos" id="qc-bank-chg">▲ 0.45%</div>
+              </div>
+              <div class="m-quick-card" data-sym="SENSEX">
+                <div class="m-qc-title">SENSEX</div>
+                <div class="m-qc-icon">📈</div>
+                <div class="m-qc-price" id="qc-sensex-ltp">81,200.00</div>
+                <div class="m-qc-chg pos" id="qc-sensex-chg">▲ 0.35%</div>
+              </div>
+              <div class="m-quick-card" data-sym="RELIANCE">
+                <div class="m-qc-title">RELIANCE</div>
+                <div class="m-qc-icon">⚡</div>
+                <div class="m-qc-price" id="qc-rel-ltp">1,340.00</div>
+                <div class="m-qc-chg pos" id="qc-rel-chg">▲ 0.80%</div>
+              </div>
+            </div>
+          `;
+          container.querySelectorAll('.m-quick-card').forEach(card => {
+            card.addEventListener('click', () => {
+              const sym = card.dataset.sym;
+              if (sym) {
+                addSymbolTab(sym, '');
+                switchMobileTab('chart');
+              }
+            });
+          });
+        } else {
+          cachedPositions.forEach(p => {
+            const sym = p.symbol || p.trdSym || '—';
+            const side = (p.side || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+            const qty = Math.abs(Number(p.quantity || p.qty || 0));
+            const avg = Number(p.average_price || p.avgPrc || 0);
+            const ltp = Number(p.ltp || avg);
+            const m2m = Number(p.m2m || (side === 'BUY' ? (ltp - avg) * qty : (avg - ltp) * qty));
+            const isPos = m2m >= 0;
+
+            const card = document.createElement('div');
+            card.className = 'm-order-card';
+            card.innerHTML = `
+              <div class="m-card-top">
+                <div class="m-card-sym-wrap">
+                  <span class="m-card-icon">${sym.includes('BANK') ? '🏦' : (sym.includes('SENSEX') ? '📈' : '🪙')}</span>
+                  <span class="m-card-sym">${sym}</span>
+                  <span class="m-tag-pill tp">TP</span>
+                  <span class="m-tag-pill sl">SL</span>
+                </div>
+                <div class="m-card-pnl ${isPos ? 'pos' : 'neg'}">
+                  ${isPos ? '+' : ''}₹${m2m.toFixed(2)}
+                </div>
+              </div>
+              <div class="m-card-bot">
+                <div class="m-card-sub ${side.toLowerCase()}">${side} ${qty} lot at ₹${avg.toFixed(2)}</div>
+                <div class="m-card-ltp">₹${ltp.toFixed(2)}</div>
+              </div>
+              <div class="m-card-actions">
+                <button type="button" class="m-card-btn-close" data-sym="${sym}">Close Position</button>
+              </div>
+            `;
+
+            const closeBtn = card.querySelector('.m-card-btn-close');
+            if (closeBtn) {
+              closeBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                  toast(`Closing position ${sym}...`);
+                  const res = await api(`/api/positions/${encodeURIComponent(sym)}/exit`, {
+                    method: 'POST',
+                    body: JSON.stringify({ percentage: 100 }),
+                  });
+                  if (res.ok) {
+                    toast(`✅ Position ${sym} closed!`);
+                    fetchPositionsAndOrders();
+                  }
+                } catch (err) {
+                  toast(`❌ ${err.message}`);
+                }
+              });
+            }
+
+            card.addEventListener('click', () => {
+              addSymbolTab(sym, '');
+              switchMobileTab('chart');
+            });
+
+            container.appendChild(card);
+          });
+        }
+      } else if (tab === 'pending') {
+        if (!pendingList.length) {
+          container.innerHTML = '<div class="m-orders-empty-msg">No pending limit or trigger orders.</div>';
+        } else {
+          pendingList.forEach(o => {
+            const side = (o.side || 'BUY').toUpperCase();
+            const card = document.createElement('div');
+            card.className = 'm-order-card';
+            card.innerHTML = `
+              <div class="m-card-top">
+                <div class="m-card-sym-wrap">
+                  <span class="m-card-icon">⚡</span>
+                  <span class="m-card-sym">${o.symbol}</span>
+                </div>
+                <div class="m-card-dash">
+                  <button type="button" class="m-card-btn-cancel" data-id="${o.id}">✕ Cancel</button>
+                </div>
+              </div>
+              <div class="m-card-bot">
+                <div class="m-card-sub ${side.toLowerCase()}">${side} ${o.order_type || 'Limit'} ${o.quantity} lot at ₹${Number(o.price || 0).toFixed(2)}</div>
+                <div class="m-card-ltp">${o.ltp ? '₹' + Number(o.ltp).toFixed(2) : '—'}</div>
+              </div>
+            `;
+            const cancelBtn = card.querySelector('.m-card-btn-cancel');
+            if (cancelBtn) {
+              cancelBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                  toast(`Cancelling order #${o.id}...`);
+                  await api(`/api/orders/${o.id}/cancel`, { method: 'POST' });
+                  toast(`✅ Order cancelled`);
+                  fetchPositionsAndOrders();
+                } catch (err) {
+                  toast(`❌ ${err.message}`);
+                }
+              });
+            }
+            container.appendChild(card);
+          });
+        }
+      } else if (tab === 'closed') {
+        if (!closedList.length) {
+          container.innerHTML = '<div class="m-orders-empty-msg">No closed trades today.</div>';
+        } else {
+          let totalDayPnl = 0;
+          closedList.forEach(c => {
+            const pnl = Number(c.realized_pnl || c.pnl || 0);
+            totalDayPnl += pnl;
+          });
+
+          const dateHdr = document.createElement('div');
+          dateHdr.className = 'm-closed-date-header';
+          dateHdr.innerHTML = `
+            <span class="m-cd-title">Today</span>
+            <span class="m-cd-pnl ${totalDayPnl >= 0 ? 'pos' : 'neg'}">
+              ${totalDayPnl >= 0 ? '+' : ''}₹${totalDayPnl.toFixed(2)}
+            </span>
+          `;
+          container.appendChild(dateHdr);
+
+          closedList.forEach(c => {
+            const side = (c.side || 'BUY').toUpperCase();
+            const pnl = Number(c.realized_pnl || c.pnl || 0);
+            const isPos = pnl >= 0;
+            const openPrc = Number(c.open_price || c.average_price || c.price || 0);
+            const closePrc = Number(c.close_price || c.exit_price || c.price || 0);
+
+            const card = document.createElement('div');
+            card.className = 'm-order-card closed';
+            card.innerHTML = `
+              <div class="m-card-top">
+                <div class="m-card-sym-wrap">
+                  <span class="m-card-icon">🪙</span>
+                  <span class="m-card-sym">${c.symbol}</span>
+                  <span class="m-tag-pill tp">TP</span>
+                  <span class="m-tag-pill sl">SL</span>
+                </div>
+                <div class="m-card-pnl ${isPos ? 'pos' : 'neg'}">
+                  ${isPos ? '+' : ''}₹${pnl.toFixed(2)}
+                </div>
+              </div>
+              <div class="m-card-bot">
+                <div class="m-card-sub ${side.toLowerCase()}">${side} ${c.quantity || 1} lot at ₹${openPrc.toFixed(2)}</div>
+                <div class="m-card-ltp">₹${closePrc.toFixed(2)}</div>
+              </div>
+            `;
+            container.appendChild(card);
+          });
+        }
+      }
+    }
+
+    updateMobileOrdersFn = () => {
+      updateMobileAccountsView();
+      renderMobileOrdersList(activeOrdersTab);
+    };
 
     // Quick trade carousel items
     document.querySelectorAll('.m-quick-card').forEach(card => {

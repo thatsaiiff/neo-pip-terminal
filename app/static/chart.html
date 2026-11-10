@@ -964,50 +964,102 @@
 
   <!-- ==================== MODALS ==================== -->
 
-  <!-- 1. GATEKEEPER / AUTH MODAL (Guest vs Owner Login) -->
+  <!-- 1. AUTHENTICATION & SIGN-IN MODAL (Admin Password & User OTP) -->
   <div id="modal-gatekeeper" class="ex-modal-backdrop hidden">
-    <div class="ex-modal-card gatekeeper-card">
+    <div class="ex-modal-card auth-modal-card">
       <div class="modal-brand">
         <span class="ex-logo-mark">neo</span>
-        <h2>Welcome to Neo PIP Terminal</h2>
+        <h2>Neo PIP Terminal</h2>
       </div>
       <p class="modal-tagline">
-        Zero-brokerage Kotak Neo F&amp;O ticket with sub-second Upstox live streaming charts.
+        Zero-brokerage Kotak Neo F&amp;O terminal with real-time Upstox streaming charts.
       </p>
 
-      <div class="gatekeeper-choices">
-        <!-- Choice A: Enter as Guest -->
-        <div class="choice-card guest-choice">
-          <div class="choice-icon">🚀</div>
-          <div class="choice-body">
-            <h3>See as Guest (Demo Mode)</h3>
-            <p>Instant access with ₹10,00,000 virtual balance. Experience live sub-second option charts and simulated execution with 0 risk.</p>
-            <button type="button" id="btn-enter-guest" class="btn-primary-choice">
-              Enter as Guest →
-            </button>
+      <!-- Step 1: Email Form -->
+      <form id="auth-email-step" class="auth-step-form">
+        <div class="auth-input-group">
+          <label for="auth-email-input" class="auth-label">Sign in or Create Account</label>
+          <div class="auth-input-wrap">
+            <svg class="auth-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <input type="email" id="auth-email-input" class="auth-text-input" placeholder="Enter your email address" required autocomplete="email">
+          </div>
+          <small class="auth-hint">Enter your email. Admins sign in directly; other traders receive a 1-time code.</small>
+        </div>
+
+        <button type="submit" id="btn-auth-continue" class="btn-auth-primary">
+          <span>Continue</span>
+          <span class="btn-arrow">&rarr;</span>
+        </button>
+
+        <div class="auth-divider"><span>OR</span></div>
+
+        <button type="button" id="btn-enter-guest" class="btn-auth-guest">
+          <span>⚡ Instant Demo (Skip Login &amp; Trade)</span>
+        </button>
+      </form>
+
+      <!-- Step 2A: Admin Password Form (osaifala@gmail.com) -->
+      <form id="auth-admin-step" class="auth-step-form hidden">
+        <div class="admin-welcome-pill">
+          <span class="admin-shield">🛡️</span>
+          <span>Admin / Terminal Owner Detected</span>
+        </div>
+
+        <div class="auth-input-group">
+          <label for="auth-admin-pwd" class="auth-label">Enter Admin Password</label>
+          <div class="auth-input-wrap">
+            <svg class="auth-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input type="password" id="auth-admin-pwd" class="auth-text-input" placeholder="Password" required autocomplete="current-password">
           </div>
         </div>
 
-        <div class="or-sep"><span>OR</span></div>
+        <button type="submit" id="btn-admin-submit" class="btn-auth-primary">
+          <span>Unlock Admin Terminal</span>
+          <span class="btn-arrow">&rarr;</span>
+        </button>
 
-        <!-- Choice B: Owner Login -->
-        <div class="choice-card owner-choice">
-          <div class="choice-icon">🔐</div>
-          <div class="choice-body">
-            <h3>Already a PIP User? (Owner Login)</h3>
-            <p>Enter your Kotak Neo Authenticator TOTP and MPIN to unlock your live 0-brokerage trading session.</p>
-            <div class="owner-login-form">
-              <div class="input-row">
-                <input type="text" id="owner-totp-input" maxlength="6" placeholder="Kotak TOTP (6-digit)" autocomplete="one-time-code">
-                <input type="password" id="owner-mpin-input" maxlength="8" placeholder="Kotak MPIN (6-digit)">
-              </div>
-              <button type="button" id="btn-owner-login-submit" class="btn-owner-submit">
-                Login as Owner (Live Account)
-              </button>
-              <small class="login-security-note">🔒 Auto-logout after 5 minutes of inactivity.</small>
-            </div>
+        <button type="button" class="btn-auth-back auth-back-to-email">
+          &larr; Use another email
+        </button>
+      </form>
+
+      <!-- Step 2B: OTP Verification Form (Other Users) -->
+      <form id="auth-otp-step" class="auth-step-form hidden">
+        <div class="otp-instruction-box">
+          <span class="otp-mail-icon">📬</span>
+          <div>
+            <div class="otp-dest-text">Verification code sent to:</div>
+            <strong id="auth-otp-email-label" class="otp-email-strong">user@example.com</strong>
           </div>
         </div>
+
+        <div class="auth-input-group">
+          <label for="auth-otp-input" class="auth-label">6-Digit Verification Code</label>
+          <input type="text" id="auth-otp-input" class="auth-text-input auth-otp-box" placeholder="123456" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required autocomplete="one-time-code">
+        </div>
+
+        <div class="auth-input-group">
+          <label for="auth-username-input" class="auth-label">Display Name / Trader Handle (Optional)</label>
+          <input type="text" id="auth-username-input" class="auth-text-input" placeholder="e.g. BullRider_99" maxlength="30">
+          <small class="auth-hint">Generated automatically or customize your handle.</small>
+        </div>
+
+        <button type="submit" id="btn-otp-verify-submit" class="btn-auth-primary">
+          <span>Verify &amp; Start Paper Trading</span>
+          <span class="btn-arrow">&rarr;</span>
+        </button>
+
+        <div class="otp-actions-row">
+          <button type="button" id="btn-auth-resend-otp" class="btn-link-action">Resend Code</button>
+          <span class="sep-dot">•</span>
+          <button type="button" class="btn-link-action auth-back-to-email">Change Email</button>
+        </div>
+      </form>
+
+      <!-- Security note footer -->
+      <div class="auth-card-footer">
+        <span class="security-lock">🔒</span>
+        <span>Secure cookie session &bull; Auto-logout after 5 mins of inactivity</span>
       </div>
     </div>
   </div>
@@ -1095,19 +1147,29 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   <div id="option-chain-modal" class="oc-modal-backdrop hidden">
     <div class="oc-modal-card">
       <div class="oc-header">
-        <div class="oc-title-group">
-          <div class="oc-underlying-selector">
-            <button type="button" class="oc-und-btn active" data-und="NIFTY">NIFTY</button>
-            <button type="button" class="oc-und-btn" data-und="BANKNIFTY">BANKNIFTY</button>
-            <button type="button" class="oc-und-btn" data-und="FINNIFTY">FINNIFTY</button>
-            <button type="button" class="oc-und-btn" data-und="SENSEX">SENSEX</button>
+        <div class="oc-top-bar">
+          <div class="oc-select-group">
+            <label for="oc-und-select" class="oc-select-label">Underlying</label>
+            <select id="oc-und-select" class="oc-select-box">
+              <option value="NIFTY" selected>NIFTY 50</option>
+              <option value="BANKNIFTY">BANKNIFTY</option>
+              <option value="FINNIFTY">FINNIFTY</option>
+              <option value="SENSEX">SENSEX</option>
+              <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+            </select>
           </div>
-          <span class="oc-spot-badge" id="oc-spot-badge">Spot: ₹—</span>
+
+          <div class="oc-select-group">
+            <label for="oc-expiry-select" class="oc-select-label">Expiry</label>
+            <select id="oc-expiry-select" class="oc-select-box"></select>
+          </div>
+
+          <button id="close-oc-modal" class="modal-close-btn oc-close-btn" type="button" title="Close Option Chain" aria-label="Close">✕</button>
         </div>
-        <div class="oc-controls">
-          <label class="oc-expiry-label">Expiry:</label>
-          <select id="oc-expiry-select" class="oc-expiry-select"></select>
-          <button id="close-oc-modal" class="modal-close-btn" type="button" title="Close Option Chain">✕</button>
+
+        <div class="oc-sub-bar">
+          <span class="oc-spot-badge" id="oc-spot-badge">Spot: ₹—</span>
+          <span class="oc-guide-pill">Tap any LTP to load chart &amp; ticket</span>
         </div>
       </div>
 
@@ -1189,13 +1251,27 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
           </div>
         </div>
 
+        <div class="totp-reg-callout" style="background: rgba(41, 98, 255, 0.1); border: 1px solid rgba(41, 98, 255, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 13px; color: #d1d4dc; line-height: 1.4;">
+          <b style="color: #2962ff;">Trade for Real:</b> Register for TOTP at <a href="https://www.kotakneo.com/platform/kotak-neo-trade-api/totp-registration/" target="_blank" rel="noopener noreferrer" style="color: #ffb703; text-decoration: underline; font-weight: 700;">Kotak Neo TOTP Registration</a> and enter your Consumer Key below to execute zero-brokerage live trades from your own Kotak account.
+        </div>
+
         <div class="keys-inputs-wrap">
           <div class="keys-field-group">
             <label for="input-kotak-consumer-key">Kotak Neo Consumer Key</label>
             <div class="masked-input-row">
-              <input type="password" id="input-kotak-consumer-key" placeholder="Enter new Consumer Key (or leave blank to keep current)">
+              <input type="password" id="input-kotak-consumer-key" placeholder="Enter Consumer Key">
               <button type="button" class="btn-toggle-mask" data-target="input-kotak-consumer-key">👁</button>
             </div>
+          </div>
+
+          <div class="keys-field-group">
+            <label for="input-kotak-mobile">Kotak Registered Mobile Number (Optional)</label>
+            <input type="text" id="input-kotak-mobile" placeholder="+91XXXXXXXXXX" style="width:100%; background:#1e222d; border:1px solid #2a2e39; border-radius:6px; color:#fff; padding:8px 12px; font-size:13px;">
+          </div>
+
+          <div class="keys-field-group">
+            <label for="input-kotak-ucc">Kotak UCC (Client Code) (Optional)</label>
+            <input type="text" id="input-kotak-ucc" placeholder="e.g. Z1HWY" style="width:100%; background:#1e222d; border:1px solid #2a2e39; border-radius:6px; color:#fff; padding:8px 12px; font-size:13px;">
           </div>
 
           <div class="keys-field-group">

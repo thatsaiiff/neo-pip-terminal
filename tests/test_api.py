@@ -639,6 +639,76 @@ def test_option_chain_normalized_structure(client):
     assert data["spot_price"] > 0
 
 
+def test_auth_email_check_and_admin_login(client):
+    # 1. Admin Email Check
+    res_admin = client.post("/api/auth/check-email", json={"email": "osaifala@gmail.com"})
+    assert res_admin.status_code == 200
+    assert res_admin.json()["is_admin"] is True
+    assert res_admin.json()["step"] == "password"
+
+    # 2. Bad Admin Password
+    res_bad = client.post("/api/auth/login-admin", json={"email": "osaifala@gmail.com", "password": "wrong"})
+    assert res_bad.status_code == 401
+
+    # 3. Correct Admin Password
+    res_ok = client.post("/api/auth/login-admin", json={"email": "osaifala@gmail.com", "password": "saif7788"})
+    assert res_ok.status_code == 200
+    data = res_ok.json()
+    assert data["ok"] is True
+    assert data["is_admin"] is True
+    assert "token" in data
+    assert "neo_session" in res_ok.cookies
+
+    # 4. Check Session with Token
+    token = data["token"]
+    st = client.get("/api/auth/session-status", headers={"X-Owner-Token": token})
+    assert st.status_code == 200
+    assert st.json()["authenticated"] is True
+    assert st.json()["is_admin"] is True
+
+
+def test_auth_user_otp_flow_and_keys(client):
+    # 1. User Email Check (non-admin)
+    res_user = client.post("/api/auth/check-email", json={"email": "trader99@test.com"})
+    assert res_user.status_code == 200
+    assert res_user.json()["is_admin"] is False
+    assert res_user.json()["step"] == "otp"
+    assert "suggested_username" in res_user.json()
+
+    # 2. Verify OTP with test fallback code
+    res_v = client.post("/api/auth/verify-otp", json={
+        "email": "trader99@test.com",
+        "otp": "778899",
+        "username": "SpeedScalper_77"
+    })
+    assert res_v.status_code == 200
+    assert res_v.json()["ok"] is True
+    assert res_v.json()["username"] == "SpeedScalper_77"
+    assert res_v.json()["paper_balance"] == 1000000.0
+    token = res_v.json()["token"]
+
+    # 3. Save Kotak Keys for user
+    res_k = client.post(
+        "/api/auth/save-kotak-keys",
+        json={"consumer_key": "my_kotak_user_key", "mobile": "+919876543210", "ucc": "TESTUCC"},
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res_k.status_code == 200
+    assert res_k.json()["ok"] is True
+
+
+def test_sensex_option_candles_not_index_price(client):
+    res = client.get("/api/chart/candles?symbol=SENSEX%2081200%20CE&interval=1m")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert len(data.get("candles", [])) > 0
+    # Option candles should be around 10 - 200, NEVER 24,000+ index price!
+    last_candle = data["candles"][-1]
+    assert last_candle["close"] < 500.0
+    assert last_candle["close"] > 1.0
+
+
 def test_live_quotes_batch_dictionary_mapping(client):
     res = client.post(
         "/api/chart/live-quotes",
