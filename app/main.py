@@ -1064,7 +1064,12 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 units, payload.product, payload.order_type,
                 round(exec_price, 5) if eff_market == "forex" else round(exec_price, 2),
                 payload.trigger_price, status, None, msg,
-                json.dumps({"symbol": payload.symbol, "side": payload.side, "lots": payload.lots, "multiplier": mult, "market": eff_market}),
+                json.dumps({
+                    "symbol": payload.symbol, "side": payload.side, "lots": payload.lots,
+                    "multiplier": mult, "market": eff_market,
+                    "sl_price": payload.sl_price, "tp_price": payload.tp_price,
+                    "auto_sltp": bool(payload.auto_sltp or payload.sl_price or payload.tp_price),
+                }),
                 json.dumps({"simulated": True, "market": eff_market}),
                 account_id,
             ),
@@ -1089,7 +1094,11 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 "source": "PAPER_ENGINE",
             }, conn)
 
-            if payload.auto_sltp and (payload.sl_price or payload.tp_price):
+            if payload.sl_price or payload.tp_price:
+                conn.execute(
+                    "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
+                    (account_id, payload.symbol),
+                )
                 conn.execute(
                     """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
@@ -2831,11 +2840,12 @@ def _execute_order(payload: OrderPayload):
 @app.post("/api/orders")
 def place_order(
     payload: OrderPayload,
+    market: str | None = None,
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     is_fx_sym = _is_forex_symbol(payload.symbol) or str(payload.exchange_segment).upper() == "FOREX"
 
     # Non-admin authenticated users OR Forex paper trades always execute in strict per-user SQLite paper ledger
@@ -2913,16 +2923,60 @@ def orders(
     } for row in rows]
 
 
+class OrderPatchPayload(BaseModel):
+    price: float | None = Field(default=None, gt=0)
+    trigger_price: float | None = Field(default=None, gt=0)
+
+
+@app.patch("/api/orders/{order_id}")
+def patch_order(
+    order_id: int,
+    payload: OrderPatchPayload,
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM orders WHERE id = ? AND account_id = ?",
+            (order_id, ctx["account_id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=409, detail="Only pending orders can be modified")
+        new_price = payload.price if payload.price is not None else row["price"]
+        new_trig = payload.trigger_price if payload.trigger_price is not None else (row["trigger_price"] if str(row["order_type"]).upper() in {"SL", "SL-M"} else None)
+        if str(row["order_type"]).upper() == "SL-M" and new_trig is None and payload.price is not None:
+            new_trig = payload.price
+            new_price = payload.price
+        q = _get_live_quote_data(row["symbol"])
+        ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
+        eff_otype = str(row["order_type"] or "L").upper()
+        ref_p = float(new_trig or new_price or 0.0)
+        if ltp > 0 and ref_p > 0:
+            eff_otype = ("SL-M" if ref_p > ltp else "L") if str(row["side"]).upper() == "BUY" else ("SL-M" if ref_p < ltp else "L")
+        conn.execute(
+            "UPDATE orders SET order_type = ?, price = ?, trigger_price = ? WHERE id = ?",
+            (eff_otype, ref_p, ref_p if eff_otype == "SL-M" else None, order_id),
+        )
+        conn.commit()
+    return {"ok": True, "order_id": order_id, "order_type": eff_otype, "price": ref_p}
+
+
 @app.post("/api/orders/{order_id}/cancel")
 def cancel_order(
     order_id: str,
+    market: str | None = None,
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", order_id):
         raise HTTPException(status_code=422, detail="Invalid order id")
-    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
 
     # Cancel local pending paper order scoped strictly to current account
     if order_id.isdigit():
@@ -3164,6 +3218,18 @@ def check_sltp_rules(
                         "execution_time": utc_now(),
                         "source": f"TRIGGER_{otype}",
                     }, conn)
+                    pend_sl = req_meta.get("sl_price")
+                    pend_tp = req_meta.get("tp_price")
+                    if pend_sl or pend_tp:
+                        conn.execute(
+                            "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
+                            (acc_id, o["symbol"]),
+                        )
+                        conn.execute(
+                            """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
+                               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+                            (utc_now(), o["symbol"], seg, o["product"], side, int(o["quantity"]), fill_p, pend_sl, pend_tp, acc_id, str(req_meta.get("market") or ctx["market_mode"])),
+                        )
                     filled_pending.append({"order_id": o["id"], "symbol": o["symbol"], "side": side, "order_type": otype, "fill_price": fill_p})
             if filled_pending:
                 conn.commit()

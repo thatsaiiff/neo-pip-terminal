@@ -35,7 +35,8 @@
 
   // Order Ticket State
   let selectedProduct = 'NRML'; // Default NRML (Carry Forward)
-  let selectedOrderType = 'MKT'; // MKT, L, SL
+  let selectedOrderType = 'MKT'; // MKT, PENDING
+  let instantExecution = true; // ON: 1-click Market fill only | OFF: Market/Pending + Drag on Chart + SL/TP Window
   let selectedLots = 1;
   let updateLotDisplayFn = null;
   let openKeysModalFn = null;
@@ -48,6 +49,7 @@
   let updateMobileOrdersFn = null;
   let _lastSltpTickMs = 0;
   let _isDraggingTradeLine = false;
+  let _chartDragCancelFn = null;
 
   function closeAllOverlays(exceptId = null) {
     [
@@ -59,6 +61,7 @@
       'token-modal',
       'modal-api-keys',
       'modal-guest-profile',
+      'order-window-modal',
     ].forEach(id => {
       if (id !== exceptId && $(id)) $(id).classList.add('hidden');
     });
@@ -1417,6 +1420,117 @@
         }
       }
     });
+
+    // 3. Pending Orders (Limit / Stop) rendered on chart with drag-to-modify & 1-click cancel
+    const pendingForPane = cachedOrders.filter(
+      o => o.status === 'pending' && String(o.symbol || '').trim().toUpperCase() === symUpper
+    );
+    pendingForPane.forEach(po => {
+      const poPrice = Number(po.trigger_price || po.price || 0);
+      if (!(poPrice > 0)) return;
+      const pendLine = createLineEl('tpl-pending', poPrice, true);
+      if (!pendLine) return;
+      const pSide = String(po.side || 'BUY').toUpperCase();
+      const pKind = String(po.order_type || 'L').toUpperCase().startsWith('SL') ? 'STOP' : 'LIMIT';
+      const qtyTxt = po.lots && isForexSym(pane.sym) ? `${po.lots} lot` : `${po.quantity || 1}`;
+
+      const bg = document.createElement('div');
+      bg.className = 'tpl-badge-group';
+      const handle = document.createElement('span');
+      handle.className = 'tpl-drag-handle';
+      handle.textContent = `${pSide} ${pKind} ${qtyTxt} @ ${cs}${poPrice.toFixed(decs)}`;
+      handle.title = 'Drag up/down to modify Pending order price (auto-flips Limit/Stop across LTP)';
+
+      // Vertical drag to PATCH /api/orders/{id}
+      let pDrag = false;
+      const getY = ev => (ev.touches && ev.touches[0] ? ev.touches[0].clientY : (ev.changedTouches && ev.changedTouches[0] ? ev.changedTouches[0].clientY : ev.clientY));
+      function pStart(ev) {
+        if (pDrag) return;
+        if (ev.button !== undefined && ev.button !== 0 && ev.type === 'mousedown') return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        pDrag = true;
+        _isDraggingTradeLine = true;
+        pendLine.classList.add('is-dragging');
+        if (pane.chart) try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
+        window.addEventListener('pointermove', pMove, { passive: false });
+        window.addEventListener('pointerup', pEnd);
+        window.addEventListener('mousemove', pMove);
+        window.addEventListener('mouseup', pEnd);
+        window.addEventListener('touchmove', pMove, { passive: false });
+        window.addEventListener('touchend', pEnd);
+      }
+      function pMove(ev) {
+        if (!pDrag || !pane.candleSeries || !pane.canvasWrap) return;
+        if (ev.cancelable) ev.preventDefault();
+        const rect = pane.canvasWrap.getBoundingClientRect();
+        const y = Math.max(8, Math.min(rect.height - 20, getY(ev) - rect.top));
+        const np = pane.candleSeries.coordinateToPrice(y);
+        if (np !== null && Number.isFinite(np) && np > 0) {
+          const r = Number(np.toFixed(decs));
+          pendLine.style.top = `${y}px`;
+          pendLine.dataset.dragPrice = String(r);
+          const liveLtp = Number(pane.lastLtp || r);
+          const nextKind = (pSide === 'BUY' ? r > liveLtp : r < liveLtp) ? 'STOP' : 'LIMIT';
+          handle.textContent = `${pSide} ${nextKind} ${qtyTxt} @ ${cs}${r.toFixed(decs)}`;
+        }
+      }
+      async function pEnd() {
+        if (!pDrag) return;
+        pDrag = false;
+        _isDraggingTradeLine = false;
+        pendLine.classList.remove('is-dragging');
+        if (pane.chart) try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
+        window.removeEventListener('pointermove', pMove);
+        window.removeEventListener('pointerup', pEnd);
+        window.removeEventListener('mousemove', pMove);
+        window.removeEventListener('mouseup', pEnd);
+        window.removeEventListener('touchmove', pMove);
+        window.removeEventListener('touchend', pEnd);
+        const fp = Number(pendLine.dataset.dragPrice || 0);
+        if (fp > 0) {
+          try {
+            const patchRes = await api(`/api/orders/${po.id}?market=${encodeURIComponent(currentMarketMode)}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ price: fp, trigger_price: fp }),
+            });
+            const updKind = String(patchRes.order_type || '').startsWith('SL') ? 'STOP' : 'LIMIT';
+            toast(`✅ ${pSide} ${updKind} moved to ${cs}${fp.toFixed(decs)}`);
+          } catch (err) {
+            toast(`❌ Order update failed: ${err.message}`);
+          }
+          fetchPositionsAndOrders();
+        } else {
+          renderPaneTradeLines(pane, true);
+        }
+      }
+      [handle, pendLine.querySelector('.tpl-hit-bar')].filter(Boolean).forEach(el => {
+        el.addEventListener('pointerdown', pStart);
+        el.addEventListener('mousedown', pStart);
+        el.addEventListener('touchstart', pStart, { passive: false });
+      });
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'tpl-action-chip close-x';
+      cancelBtn.textContent = '✕';
+      cancelBtn.title = 'Cancel pending order';
+      cancelBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        try {
+          await api(`/api/orders/${po.id}/cancel?market=${encodeURIComponent(currentMarketMode)}`, { method: 'POST' });
+          toast('✅ Pending order cancelled');
+          fetchPositionsAndOrders();
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+
+      bg.appendChild(handle);
+      bg.appendChild(cancelBtn);
+      pendLine.appendChild(bg);
+      overlay.appendChild(pendLine);
+    });
   }
 
   function renderAllPaneTradeLines() {
@@ -1781,6 +1895,91 @@
     return 1;
   }
 
+  function getPriceTickStep(sym, ltp = 0) {
+    const decs = getSymbolDecimals(sym);
+    if (decs >= 4) return 0.0005;
+    if (decs === 3) return 0.05;
+    return Number(ltp || panes[0]?.lastLtp || 0) > 10000 ? 1.0 : 0.1;
+  }
+
+  function getNearestLimitPrice(sym, side, ltp) {
+    const ref = Number(ltp || panes[0]?.lastLtp || 0);
+    if (!(ref > 0)) return 0;
+    const fx = getForexSpec(sym);
+    const decs = fx ? fx.decimals : 2;
+    const spread = fx ? fx.spread : ((ref * 0.0005) + 0.05);
+    const offset = Math.max(spread * 0.75, getPriceTickStep(sym, ref));
+    const raw = String(side || 'BUY').toUpperCase() === 'BUY'
+      ? Math.max(decs >= 4 ? 0.0001 : 0.05, ref - offset)
+      : ref + offset;
+    return Number(raw.toFixed(decs));
+  }
+
+  function classifyPendingOrder(side, openPrice, ltp) {
+    const s = String(side || 'BUY').toUpperCase();
+    const p = Number(openPrice || 0);
+    const cur = Number(ltp || 0);
+    if (s === 'BUY') {
+      if (cur > 0 && p > cur) {
+        return { orderType: 'SL-M', kind: 'STOP', label: 'BUY STOP (SL-M)', shortLabel: 'Buy Stop', css: 'stop' };
+      }
+      return { orderType: 'L', kind: 'LIMIT', label: 'BUY LIMIT (L)', shortLabel: 'Buy Limit', css: 'limit' };
+    }
+    if (cur > 0 && p < cur) {
+      return { orderType: 'SL-M', kind: 'STOP', label: 'SELL STOP (SL-M)', shortLabel: 'Sell Stop', css: 'stop' };
+    }
+    return { orderType: 'L', kind: 'LIMIT', label: 'SELL LIMIT (L)', shortLabel: 'Sell Limit', css: 'limit' };
+  }
+
+  function computeAuto2RSltp(pane, side, entryPrice) {
+    const candles = (pane && pane.candles) || [];
+    const entry = Number(entryPrice || 0);
+    if (!candles.length || !(entry > 0)) return null;
+
+    const sym = pane.sym || 'NIFTY';
+    const decs = getSymbolDecimals(sym);
+    const tick = getPriceTickStep(sym, entry);
+    const prevCandle = candles.length >= 2 ? candles[candles.length - 2] : candles[0];
+    const s = String(side || 'BUY').toUpperCase();
+    let candSl = s === 'BUY' ? Number(prevCandle.low) : Number(prevCandle.high);
+    let fallbackUsed = false;
+
+    if (s === 'BUY' && !(candSl > 0 && candSl < entry)) {
+      const earlier = candles.slice(-6, -1).reverse().find(c => Number(c.low) > 0 && Number(c.low) < entry);
+      if (earlier) {
+        candSl = Number(earlier.low);
+      } else {
+        const barSpan = Math.abs(Number(prevCandle.high || 0) - Number(prevCandle.low || 0));
+        candSl = Math.max(decs >= 4 ? 0.0001 : 0.05, entry - Math.max(barSpan, tick * 4));
+        fallbackUsed = true;
+      }
+    } else if (s === 'SELL' && !(candSl > entry)) {
+      const earlier = candles.slice(-6, -1).reverse().find(c => Number(c.high) > entry);
+      if (earlier) {
+        candSl = Number(earlier.high);
+      } else {
+        const barSpan = Math.abs(Number(prevCandle.high || 0) - Number(prevCandle.low || 0));
+        candSl = entry + Math.max(barSpan, tick * 4);
+        fallbackUsed = true;
+      }
+    }
+
+    const sl = Number(candSl.toFixed(decs));
+    const risk = Math.max(tick, Math.abs(entry - sl));
+    let tpRaw = s === 'BUY' ? entry + (2 * risk) : entry - (2 * risk);
+    if (tpRaw <= 0) tpRaw = decs >= 4 ? 0.0001 : 0.05;
+    const tp = Number(tpRaw.toFixed(decs));
+    return {
+      sl,
+      tp,
+      risk: Number(risk.toFixed(decs)),
+      prevLow: Number(prevCandle.low),
+      prevHigh: Number(prevCandle.high),
+      tf: pane.tf || '1m',
+      fallbackUsed,
+    };
+  }
+
   function updateOrderFormPrices(ltp) {
     if (!ltp) return;
     const sym = panes[0].sym;
@@ -1810,19 +2009,17 @@
     const marginEl = $('op-margin-req');
     if (marginEl) marginEl.textContent = fmtMoney(estMargin, 2, sym);
 
-    const cs = curSym(sym);
-    const lblLimCur = $('lbl-limit-cur');
-    const lblTrigCur = $('lbl-trigger-cur');
-    if (lblLimCur) lblLimCur.textContent = cs === '$' ? 'USD ($)' : 'INR (₹)';
-    if (lblTrigCur) lblTrigCur.textContent = cs === '$' ? 'USD ($)' : 'INR (₹)';
-
     const limitInput = $('input-limit-price');
     if (limitInput && (!limitInput.value || limitInput.dataset.manual !== 'true')) {
-      limitInput.value = ltp.toFixed(decs);
+      const nearest = getNearestLimitPrice(sym, 'BUY', ltp);
+      limitInput.value = nearest.toFixed(decs);
     }
-    const trigInput = $('input-trigger-price');
-    if (trigInput && (!trigInput.value || trigInput.dataset.manual !== 'true')) {
-      trigInput.value = Math.max(0.0001, ltp - spread).toFixed(decs);
+    const kindEl = $('op-pending-kind');
+    if (kindEl && limitInput) {
+      const val = parseFloat(limitInput.value) || ltp;
+      const cls = classifyPendingOrder('BUY', val, ltp);
+      kindEl.textContent = val === ltp ? 'Nearest Limit' : (cls.kind === 'STOP' ? 'Buy Stop / Sell Limit' : 'Buy Limit / Sell Stop');
+      kindEl.className = `field-sub op-kind-pill ${cls.css}`;
     }
 
     const mSell = $('m-sell-price');
@@ -1833,9 +2030,19 @@
     if (mBuy) mBuy.textContent = askPrice.toFixed(decs);
     if (mSpread) mSpread.textContent = spread.toFixed(decs);
     if (mMargin) mMargin.textContent = fmtMoney(estMargin, 2, sym);
+
+    const owModal = $('order-window-modal');
+    if (owModal && !owModal.classList.contains('hidden')) {
+      const cs = curSym(sym);
+      if ($('ow-ltp-val')) $('ow-ltp-val').textContent = `${cs}${ltp.toFixed(decs)}`;
+      if ($('ow-spread-val')) $('ow-spread-val').textContent = spread.toFixed(decs);
+    }
   }
 
   function setupOrderPanelInteractions() {
+    let owSide = 'BUY';
+    let owMode = 'MKT';
+
     // 1. Product Toggle (NRML vs MIS)
     const btnNrml = $('btn-prod-nrml');
     const btnMis = $('btn-prod-mis');
@@ -1854,48 +2061,338 @@
       });
     }
 
-    // Auto SL / TP ticket toggle
-    const chkSltp = $('chk-ticket-sltp');
-    const sltpInputsBox = $('op-sltp-inputs');
-    if (chkSltp && sltpInputsBox) {
-      chkSltp.addEventListener('change', () => {
-        sltpInputsBox.classList.toggle('hidden', !chkSltp.checked);
+    // Helper: Execute unified Market or Pending Order (L / SL-M) + SL/TP
+    async function executeUnifiedOrder({ side, orderMode, openPrice = null, slPrice = null, tpPrice = null, autoSltp = false, pane = null }) {
+      const targetPane = pane || panes[activePaneIdx] || panes[0];
+      const sym = targetPane.sym;
+      const fx = getForexSpec(sym);
+      const isFx = Boolean(fx) || currentMarketMode === 'forex';
+      const lotSize = fx ? fx.qty_per_lot : getIndexLotSize(sym);
+      const qty = Math.max(1, Math.round(selectedLots * lotSize));
+      const meta = symbolMeta[String(sym || '').trim().toUpperCase()] || {};
+      const isFo = Boolean(
+        !isFx && (
+          targetPane.isOption ||
+          isOptionSymbol(sym) ||
+          /\bFUT\b/i.test(sym) ||
+          String(meta.segment || '').toUpperCase().includes('_FO')
+        )
+      );
+      const seg = isFx ? 'forex' : (isFo ? 'nse_fo' : 'nse_cm');
+      const ltp = Number(targetPane.lastLtp || 0);
+      const decs = fx ? fx.decimals : 2;
+      const cs = curSym(sym);
+
+      let effType = 'MKT';
+      let priceVal = null;
+      let trigVal = null;
+
+      if (orderMode === 'PENDING') {
+        const effOpen = Number(openPrice || getNearestLimitPrice(sym, side, ltp));
+        if (!(effOpen > 0)) {
+          toast('❌ Order failed: Enter a valid pending price');
+          return false;
+        }
+        const cls = classifyPendingOrder(side, effOpen, ltp);
+        effType = cls.orderType;
+        if (effType === 'SL-M') {
+          trigVal = Number(effOpen.toFixed(decs));
+        } else {
+          priceVal = Number(effOpen.toFixed(decs));
+        }
+      }
+
+      const cleanSl = slPrice && Number(slPrice) > 0 ? Number(Number(slPrice).toFixed(decs)) : null;
+      const cleanTp = tpPrice && Number(tpPrice) > 0 ? Number(Number(tpPrice).toFixed(decs)) : null;
+
+      const payload = {
+        symbol: sym,
+        exchange_segment: seg,
+        side,
+        lots: selectedLots,
+        lot_size: lotSize,
+        product: selectedProduct,
+        order_type: effType,
+        price: priceVal,
+        trigger_price: trigVal,
+        validity: 'DAY',
+        user_confirmed: true,
+        sl_price: cleanSl,
+        tp_price: cleanTp,
+        auto_sltp: Boolean(autoSltp),
+      };
+
+      const qtyLabel = isFx ? `${selectedLots} Lot(s) ${sym}` : (lotSize === 1 ? `${qty} share${qty > 1 ? 's' : ''}` : `${selectedLots} Lot(s) (${qty} qty)`);
+      const typeTag = effType === 'MKT' ? 'Market' : (effType === 'SL-M' ? `${side} Stop @ ${cs}${(trigVal || 0).toFixed(decs)}` : `${side} Limit @ ${cs}${(priceVal || 0).toFixed(decs)}`);
+
+      try {
+        toast(`Submitting ${typeTag} (${qtyLabel})...`);
+        const res = await api(`/api/orders?market=${encodeURIComponent(currentMarketMode)}`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          toast(`✅ ${res.message || `${typeTag} order placed!`}`);
+          fetchPositionsAndOrders();
+          return true;
+        }
+        toast(`❌ Order failed: ${res.detail || 'Rejection'}`);
+        return false;
+      } catch (err) {
+        toast(`❌ Order failed: ${err.message}`);
+        return false;
+      }
+    }
+
+    // 2. Interactive Drag-and-Place Pending Order directly on Chart Canvas
+    function stopChartPendingDrag(silent = false) {
+      if (typeof _chartDragCancelFn === 'function') {
+        const fn = _chartDragCancelFn;
+        _chartDragCancelFn = null;
+        fn(silent);
+      }
+    }
+
+    function startChartPendingDrag(side, opts = {}) {
+      stopChartPendingDrag(true);
+      const pane = panes[activePaneIdx] || panes[0];
+      const overlay = $(`p${pane.idx + 1}-trade-overlay`);
+      if (!pane || !pane.canvasWrap || !pane.candleSeries || !overlay || !pane.candles.length) {
+        toast('❌ Chart must finish loading before dragging an order');
+        return;
+      }
+
+      const sym = pane.sym;
+      const decs = getSymbolDecimals(sym);
+      const cs = curSym(sym);
+      const ltp = Number(pane.lastLtp || pane.candles[pane.candles.length - 1]?.close || 0);
+      let currentPrice = Number(opts.initialPrice || getNearestLimitPrice(sym, side, ltp) || ltp);
+
+      _isDraggingTradeLine = true;
+      if (pane.chart) {
+        try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
+      }
+
+      const banner = document.createElement('div');
+      banner.className = 'chart-drag-banner';
+      banner.innerHTML = `<span>🎯 ${side}: Drag &amp; release on chart (Above = ${side === 'BUY' ? 'STOP' : 'LIMIT'} · Below = ${side === 'BUY' ? 'LIMIT' : 'STOP'})</span><button type="button" id="btn-cancel-chart-drag">Cancel</button>`;
+      pane.canvasWrap.appendChild(banner);
+
+      const draftLine = document.createElement('div');
+      draftLine.className = 'trade-price-line tpl-pending-draft is-dragging';
+      draftLine.innerHTML = '<div class="tpl-hit-bar"></div><div class="tpl-line"></div><div class="tpl-badge-group"><span class="tpl-drag-handle"></span></div>';
+      overlay.appendChild(draftLine);
+
+      const handleSpan = draftLine.querySelector('.tpl-drag-handle');
+      const getClientY = ev => (ev.touches && ev.touches[0] ? ev.touches[0].clientY : (ev.changedTouches && ev.changedTouches[0] ? ev.changedTouches[0].clientY : ev.clientY));
+
+      function renderDraftAtPrice(pVal) {
+        const yRaw = pane.candleSeries.priceToCoordinate(pVal);
+        const h = pane.canvasWrap.clientHeight || 280;
+        const y = yRaw !== null && Number.isFinite(yRaw) ? Math.max(8, Math.min(h - 20, yRaw)) : h * 0.5;
+        draftLine.style.top = `${y}px`;
+        const liveLtp = Number(pane.lastLtp || ltp || pVal);
+        const cls = classifyPendingOrder(side, pVal, liveLtp);
+        draftLine.classList.toggle('is-stop', cls.kind === 'STOP');
+        draftLine.classList.toggle('is-sell-limit', side === 'SELL' && cls.kind === 'LIMIT');
+        if (handleSpan) handleSpan.textContent = `🎯 ${cls.label} @ ${cs}${pVal.toFixed(decs)}`;
+      }
+      renderDraftAtPrice(currentPrice);
+
+      function updateFromClientY(clientY) {
+        const rect = pane.canvasWrap.getBoundingClientRect();
+        const y = Math.max(8, Math.min(rect.height - 20, clientY - rect.top));
+        const pr = pane.candleSeries.coordinateToPrice(y);
+        if (pr !== null && Number.isFinite(pr) && pr > 0) {
+          currentPrice = Number(pr.toFixed(decs));
+          draftLine.style.top = `${y}px`;
+          const liveLtp = Number(pane.lastLtp || ltp || currentPrice);
+          const cls = classifyPendingOrder(side, currentPrice, liveLtp);
+          draftLine.classList.toggle('is-stop', cls.kind === 'STOP');
+          draftLine.classList.toggle('is-sell-limit', side === 'SELL' && cls.kind === 'LIMIT');
+          if (handleSpan) handleSpan.textContent = `🎯 ${cls.label} @ ${cs}${currentPrice.toFixed(decs)}`;
+        }
+      }
+
+      let pointerEngaged = false;
+      let finished = false;
+
+      function cleanup(silent = false) {
+        if (finished) return;
+        finished = true;
+        _isDraggingTradeLine = false;
+        if (pane.chart) {
+          try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
+        }
+        pane.canvasWrap.removeEventListener('pointerdown', onDown, true);
+        pane.canvasWrap.removeEventListener('mousedown', onDown, true);
+        pane.canvasWrap.removeEventListener('touchstart', onDown, true);
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('mousemove', onMove, true);
+        window.removeEventListener('touchmove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+        window.removeEventListener('mouseup', onUp, true);
+        window.removeEventListener('touchend', onUp, true);
+        window.removeEventListener('keydown', onKey);
+        if (banner.parentNode) banner.remove();
+        if (draftLine.parentNode) draftLine.remove();
+        renderPaneTradeLines(pane, true);
+        if (!silent) toast('Cancelled drag-to-place order');
+      }
+      _chartDragCancelFn = cleanup;
+
+      function onDown(ev) {
+        if (ev.target && ev.target.closest && ev.target.closest('#btn-cancel-chart-drag')) return;
+        if (ev.button !== undefined && ev.button !== 0 && ev.type === 'mousedown') return;
+        pointerEngaged = true;
+        if (ev.cancelable) ev.preventDefault();
+        ev.stopPropagation();
+        updateFromClientY(getClientY(ev));
+      }
+
+      function onMove(ev) {
+        const cy = getClientY(ev);
+        if (!Number.isFinite(cy)) return;
+        const rect = pane.canvasWrap.getBoundingClientRect();
+        if (pointerEngaged || (cy >= rect.top && cy <= rect.bottom)) {
+          if (pointerEngaged && ev.cancelable) ev.preventDefault();
+          updateFromClientY(cy);
+        }
+      }
+
+      async function onUp(ev) {
+        if (!pointerEngaged) return;
+        if (ev && ev.target && ev.target.closest && ev.target.closest('#btn-cancel-chart-drag')) return;
+        const cy = getClientY(ev);
+        if (Number.isFinite(cy)) updateFromClientY(cy);
+        const dropPrice = currentPrice;
+        cleanup(true);
+        await executeUnifiedOrder({
+          side,
+          orderMode: 'PENDING',
+          openPrice: dropPrice,
+          slPrice: opts.slPrice || null,
+          tpPrice: opts.tpPrice || null,
+          autoSltp: Boolean(opts.autoSltp),
+          pane,
+        });
+      }
+
+      function onKey(ev) {
+        if (ev.key === 'Escape') cleanup(false);
+      }
+
+      const cancelBtn = banner.querySelector('#btn-cancel-chart-drag');
+      if (cancelBtn) cancelBtn.addEventListener('click', e => { e.stopPropagation(); cleanup(false); });
+
+      pane.canvasWrap.addEventListener('pointerdown', onDown, true);
+      pane.canvasWrap.addEventListener('mousedown', onDown, true);
+      pane.canvasWrap.addEventListener('touchstart', onDown, { capture: true, passive: false });
+      window.addEventListener('pointermove', onMove, { capture: true, passive: false });
+      window.addEventListener('mousemove', onMove, true);
+      window.addEventListener('touchmove', onMove, { capture: true, passive: false });
+      window.addEventListener('pointerup', onUp, true);
+      window.addEventListener('mouseup', onUp, true);
+      window.addEventListener('touchend', onUp, true);
+      window.addEventListener('keydown', onKey);
+    }
+
+    // 3. Synchronized Instant Toggle & Order Mode (Mobile + Desktop)
+    const opInstantToggle = $('op-instant-toggle');
+    const mInstantToggle = $('m-instant-toggle');
+    const opTypeTabs = $('op-type-tabs');
+    const opSltpCard = $('op-sltp-card');
+    const opHint = $('op-instant-hint');
+    const mPendControls = $('m-pending-controls');
+    const mModeMkt = $('m-mode-mkt');
+    const mModePend = $('m-mode-pend');
+    const opChkSl = $('op-chk-sl');
+    const opChkTp = $('op-chk-tp');
+    const opSlInput = $('op-sl-input');
+    const opTpInput = $('op-tp-input');
+
+    function setOrderMode(mode) {
+      const m = mode === 'PENDING' || mode === 'L' || mode === 'SL' ? 'PENDING' : 'MKT';
+      selectedOrderType = instantExecution ? 'MKT' : m;
+
+      document.querySelectorAll('.op-type-tab').forEach(t => {
+        const tMode = t.dataset.type === 'MKT' ? 'MKT' : 'PENDING';
+        t.classList.toggle('active', tMode === selectedOrderType);
+      });
+      if (mModeMkt) mModeMkt.classList.toggle('active', selectedOrderType === 'MKT');
+      if (mModePend) mModePend.classList.toggle('active', selectedOrderType === 'PENDING');
+
+      const fLimit = $('field-limit-price');
+      if (fLimit) fLimit.classList.toggle('hidden', instantExecution || selectedOrderType !== 'PENDING');
+
+      const isPend = !instantExecution && selectedOrderType === 'PENDING';
+      if ($('lbl-sell-action')) $('lbl-sell-action').textContent = isPend ? 'Sell Pending' : 'Sell';
+      if ($('lbl-buy-action')) $('lbl-buy-action').textContent = isPend ? 'Buy Pending' : 'Buy';
+      if ($('m-sell-caption')) $('m-sell-caption').textContent = isPend ? 'Sell Pend' : 'Sell';
+      if ($('m-buy-caption')) $('m-buy-caption').textContent = isPend ? 'Buy Pend' : 'Buy';
+      if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
+    }
+
+    function setInstantExecution(enabled) {
+      instantExecution = Boolean(enabled);
+      if (opInstantToggle) opInstantToggle.checked = instantExecution;
+      if (mInstantToggle) mInstantToggle.checked = instantExecution;
+      if (opTypeTabs) opTypeTabs.classList.toggle('hidden', instantExecution);
+      if (opSltpCard) opSltpCard.classList.toggle('hidden', instantExecution);
+      if (mPendControls) mPendControls.classList.toggle('hidden', instantExecution);
+      if (opHint) opHint.textContent = instantExecution ? '1-click Market fill' : 'Market / Pending + SL/TP';
+      if (instantExecution) stopChartPendingDrag(true);
+      setOrderMode(instantExecution ? 'MKT' : selectedOrderType);
+    }
+
+    if (opInstantToggle) opInstantToggle.addEventListener('change', () => setInstantExecution(opInstantToggle.checked));
+    if (mInstantToggle) mInstantToggle.addEventListener('change', () => setInstantExecution(mInstantToggle.checked));
+
+    document.querySelectorAll('.op-type-tab').forEach(tab => {
+      tab.addEventListener('click', () => setOrderMode(tab.dataset.type === 'MKT' ? 'MKT' : 'PENDING'));
+    });
+    if (mModeMkt) mModeMkt.addEventListener('click', () => setOrderMode('MKT'));
+    if (mModePend) mModePend.addEventListener('click', () => setOrderMode('PENDING'));
+
+    // Separate SL & TP toggles in Desktop Panel
+    if (opChkSl && opSlInput) {
+      opChkSl.addEventListener('change', () => { opSlInput.disabled = !opChkSl.checked; });
+    }
+    if (opChkTp && opTpInput) {
+      opChkTp.addEventListener('change', () => { opTpInput.disabled = !opChkTp.checked; });
+    }
+    if ($('op-btn-auto-2r')) {
+      $('op-btn-auto-2r').addEventListener('click', () => {
+        const pane = panes[activePaneIdx] || panes[0];
+        const ltp = Number(pane.lastLtp || 0);
+        const entry = selectedOrderType === 'PENDING' ? (parseFloat($('input-limit-price')?.value) || ltp) : ltp;
+        const auto = computeAuto2RSltp(pane, 'BUY', entry);
+        if (!auto) { toast('Load chart candles first to compute Auto 2R'); return; }
+        const decs = getSymbolDecimals(pane.sym);
+        if (opChkSl && opSlInput) { opChkSl.checked = true; opSlInput.disabled = false; opSlInput.value = auto.sl.toFixed(decs); }
+        if (opChkTp && opTpInput) { opChkTp.checked = true; opTpInput.disabled = false; opTpInput.value = auto.tp.toFixed(decs); }
+        toast(`⚡ Auto SL (${auto.tf} prev low: ${auto.sl.toFixed(decs)}) · 2R TP: ${auto.tp.toFixed(decs)}`);
       });
     }
 
-    // 2. Order Type Tabs (MKT, L, SL)
-    const typeTabs = document.querySelectorAll('.op-type-tab');
-    typeTabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        typeTabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        selectedOrderType = tab.dataset.type;
+    // Drag-to-Place triggers from Desktop Panel & Mobile Dock
+    function readPanelSltp() {
+      const sl = opChkSl && opChkSl.checked ? parseFloat(opSlInput?.value || '') : null;
+      const tp = opChkTp && opChkTp.checked ? parseFloat(opTpInput?.value || '') : null;
+      return { slPrice: sl > 0 ? sl : null, tpPrice: tp > 0 ? tp : null };
+    }
+    if ($('op-btn-drag-buy')) $('op-btn-drag-buy').addEventListener('click', () => startChartPendingDrag('BUY', readPanelSltp()));
+    if ($('op-btn-drag-sell')) $('op-btn-drag-sell').addEventListener('click', () => startChartPendingDrag('SELL', readPanelSltp()));
+    if ($('m-btn-drag-buy')) $('m-btn-drag-buy').addEventListener('click', () => startChartPendingDrag('BUY', {}));
+    if ($('m-btn-drag-sell')) $('m-btn-drag-sell').addEventListener('click', () => startChartPendingDrag('SELL', {}));
 
-        const fLimit = $('field-limit-price');
-        const fTrigger = $('field-trigger-price');
-        if (fLimit) fLimit.classList.toggle('hidden', selectedOrderType === 'MKT');
-        if (fTrigger) fTrigger.classList.toggle('hidden', selectedOrderType !== 'SL');
-
-        const lblSellAction = $('lbl-sell-action');
-        const lblBuyAction = $('lbl-buy-action');
-        if (selectedOrderType === 'L') {
-          if (lblSellAction) lblSellAction.textContent = 'Sell Limit';
-          if (lblBuyAction) lblBuyAction.textContent = 'Buy Limit';
-        } else if (selectedOrderType === 'SL') {
-          if (lblSellAction) lblSellAction.textContent = 'Sell Stop';
-          if (lblBuyAction) lblBuyAction.textContent = 'Buy Stop';
-        } else {
-          if (lblSellAction) lblSellAction.textContent = 'Sell';
-          if (lblBuyAction) lblBuyAction.textContent = 'Buy';
-        }
-      });
-    });
-
-    // 3. Lots Stepper (Supports 0.01 fractional lots in Forex and integer lots in Indian)
+    // 4. Lots Stepper (Desktop Panel, Mobile Dock & Order Window synced)
     const inputLots = $('input-lots');
     const btnLotsMinus = $('btn-lots-minus');
     const btnLotsPlus = $('btn-lots-plus');
     const unitsSub = $('op-units-sub');
+    const owLotsInput = $('ow-lots-input');
 
     function updateLotDisplay() {
       const sym = panes[0].sym;
@@ -1905,6 +2402,10 @@
         inputLots.step = isFx ? '0.01' : '1';
         inputLots.min = isFx ? '0.01' : '1';
       }
+      if (owLotsInput) {
+        owLotsInput.step = isFx ? '0.01' : '1';
+        owLotsInput.min = isFx ? '0.01' : '1';
+      }
       if (isFx) {
         const parsed = parseFloat(inputLots ? inputLots.value : selectedLots);
         selectedLots = Number.isFinite(parsed) && parsed >= 0.01 ? Number(parsed.toFixed(2)) : 0.01;
@@ -1912,200 +2413,350 @@
         selectedLots = Math.max(1, parseInt(inputLots ? inputLots.value : selectedLots) || 1);
       }
       if (inputLots) inputLots.value = selectedLots;
+      if (owLotsInput) owLotsInput.value = selectedLots;
 
-      if (unitsSub) {
+      const labelTxt = (() => {
         if (fx) {
           const effUnits = (selectedLots * Number(fx.lot_units || 1)).toFixed(fx.lot_units < 10 ? 2 : 0);
-          unitsSub.textContent = `${selectedLots} lot (Leverage 1:${fx.leverage}, ${effUnits} units)`;
-        } else {
-          const lotSize = getIndexLotSize(sym);
-          const units = selectedLots * lotSize;
-          unitsSub.textContent = lotSize === 1 ? `${units} share${units > 1 ? 's' : ''}` : `${units} units (${selectedLots} Lot × ${lotSize})`;
+          return `${selectedLots} lot (Leverage 1:${fx.leverage}, ${effUnits} units)`;
         }
-      }
-      const mLotsVal = $('m-lots-val');
-      if (mLotsVal) mLotsVal.textContent = selectedLots;
+        const lotSize = getIndexLotSize(sym);
+        const units = selectedLots * lotSize;
+        return lotSize === 1 ? `${units} share${units > 1 ? 's' : ''}` : `${units} units (${selectedLots} Lot × ${lotSize})`;
+      })();
+      if (unitsSub) unitsSub.textContent = labelTxt;
+      if ($('ow-units-sub')) $('ow-units-sub').textContent = labelTxt;
+      if ($('m-lots-val')) $('m-lots-val').textContent = selectedLots;
       if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
     }
     updateLotDisplayFn = updateLotDisplay;
 
-    if (btnLotsMinus && btnLotsPlus && inputLots) {
-      btnLotsMinus.addEventListener('click', () => {
-        const isFx = isForexSym(panes[0].sym) || currentMarketMode === 'forex';
-        const step = isFx ? 0.05 : 1;
-        const minV = isFx ? 0.01 : 1;
-        const next = Math.max(minV, Number((selectedLots - step).toFixed(2)));
-        inputLots.value = next;
-        updateLotDisplay();
-      });
-      btnLotsPlus.addEventListener('click', () => {
-        const isFx = isForexSym(panes[0].sym) || currentMarketMode === 'forex';
-        const step = isFx ? 0.05 : 1;
-        inputLots.value = Number((selectedLots + step).toFixed(2));
-        updateLotDisplay();
-      });
-      inputLots.addEventListener('change', updateLotDisplay);
-    }
-
-    // Mobile Trade Dock Buttons
-    const mBtnBuy = $('m-btn-buy');
-    const mBtnSell = $('m-btn-sell');
-    if (mBtnBuy) mBtnBuy.addEventListener('click', () => submitOrder('BUY'));
-    if (mBtnSell) mBtnSell.addEventListener('click', () => submitOrder('SELL'));
-
-    const mLotsMinus = $('m-lots-minus');
-    const mLotsPlus = $('m-lots-plus');
-    if (mLotsMinus) mLotsMinus.addEventListener('click', () => {
+    function adjustLots(deltaSign) {
       const isFx = isForexSym(panes[0].sym) || currentMarketMode === 'forex';
       const step = isFx ? 0.05 : 1;
       const minV = isFx ? 0.01 : 1;
-      selectedLots = Math.max(minV, Number((selectedLots - step).toFixed(2)));
-      if (inputLots) inputLots.value = selectedLots;
+      const next = Math.max(minV, Number((selectedLots + (deltaSign * step)).toFixed(2)));
+      if (inputLots) inputLots.value = next;
       updateLotDisplay();
-    });
-    if (mLotsPlus) mLotsPlus.addEventListener('click', () => {
-      const isFx = isForexSym(panes[0].sym) || currentMarketMode === 'forex';
-      const step = isFx ? 0.05 : 1;
-      selectedLots = Number((selectedLots + step).toFixed(2));
-      if (inputLots) inputLots.value = selectedLots;
-      updateLotDisplay();
-    });
+    }
 
-    // 4. Steppers for Limit Price & Trigger Price
+    if (btnLotsMinus && btnLotsPlus && inputLots) {
+      btnLotsMinus.addEventListener('click', () => adjustLots(-1));
+      btnLotsPlus.addEventListener('click', () => adjustLots(1));
+      inputLots.addEventListener('change', updateLotDisplay);
+    }
+    if ($('m-lots-minus')) $('m-lots-minus').addEventListener('click', () => adjustLots(-1));
+    if ($('m-lots-plus')) $('m-lots-plus').addEventListener('click', () => adjustLots(1));
+
+    // Desktop Pending Open Price stepper
     const btnPriceMinus = $('btn-price-minus');
     const btnPricePlus = $('btn-price-plus');
     const inputPrice = $('input-limit-price');
     if (btnPriceMinus && btnPricePlus && inputPrice) {
-      const getStep = () => {
+      const bump = sign => {
         const decs = getSymbolDecimals(panes[0].sym);
-        return decs >= 4 ? 0.0005 : (decs === 3 ? 0.05 : 0.25);
+        const step = getPriceTickStep(panes[0].sym);
+        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
+        inputPrice.value = Math.max(0.0001, cur + (sign * step)).toFixed(decs);
+        inputPrice.dataset.manual = 'true';
+        if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
       };
-      btnPriceMinus.addEventListener('click', () => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
-        inputPrice.value = Math.max(0.0001, cur - getStep()).toFixed(decs);
+      btnPriceMinus.addEventListener('click', () => bump(-1));
+      btnPricePlus.addEventListener('click', () => bump(1));
+      inputPrice.addEventListener('input', () => {
         inputPrice.dataset.manual = 'true';
+        if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
       });
-      btnPricePlus.addEventListener('click', () => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
-        inputPrice.value = (cur + getStep()).toFixed(decs);
-        inputPrice.dataset.manual = 'true';
-      });
-      inputPrice.addEventListener('input', () => { inputPrice.dataset.manual = 'true'; });
     }
 
-    const btnTriggerMinus = $('btn-trigger-minus');
-    const btnTriggerPlus = $('btn-trigger-plus');
-    const inputTrigger = $('input-trigger-price');
-    if (btnTriggerMinus && btnTriggerPlus && inputTrigger) {
-      const getStep = () => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        return decs >= 4 ? 0.0005 : (decs === 3 ? 0.05 : 0.25);
-      };
-      btnTriggerMinus.addEventListener('click', () => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        const cur = parseFloat(inputTrigger.value) || (panes[0].lastLtp || 40);
-        inputTrigger.value = Math.max(0.0001, cur - getStep()).toFixed(decs);
-        inputTrigger.dataset.manual = 'true';
-      });
-      btnTriggerPlus.addEventListener('click', () => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        const cur = parseFloat(inputTrigger.value) || (panes[0].lastLtp || 40);
-        inputTrigger.value = (cur + getStep()).toFixed(decs);
-        inputTrigger.dataset.manual = 'true';
-      });
-      inputTrigger.addEventListener('input', () => { inputTrigger.dataset.manual = 'true'; });
-    }
+    // 5. Order Placement Window (Opened when Instant = OFF & Buy/Sell Clicked on Mobile or Desktop)
+    const owModal = $('order-window-modal');
+    const owPendingSec = $('ow-pending-section');
+    const owPendingInput = $('ow-pending-price');
+    const owPendingKind = $('ow-pending-kind');
+    const owChkSl = $('ow-chk-sl');
+    const owChkTp = $('ow-chk-tp');
+    const owInputSl = $('ow-input-sl');
+    const owInputTp = $('ow-input-tp');
+    const owRrSummary = $('ow-rr-summary');
 
-    // 5. Submit Order (Buy / Sell)
-    async function submitOrder(side) {
-      const sym = panes[0].sym;
+    function refreshOrderWindowSummary() {
+      const pane = panes[activePaneIdx] || panes[0];
+      const sym = pane.sym;
       const fx = getForexSpec(sym);
-      const isFx = Boolean(fx) || currentMarketMode === 'forex';
-      const lotSize = fx ? fx.qty_per_lot : getIndexLotSize(sym);
-      const qty = Math.max(1, Math.round(selectedLots * lotSize));
-      const meta = symbolMeta[String(sym || '').trim().toUpperCase()] || {};
-      const isFo = Boolean(
-        !isFx && (
-          panes[0].isOption ||
-          isOptionSymbol(sym) ||
-          /\bFUT\b/i.test(sym) ||
-          String(meta.segment || '').toUpperCase().includes('_FO')
-        )
-      );
-      const seg = isFx ? 'forex' : (isFo ? 'nse_fo' : 'nse_cm');
+      const decs = fx ? fx.decimals : 2;
+      const cs = curSym(sym);
+      const ltp = Number(pane.lastLtp || 0);
+      const spread = fx ? fx.spread : ((ltp * 0.0005) + 0.05);
+      const marketExecPrice = owSide === 'BUY' ? (ltp + spread / 2) : Math.max(decs >= 4 ? 0.0001 : 0.05, ltp - spread / 2);
+      const openP = owMode === 'PENDING' ? (parseFloat(owPendingInput?.value || '') || getNearestLimitPrice(sym, owSide, ltp)) : marketExecPrice;
 
-      let limitPrice = null;
-      let triggerPrice = null;
-      if (selectedOrderType === 'L' || selectedOrderType === 'SL') {
-        limitPrice = parseFloat($('input-limit-price').value) || panes[0].lastLtp;
-      }
-      if (selectedOrderType === 'SL') {
-        triggerPrice = parseFloat($('input-trigger-price').value) || panes[0].lastLtp;
+      if (owPendingKind && owMode === 'PENDING') {
+        const cls = classifyPendingOrder(owSide, openP, ltp);
+        owPendingKind.textContent = cls.label;
+        owPendingKind.className = `ow-kind-badge ${cls.css}`;
       }
 
-      const payload = {
-        symbol: sym,
-        exchange_segment: seg,
-        side: side,
-        lots: selectedLots,
-        lot_size: lotSize,
-        product: selectedProduct,
-        order_type: selectedOrderType,
-        price: limitPrice,
-        trigger_price: triggerPrice,
-        validity: 'DAY',
-        user_confirmed: true,
-      };
+      const slVal = owChkSl && owChkSl.checked ? parseFloat(owInputSl?.value || '') : 0;
+      const tpVal = owChkTp && owChkTp.checked ? parseFloat(owInputTp?.value || '') : 0;
+      const mult = fx ? Number(fx.multiplier || 1) : 1;
+      const qty = fx ? Math.max(1, Math.round(selectedLots * fx.qty_per_lot)) : (selectedLots * getIndexLotSize(sym));
+      const sign = owSide === 'BUY' ? 1 : -1;
 
-      const qtyLabel = isFx ? `${selectedLots} Lot(s) ${sym}` : (lotSize === 1 ? `${qty} share${qty > 1 ? 's' : ''}` : `${selectedLots} Lot(s) (${qty} qty)`);
-
-      try {
-        toast(`Submitting ${side} ${qtyLabel}...`);
-        const res = await api(`/api/orders?market=${encodeURIComponent(currentMarketMode)}`, {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          const modeTag = res.mode === 'live' ? 'Kotak Live' : (isFx ? 'Forex Paper' : 'Indian Paper');
-          toast(`✅ ${res.message || `${side} order placed (${modeTag})!`}`);
-
-          // Attach Auto SL / TP rule if toggled in ticket and executed immediately
-          if (chkSltp && chkSltp.checked && selectedOrderType === 'MKT') {
-            const slVal = parseFloat($('op-sl-input')?.value || '');
-            const tpVal = parseFloat($('op-tp-input')?.value || '');
-            if (slVal > 0 || tpVal > 0) {
-              await api(`/api/sltp?market=${encodeURIComponent(currentMarketMode)}`, {
-                method: 'POST',
-                body: JSON.stringify({
-                  symbol: sym,
-                  exchange_segment: seg,
-                  product: selectedProduct,
-                  side,
-                  quantity: qty,
-                  entry_price: Number(res.fill_price || panes[0].lastLtp || 1),
-                  sl_price: slVal > 0 ? slVal : null,
-                  tp_price: tpVal > 0 ? tpVal : null,
-                }),
-              }).catch(() => {});
-            }
-          }
-
-          fetchPositionsAndOrders();
+      if ($('ow-sl-risk-txt')) {
+        if (owChkSl?.checked && slVal > 0 && openP > 0) {
+          const pnl = (slVal - openP) * qty * mult * sign;
+          $('ow-sl-risk-txt').textContent = `${pnl >= 0 ? '+' : '-'}${cs}${Math.abs(pnl).toFixed(2)}`;
         } else {
-          toast(`❌ Order failed: ${res.detail || 'Rejection'}`);
+          $('ow-sl-risk-txt').textContent = 'Off';
         }
-      } catch (err) {
-        toast(`❌ Error: ${err.message}`);
+      }
+      if ($('ow-tp-reward-txt')) {
+        if (owChkTp?.checked && tpVal > 0 && openP > 0) {
+          const pnl = (tpVal - openP) * qty * mult * sign;
+          $('ow-tp-reward-txt').textContent = `${pnl >= 0 ? '+' : '-'}${cs}${Math.abs(pnl).toFixed(2)}`;
+        } else {
+          $('ow-tp-reward-txt').textContent = 'Off';
+        }
+      }
+
+      const btnConf = $('ow-btn-confirm');
+      const confTitle = $('ow-confirm-title');
+      const confSub = $('ow-confirm-sub');
+      if (btnConf) btnConf.className = `ow-btn-confirm ${owSide.toLowerCase()}`;
+      if (confTitle) {
+        if (owMode === 'PENDING') {
+          const cls = classifyPendingOrder(owSide, openP, ltp);
+          confTitle.textContent = `Confirm ${cls.shortLabel}`;
+        } else {
+          confTitle.textContent = `Confirm ${owSide === 'BUY' ? 'Buy' : 'Sell'} Market`;
+        }
+      }
+      if (confSub) {
+        confSub.textContent = `${selectedLots} Lot${selectedLots !== 1 ? 's' : ''} @ ${cs}${openP.toFixed(decs)}`;
       }
     }
 
-    const btnSell = $('btn-order-sell');
-    const btnBuy = $('btn-order-buy');
-    if (btnSell) btnSell.addEventListener('click', () => submitOrder('SELL'));
-    if (btnBuy) btnBuy.addEventListener('click', () => submitOrder('BUY'));
+    function setOrderWindowMode(mode) {
+      owMode = mode === 'PENDING' ? 'PENDING' : 'MKT';
+      if ($('ow-tab-market')) $('ow-tab-market').classList.toggle('active', owMode === 'MKT');
+      if ($('ow-tab-pending')) $('ow-tab-pending').classList.toggle('active', owMode === 'PENDING');
+      if (owPendingSec) owPendingSec.classList.toggle('hidden', owMode !== 'PENDING');
+      if (owMode === 'PENDING' && owPendingInput && !owPendingInput.dataset.manual) {
+        const pane = panes[activePaneIdx] || panes[0];
+        const decs = getSymbolDecimals(pane.sym);
+        owPendingInput.value = getNearestLimitPrice(pane.sym, owSide, Number(pane.lastLtp || 0)).toFixed(decs);
+      }
+      refreshOrderWindowSummary();
+    }
+
+    function openOrderWindow(side) {
+      if (!owModal) {
+        executeUnifiedOrder({ side, orderMode: selectedOrderType });
+        return;
+      }
+      closeAllOverlays('order-window-modal');
+      owSide = side;
+      const pane = panes[activePaneIdx] || panes[0];
+      const sym = pane.sym;
+      const decs = getSymbolDecimals(sym);
+      const cs = curSym(sym);
+      const ltp = Number(pane.lastLtp || 0);
+      const fx = getForexSpec(sym);
+      const spread = fx ? fx.spread : ((ltp * 0.0005) + 0.05);
+
+      if ($('ow-side-pill')) {
+        $('ow-side-pill').textContent = side;
+        $('ow-side-pill').className = `ow-side-pill ${side.toLowerCase()}`;
+      }
+      if ($('ow-title')) $('ow-title').textContent = `${sym} Order Ticket`;
+      if ($('ow-ltp-val')) $('ow-ltp-val').textContent = `${cs}${ltp.toFixed(decs)}`;
+      if ($('ow-spread-val')) $('ow-spread-val').textContent = spread.toFixed(decs);
+
+      if (owPendingInput) {
+        delete owPendingInput.dataset.manual;
+        owPendingInput.value = getNearestLimitPrice(sym, side, ltp).toFixed(decs);
+      }
+      if (owRrSummary) owRrSummary.classList.add('hidden');
+
+      // Mirror Desktop panel SL/TP if checked
+      if (owChkSl && owInputSl) {
+        const hasDesktopSl = Boolean(opChkSl && opChkSl.checked && parseFloat(opSlInput?.value) > 0);
+        owChkSl.checked = hasDesktopSl;
+        owInputSl.disabled = !hasDesktopSl;
+        owInputSl.value = hasDesktopSl ? opSlInput.value : '';
+      }
+      if (owChkTp && owInputTp) {
+        const hasDesktopTp = Boolean(opChkTp && opChkTp.checked && parseFloat(opTpInput?.value) > 0);
+        owChkTp.checked = hasDesktopTp;
+        owInputTp.disabled = !hasDesktopTp;
+        owInputTp.value = hasDesktopTp ? opTpInput.value : '';
+      }
+
+      updateLotDisplay();
+      setOrderWindowMode(selectedOrderType === 'PENDING' ? 'PENDING' : 'MKT');
+      owModal.classList.remove('hidden');
+    }
+
+    if ($('ow-tab-market')) $('ow-tab-market').addEventListener('click', () => setOrderWindowMode('MKT'));
+    if ($('ow-tab-pending')) $('ow-tab-pending').addEventListener('click', () => setOrderWindowMode('PENDING'));
+    if ($('btn-close-order-window')) $('btn-close-order-window').addEventListener('click', () => owModal && owModal.classList.add('hidden'));
+    if ($('ow-btn-cancel')) $('ow-btn-cancel').addEventListener('click', () => owModal && owModal.classList.add('hidden'));
+    if (owModal) {
+      owModal.addEventListener('click', e => { if (e.target === owModal) owModal.classList.add('hidden'); });
+    }
+
+    if ($('ow-price-minus') && $('ow-price-plus') && owPendingInput) {
+      const bumpOwPrice = sign => {
+        const pane = panes[activePaneIdx] || panes[0];
+        const decs = getSymbolDecimals(pane.sym);
+        const step = getPriceTickStep(pane.sym);
+        const cur = parseFloat(owPendingInput.value) || Number(pane.lastLtp || 1);
+        owPendingInput.value = Math.max(0.0001, cur + (sign * step)).toFixed(decs);
+        owPendingInput.dataset.manual = 'true';
+        refreshOrderWindowSummary();
+      };
+      $('ow-price-minus').addEventListener('click', () => bumpOwPrice(-1));
+      $('ow-price-plus').addEventListener('click', () => bumpOwPrice(1));
+      owPendingInput.addEventListener('input', () => {
+        owPendingInput.dataset.manual = 'true';
+        refreshOrderWindowSummary();
+      });
+    }
+
+    if ($('ow-lots-minus')) $('ow-lots-minus').addEventListener('click', () => { adjustLots(-1); refreshOrderWindowSummary(); });
+    if ($('ow-lots-plus')) $('ow-lots-plus').addEventListener('click', () => { adjustLots(1); refreshOrderWindowSummary(); });
+    if (owLotsInput) {
+      owLotsInput.addEventListener('change', () => {
+        if (inputLots) inputLots.value = owLotsInput.value;
+        updateLotDisplay();
+        refreshOrderWindowSummary();
+      });
+    }
+
+    if (owChkSl && owInputSl) {
+      owChkSl.addEventListener('change', () => {
+        owInputSl.disabled = !owChkSl.checked;
+        if (owChkSl.checked && !owInputSl.value) {
+          const pane = panes[activePaneIdx] || panes[0];
+          const decs = getSymbolDecimals(pane.sym);
+          const ltp = Number(pane.lastLtp || 0);
+          const entry = owMode === 'PENDING' ? (parseFloat(owPendingInput?.value) || ltp) : ltp;
+          const auto = computeAuto2RSltp(pane, owSide, entry);
+          if (auto) owInputSl.value = auto.sl.toFixed(decs);
+        }
+        refreshOrderWindowSummary();
+      });
+      owInputSl.addEventListener('input', refreshOrderWindowSummary);
+    }
+
+    if (owChkTp && owInputTp) {
+      owChkTp.addEventListener('change', () => {
+        owInputTp.disabled = !owChkTp.checked;
+        if (owChkTp.checked && !owInputTp.value) {
+          const pane = panes[activePaneIdx] || panes[0];
+          const decs = getSymbolDecimals(pane.sym);
+          const ltp = Number(pane.lastLtp || 0);
+          const entry = owMode === 'PENDING' ? (parseFloat(owPendingInput?.value) || ltp) : ltp;
+          const auto = computeAuto2RSltp(pane, owSide, entry);
+          if (auto) owInputTp.value = auto.tp.toFixed(decs);
+        }
+        refreshOrderWindowSummary();
+      });
+      owInputTp.addEventListener('input', refreshOrderWindowSummary);
+    }
+
+    // ⚡ Auto Button: places SL at prev candle Low (BUY) / High (SELL) of current active TF & Target = 2x risk
+    if ($('ow-btn-auto-2r')) {
+      $('ow-btn-auto-2r').addEventListener('click', () => {
+        const pane = panes[activePaneIdx] || panes[0];
+        const sym = pane.sym;
+        const decs = getSymbolDecimals(sym);
+        const cs = curSym(sym);
+        const ltp = Number(pane.lastLtp || 0);
+        const fx = getForexSpec(sym);
+        const spread = fx ? fx.spread : ((ltp * 0.0005) + 0.05);
+        const mktEntry = owSide === 'BUY' ? (ltp + spread / 2) : Math.max(decs >= 4 ? 0.0001 : 0.05, ltp - spread / 2);
+        const entry = owMode === 'PENDING' ? (parseFloat(owPendingInput?.value || '') || mktEntry) : mktEntry;
+
+        const auto = computeAuto2RSltp(pane, owSide, entry);
+        if (!auto) {
+          toast('❌ Need loaded candles on active timeframe for Auto SL/TP');
+          return;
+        }
+        if (owChkSl && owInputSl) {
+          owChkSl.checked = true;
+          owInputSl.disabled = false;
+          owInputSl.value = auto.sl.toFixed(decs);
+        }
+        if (owChkTp && owInputTp) {
+          owChkTp.checked = true;
+          owInputTp.disabled = false;
+          owInputTp.value = auto.tp.toFixed(decs);
+        }
+        if (opChkSl && opSlInput) { opChkSl.checked = true; opSlInput.disabled = false; opSlInput.value = auto.sl.toFixed(decs); }
+        if (opChkTp && opTpInput) { opChkTp.checked = true; opTpInput.disabled = false; opTpInput.value = auto.tp.toFixed(decs); }
+
+        if (owRrSummary) {
+          owRrSummary.classList.remove('hidden');
+          if ($('ow-rr-sl')) $('ow-rr-sl').textContent = `${cs}${auto.sl.toFixed(decs)}`;
+          if ($('ow-rr-risk')) $('ow-rr-risk').textContent = `${cs}${auto.risk.toFixed(decs)}`;
+          if ($('ow-rr-tp')) $('ow-rr-tp').textContent = `${cs}${auto.tp.toFixed(decs)}`;
+        }
+        refreshOrderWindowSummary();
+        toast(`⚡ Auto (${auto.tf} prev ${owSide === 'BUY' ? 'low' : 'high'}): SL ${cs}${auto.sl.toFixed(decs)}, TP ${cs}${auto.tp.toFixed(decs)} (2R)`);
+      });
+    }
+
+    if ($('ow-btn-drag-chart')) {
+      $('ow-btn-drag-chart').addEventListener('click', () => {
+        const slVal = owChkSl?.checked ? parseFloat(owInputSl?.value || '') : null;
+        const tpVal = owChkTp?.checked ? parseFloat(owInputTp?.value || '') : null;
+        const initP = parseFloat(owPendingInput?.value || '') || null;
+        if (owModal) owModal.classList.add('hidden');
+        startChartPendingDrag(owSide, {
+          initialPrice: initP,
+          slPrice: slVal > 0 ? slVal : null,
+          tpPrice: tpVal > 0 ? tpVal : null,
+          autoSltp: Boolean(owRrSummary && !owRrSummary.classList.contains('hidden')),
+        });
+      });
+    }
+
+    if ($('ow-btn-confirm')) {
+      $('ow-btn-confirm').addEventListener('click', async () => {
+        const openP = owMode === 'PENDING' ? parseFloat(owPendingInput?.value || '') : null;
+        const slVal = owChkSl?.checked ? parseFloat(owInputSl?.value || '') : null;
+        const tpVal = owChkTp?.checked ? parseFloat(owInputTp?.value || '') : null;
+        const autoUsed = Boolean(owRrSummary && !owRrSummary.classList.contains('hidden'));
+        const ok = await executeUnifiedOrder({
+          side: owSide,
+          orderMode: owMode,
+          openPrice: openP,
+          slPrice: slVal > 0 ? slVal : null,
+          tpPrice: tpVal > 0 ? tpVal : null,
+          autoSltp: autoUsed,
+        });
+        if (ok && owModal) owModal.classList.add('hidden');
+      });
+    }
+
+    // Unified Buy/Sell button click: Instant ON -> 1-click Market fill | Instant OFF -> Order Placement Window
+    function handleTradeButtonClick(side) {
+      if (instantExecution) {
+        executeUnifiedOrder({ side, orderMode: 'MKT' });
+      } else {
+        openOrderWindow(side);
+      }
+    }
+
+    if ($('m-btn-buy')) $('m-btn-buy').addEventListener('click', () => handleTradeButtonClick('BUY'));
+    if ($('m-btn-sell')) $('m-btn-sell').addEventListener('click', () => handleTradeButtonClick('SELL'));
+    if ($('btn-order-sell')) $('btn-order-sell').addEventListener('click', () => handleTradeButtonClick('SELL'));
+    if ($('btn-order-buy')) $('btn-order-buy').addEventListener('click', () => handleTradeButtonClick('BUY'));
+
+    // Initialize Instant toggle UI cleanly
+    setInstantExecution(true);
 
     // Toggle Order Panel visibility
     const btnToggleOrder = $('btn-toggle-order-panel');
@@ -2231,6 +2882,10 @@
       trigInput.value = '';
       delete trigInput.dataset.manual;
     }
+    if ($('op-chk-sl')) $('op-chk-sl').checked = false;
+    if ($('op-chk-tp')) $('op-chk-tp').checked = false;
+    if ($('op-sl-input')) { $('op-sl-input').value = ''; $('op-sl-input').disabled = true; }
+    if ($('op-tp-input')) { $('op-tp-input').value = ''; $('op-tp-input').disabled = true; }
 
     const opSym = $('op-sym-name');
     if (opSym) opSym.textContent = selected.symbol;
@@ -4092,6 +4747,9 @@
       if (menu && !menu.classList.contains('hidden')) {
         positionIndicatorsMenu();
       }
+      if (window.innerWidth <= 768 && activeLayout > 2 && typeof window._applyChartLayoutFn === 'function') {
+        window._applyChartLayoutFn(2);
+      }
     });
 
     document.addEventListener('click', e => {
@@ -4180,6 +4838,7 @@
     const stage = $('chart-stage');
 
     function applyLayout(lay) {
+      if (window.innerWidth <= 768 && lay > 2) lay = 2;
       activeLayout = lay;
       if (stage) stage.className = `ex-chart-stage layout-${lay}`;
       if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
@@ -4216,12 +4875,14 @@
       setTimeout(refitVisiblePanes, 60);
       setTimeout(refitVisiblePanes, 220);
     }
+    window._applyChartLayoutFn = applyLayout;
 
     if (lBtn) {
       lBtn.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
-        const nextLayout = (activeLayout % 3) + 1;
+        const maxLay = window.innerWidth <= 768 ? 2 : 3;
+        const nextLayout = (activeLayout % maxLay) + 1;
         applyLayout(nextLayout);
       });
     }
@@ -4230,7 +4891,8 @@
       document.querySelectorAll('.layout-opt').forEach(opt => {
         opt.addEventListener('click', (e) => {
           e.stopPropagation();
-          const lay = parseInt(opt.dataset.layout) || 1;
+          let lay = parseInt(opt.dataset.layout) || 1;
+          if (window.innerWidth <= 768 && lay > 2) lay = 2;
           applyLayout(lay);
           lDrop.classList.add('hidden');
         });
@@ -4476,8 +5138,9 @@
         document.body.classList.remove('mobile-view-active');
         Object.values(views).forEach(v => v && v.classList.add('hidden'));
 
-        // Trigger chart canvas resize and fit for all visible panes
-        const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+        // Trigger chart canvas resize and fit for all visible panes (max 2 on mobile)
+        const effLayout = (window.innerWidth <= 768 && activeLayout > 2) ? 2 : activeLayout;
+        const visibleCount = effLayout === 3 ? 3 : (effLayout === 2 ? 2 : 1);
         function refitMobilePanes() {
           panes.slice(0, visibleCount).forEach(p => {
             if (!p.chart) {

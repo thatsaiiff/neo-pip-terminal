@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-otp3">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-ord4">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -592,37 +592,44 @@
           </div>
         </div>
 
-        <!-- Order Type Tabs: Market | Limit | SL-Limit (Exness Screenshot 1 & 3) -->
-        <div class="op-type-tabs" id="op-type-tabs">
-          <button type="button" class="op-type-tab active" data-type="MKT">Market</button>
-          <button type="button" class="op-type-tab" data-type="L">Limit</button>
-          <button type="button" class="op-type-tab" data-type="SL">SL-Limit</button>
+        <!-- Instant Execution Switch (ON: 1-Click MKT only | OFF: Market/Pending + Drag on Chart + SL/TP Window) -->
+        <div class="op-instant-row">
+          <div class="op-instant-meta">
+            <span class="op-instant-title">⚡ Instant Execution</span>
+            <span class="op-instant-hint" id="op-instant-hint">1-click Market fill</span>
+          </div>
+          <label class="ex-switch" title="ON: 1-click Market orders only. OFF: Market/Pending tabs, Drag on Chart &amp; SL/TP confirmation window.">
+            <input type="checkbox" id="op-instant-toggle" checked>
+            <span class="ex-switch-track"></span>
+          </label>
         </div>
 
-        <!-- Limit Price Input (Shown for Limit & SL-Limit) -->
+        <!-- Order Type Tabs (Shown when Instant Execution is OFF): Market | Pending -->
+        <div class="op-type-tabs hidden" id="op-type-tabs">
+          <button type="button" class="op-type-tab active" data-type="MKT" id="op-tab-mkt">Market</button>
+          <button type="button" class="op-type-tab" data-type="L" id="op-tab-pending">Pending</button>
+        </div>
+
+        <!-- Pending Open Price & Drag-to-Place Controls (Shown when Pending selected & Instant OFF) -->
         <div class="op-field hidden" id="field-limit-price">
           <div class="op-field-header">
             <span>Open Price</span>
-            <span class="field-sub" id="lbl-limit-cur">INR (₹)</span>
+            <span class="field-sub op-kind-pill limit" id="op-pending-kind">Nearest Limit</span>
           </div>
           <div class="op-numeric-stepper">
             <button type="button" class="stepper-btn" id="btn-price-minus">-</button>
             <input type="number" id="input-limit-price" step="any" value="44.50">
             <button type="button" class="stepper-btn" id="btn-price-plus">+</button>
           </div>
+          <div class="op-drag-bar" id="op-drag-bar">
+            <button type="button" class="op-drag-btn buy" id="op-btn-drag-buy" title="Drag BUY Limit/Stop line directly on chart">🎯 Drag BUY</button>
+            <button type="button" class="op-drag-btn sell" id="op-btn-drag-sell" title="Drag SELL Limit/Stop line directly on chart">🎯 Drag SELL</button>
+          </div>
         </div>
 
-        <!-- Trigger Price Input (Shown for SL-Limit) -->
+        <!-- Hidden legacy trigger container kept empty/unused for clean layout -->
         <div class="op-field hidden" id="field-trigger-price">
-          <div class="op-field-header">
-            <span>Trigger Price</span>
-            <span class="field-sub" id="lbl-trigger-cur">INR (₹)</span>
-          </div>
-          <div class="op-numeric-stepper">
-            <button type="button" class="stepper-btn" id="btn-trigger-minus">-</button>
-            <input type="number" id="input-trigger-price" step="any" value="44.00">
-            <button type="button" class="stepper-btn" id="btn-trigger-plus">+</button>
-          </div>
+          <input type="hidden" id="input-trigger-price" value="">
         </div>
 
         <!-- Volume / Lots Input (Exness Screenshot 1) -->
@@ -638,20 +645,30 @@
           </div>
         </div>
 
-        <!-- Optional Take Profit / Stop Loss Protection -->
-        <div class="op-sltp-card">
-          <label class="op-sltp-toggle">
-            <input type="checkbox" id="chk-ticket-sltp">
-            <span>Auto Stop Loss / Take Profit</span>
-          </label>
-          <div id="op-sltp-inputs" class="op-sltp-inputs hidden">
-            <div class="op-sltp-row">
-              <label for="op-tp-input" class="tp-lbl">TP Price</label>
-              <input type="number" id="op-tp-input" step="any" placeholder="Optional TP">
+        <!-- Separate TP / SL Toggles + ⚡ Auto (Prev Low · 2R) (Shown when Instant OFF) -->
+        <div class="op-sltp-card hidden" id="op-sltp-card">
+          <div class="op-sltp-head">
+            <span class="op-sltp-title">SL / TP Protection</span>
+            <button type="button" id="op-btn-auto-2r" class="ow-auto-btn compact" title="Place SL on previous completed candle Low/High of active timeframe &amp; target 2x risk">
+              ⚡ Auto 2R
+            </button>
+          </div>
+          <div class="op-sltp-toggles">
+            <div class="op-sltp-toggle-item">
+              <label class="op-sltp-switch">
+                <input type="checkbox" id="op-chk-sl">
+                <span class="ex-switch-mini"></span>
+                <span class="sl-lbl">SL</span>
+              </label>
+              <input type="number" id="op-sl-input" step="any" placeholder="SL Price" disabled>
             </div>
-            <div class="op-sltp-row">
-              <label for="op-sl-input" class="sl-lbl">SL Price</label>
-              <input type="number" id="op-sl-input" step="any" placeholder="Optional SL">
+            <div class="op-sltp-toggle-item">
+              <label class="op-sltp-switch">
+                <input type="checkbox" id="op-chk-tp">
+                <span class="ex-switch-mini"></span>
+                <span class="tp-lbl">TP</span>
+              </label>
+              <input type="number" id="op-tp-input" step="any" placeholder="TP Price" disabled>
             </div>
           </div>
         </div>
@@ -734,9 +751,24 @@
 
   <!-- Mobile Bottom Trade Dock (Shown when Chart tab is active on mobile) -->
   <div class="mobile-trade-dock" id="mobile-trade-dock">
+    <div class="m-dock-controls">
+      <label class="m-instant-pill" for="m-instant-toggle" title="Toggle Instant Execution ON/OFF">
+        <input type="checkbox" id="m-instant-toggle" checked>
+        <span class="ex-switch-mini"></span>
+        <span class="m-instant-lbl">⚡ Instant</span>
+      </label>
+      <div id="m-pending-controls" class="m-pending-controls hidden">
+        <div class="m-mode-seg">
+          <button type="button" class="m-mode-btn active" data-mode="MKT" id="m-mode-mkt">Market</button>
+          <button type="button" class="m-mode-btn" data-mode="PENDING" id="m-mode-pend">Pending</button>
+        </div>
+        <button type="button" id="m-btn-drag-buy" class="m-drag-chip buy" title="Drag BUY Limit/Stop directly on chart">🎯 Buy</button>
+        <button type="button" id="m-btn-drag-sell" class="m-drag-chip sell" title="Drag SELL Limit/Stop directly on chart">🎯 Sell</button>
+      </div>
+    </div>
     <div class="m-dock-main">
       <button type="button" id="m-btn-sell" class="m-dock-btn m-btn-sell">
-        <span class="m-btn-title">Sell</span>
+        <span class="m-btn-title" id="m-sell-caption">Sell</span>
         <span class="m-btn-price" id="m-sell-price">25,023.70</span>
       </button>
 
@@ -750,7 +782,7 @@
       </div>
 
       <button type="button" id="m-btn-buy" class="m-dock-btn m-btn-buy">
-        <span class="m-btn-title">Buy</span>
+        <span class="m-btn-title" id="m-buy-caption">Buy</span>
         <span class="m-btn-price" id="m-buy-price">25,025.20</span>
       </button>
     </div>
@@ -1607,12 +1639,115 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
     </div>
   </div>
 
+  <!-- Responsive Order Placement Window (Instant OFF: Mobile Bottom Sheet & Desktop Dialog) -->
+  <div id="order-window-modal" class="ex-modal-backdrop order-win-backdrop hidden">
+    <div class="order-win-card" role="dialog" aria-modal="true" aria-labelledby="ow-title">
+      <div class="order-win-handle" aria-hidden="true"></div>
+      <div class="order-win-header">
+        <div class="ow-title-wrap">
+          <span id="ow-side-pill" class="ow-side-pill buy">BUY</span>
+          <div>
+            <h3 id="ow-title">Order Ticket</h3>
+            <span class="ow-ltp-sub">LTP: <b id="ow-ltp-val">—</b> · Spread: <b id="ow-spread-val">—</b></span>
+          </div>
+        </div>
+        <button type="button" id="btn-close-order-window" class="modal-close-btn" aria-label="Close Order Window">✕</button>
+      </div>
+
+      <!-- Market vs Pending Selector -->
+      <div class="ow-mode-tabs">
+        <button type="button" class="ow-mode-tab active" data-mode="MKT" id="ow-tab-market">Market</button>
+        <button type="button" class="ow-mode-tab" data-mode="PENDING" id="ow-tab-pending">Pending</button>
+      </div>
+
+      <!-- Pending Open Price + Auto Classification + Drag on Chart -->
+      <div id="ow-pending-section" class="ow-pending-section hidden">
+        <div class="ow-row-head">
+          <span>Open Price (Nearest Limit Prefilled)</span>
+          <span id="ow-pending-kind" class="ow-kind-badge limit">BUY LIMIT (L)</span>
+        </div>
+        <div class="op-numeric-stepper">
+          <button type="button" class="stepper-btn" id="ow-price-minus">−</button>
+          <input type="number" id="ow-pending-price" step="any" placeholder="Open price">
+          <button type="button" class="stepper-btn" id="ow-price-plus">+</button>
+        </div>
+        <button type="button" id="ow-btn-drag-chart" class="ow-drag-chart-btn">
+          <span>🎯 Drag &amp; Place on Chart</span>
+          <span class="ow-drag-sub">Buy above LTP = Stop · Below = Limit (opposite for Sell)</span>
+        </button>
+      </div>
+
+      <!-- Volume (Lots) -->
+      <div class="ow-field">
+        <div class="ow-row-head">
+          <span>Volume (Lots)</span>
+          <span id="ow-units-sub" class="field-sub">1 lot</span>
+        </div>
+        <div class="op-numeric-stepper">
+          <button type="button" class="stepper-btn" id="ow-lots-minus">−</button>
+          <input type="number" id="ow-lots-input" min="0.01" max="500" step="0.05" value="1">
+          <button type="button" class="stepper-btn" id="ow-lots-plus">+</button>
+        </div>
+      </div>
+
+      <!-- Separate SL Toggle, TP Toggle & ⚡ Auto (Prev Low · 2R) -->
+      <div class="ow-sltp-card">
+        <div class="ow-sltp-top">
+          <span class="ow-sltp-heading">SL &amp; TP Protection</span>
+          <button type="button" id="ow-btn-auto-2r" class="ow-auto-btn" title="Place SL at previous completed candle Low/High of current active TimeFrame &amp; Target 2x Risk">
+            ⚡ Auto (Prev Low · 2R)
+          </button>
+        </div>
+
+        <div class="ow-toggle-list">
+          <div class="ow-toggle-row">
+            <label class="ow-toggle-switch" for="ow-chk-sl">
+              <input type="checkbox" id="ow-chk-sl">
+              <span class="ex-switch-mini"></span>
+              <span class="ow-lbl-sl">Place SL</span>
+            </label>
+            <div class="ow-price-wrap">
+              <input type="number" id="ow-input-sl" step="any" placeholder="Stop Loss price" disabled>
+              <span id="ow-sl-risk-txt" class="ow-proj-txt sl">—</span>
+            </div>
+          </div>
+
+          <div class="ow-toggle-row">
+            <label class="ow-toggle-switch" for="ow-chk-tp">
+              <input type="checkbox" id="ow-chk-tp">
+              <span class="ex-switch-mini"></span>
+              <span class="ow-lbl-tp">Place TP</span>
+            </label>
+            <div class="ow-price-wrap">
+              <input type="number" id="ow-input-tp" step="any" placeholder="Take Profit price" disabled>
+              <span id="ow-tp-reward-txt" class="ow-proj-txt tp">—</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="ow-rr-summary" class="ow-rr-summary hidden">
+          <span>Prev Low/High SL: <b id="ow-rr-sl">—</b></span>
+          <span>Risk: <b id="ow-rr-risk">—</b></span>
+          <span>2x Target: <b id="ow-rr-tp">—</b></span>
+        </div>
+      </div>
+
+      <div class="ow-footer">
+        <button type="button" id="ow-btn-cancel" class="ow-btn-cancel">Cancel</button>
+        <button type="button" id="ow-btn-confirm" class="ow-btn-confirm buy">
+          <span id="ow-confirm-title">Confirm Buy Market</span>
+          <span id="ow-confirm-sub" class="ow-confirm-sub">1 Lot @ —</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="toast">
     <span id="toast-message"></span>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-otp3"></script>
+  <script src="/static/chart.js?v=20261110-ord5"></script>
 </body>
 </html>

@@ -1274,6 +1274,55 @@ def test_forgot_password_and_email_delivery_channels(client, monkeypatch):
     assert "654321" in sent_payloads[0][2]["subject"]
 
 
+def test_pending_stop_limit_patch_and_auto_sltp_activation(client, monkeypatch):
+    _signup_verified(client, "pend_trader", "pass1234", "pend.trader@gmail.com")
+    s_res = client.post("/api/auth/signin", json={"username": "pend_trader", "password": "pass1234"})
+    assert s_res.status_code == 200
+    hdrs = {"Authorization": f"Bearer {s_res.json()['token']}"}
+
+    # Stub live LTP = 4100.0 for XAUUSD
+    monkeypatch.setattr(main, "_get_live_quote_data", lambda sym: {"last_price": 4100.0, "ltp": 4100.0})
+
+    # Place Pending BUY STOP (above LTP) with attached SL & TP
+    o_res = client.post(
+        "/api/orders?market=forex",
+        headers=hdrs,
+        json={
+            "symbol": "XAUUSD",
+            "exchange_segment": "forex",
+            "side": "BUY",
+            "lots": 0.1,
+            "lot_size": 100,
+            "product": "NRML",
+            "order_type": "SL-M",
+            "trigger_price": 4110.0,
+            "sl_price": 4095.0,
+            "tp_price": 4140.0,
+            "auto_sltp": True,
+            "user_confirmed": True,
+        },
+    )
+    assert o_res.status_code == 200
+    oid = o_res.json()["id"]
+
+    # Modify order below LTP -> PATCH auto-classifies to L (Buy Limit)
+    p1 = client.patch(f"/api/orders/{oid}?market=forex", headers=hdrs, json={"price": 4090.0, "trigger_price": 4090.0})
+    assert p1.status_code == 200
+    assert p1.json()["order_type"] == "L"
+
+    # Modify order back above LTP -> PATCH auto-classifies to SL-M (Buy Stop)
+    p2 = client.patch(f"/api/orders/{oid}?market=forex", headers=hdrs, json={"price": 4110.0, "trigger_price": 4110.0})
+    assert p2.status_code == 200
+    assert p2.json()["order_type"] == "SL-M"
+
+    # Tick crosses 4112.0 (>= 4110.0 trigger) -> fills BUY STOP & creates active SL/TP rule
+    t_res = client.post("/api/sltp/check?market=forex", headers=hdrs, json={"symbol": "XAUUSD", "ltp": 4112.0})
+    assert t_res.status_code == 200
+    sltp_list = client.get("/api/sltp?market=forex", headers=hdrs).json()
+    assert any(r["symbol"] == "XAUUSD" and float(r["sl_price"]) == 4095.0 and float(r["tp_price"]) == 4140.0 for r in sltp_list)
+
+
+
 
 
 
