@@ -3246,6 +3246,16 @@ body.site-locked #app-shell {
   gap: 8px;
 }
 
+.main-auth-spam-banner {
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(217, 119, 6, 0.10);
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  color: #92400e;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .main-user-pill {
   display: inline-flex;
   align-items: center;

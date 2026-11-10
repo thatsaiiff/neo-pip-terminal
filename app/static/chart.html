@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord9">
+  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord10">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -1237,14 +1237,22 @@
         <div id="forgot-otp-step" class="auth-otp-card hidden">
           <div class="auth-otp-top">
             <span id="forgot-otp-target">Reset code sent</span>
+            <button type="button" id="btn-edit-forgot-email" class="auth-inline-link">Change</button>
+          </div>
+          <div class="auth-spam-banner">
+            ⚠️ <strong>Check in SPAM if still not received.</strong> Code expires in 10 min.
           </div>
           <div class="auth-input-group">
             <label for="forgot-otp-input" class="auth-label">6-Digit Reset Code</label>
-            <input type="text" id="forgot-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+            <input type="text" id="forgot-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" maxlength="6" placeholder="000000" autocomplete="one-time-code">
           </div>
           <div class="auth-input-group">
             <label for="forgot-newpass" class="auth-label">New Password</label>
             <input type="password" id="forgot-newpass" class="auth-text-input" placeholder="Minimum 4 characters" autocomplete="new-password">
+          </div>
+          <div class="auth-otp-foot">
+            <span class="auth-domain-hint">Safe to switch to Gmail/Mail &amp; return</span>
+            <button type="button" id="btn-resend-forgot-otp" class="auth-inline-link">Resend Code</button>
           </div>
         </div>
         <div id="forgot-error-msg" class="auth-error-msg hidden"></div>
@@ -1278,12 +1286,15 @@
             <span id="signup-otp-target">Verification code sent</span>
             <button type="button" id="btn-edit-signup-email" class="auth-inline-link">Change</button>
           </div>
+          <div class="auth-spam-banner">
+            ⚠️ <strong>Check in SPAM if still not received.</strong> Code expires in 10 min.
+          </div>
           <div class="auth-input-group">
             <label for="signup-otp-input" class="auth-label">6-Digit Email Verification Code</label>
-            <input type="text" id="signup-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+            <input type="text" id="signup-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" maxlength="6" placeholder="000000" autocomplete="one-time-code">
           </div>
           <div class="auth-otp-foot">
-            <span class="auth-domain-hint">Check inbox &amp; spam · Expires in 10 min</span>
+            <span class="auth-domain-hint">Safe to switch to Gmail/Mail &amp; return</span>
             <button type="button" id="btn-resend-signup-otp" class="auth-inline-link">Resend Code</button>
           </div>
         </div>
@@ -1802,6 +1813,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261111-ord9"></script>
+  <script src="/static/chart.js?v=20261111-ord10"></script>
 </body>
 </html>

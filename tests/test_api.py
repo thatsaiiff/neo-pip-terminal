@@ -1322,6 +1322,41 @@ def test_pending_stop_limit_patch_and_auto_sltp_activation(client, monkeypatch):
     assert any(r["symbol"] == "XAUUSD" and float(r["sl_price"]) == 4095.0 and float(r["tp_price"]) == 4140.0 for r in sltp_list)
 
 
+def test_signup_otp_resume_and_resend_preserves_password_hash(client):
+    req = client.post(
+        "/api/auth/request-signup-otp",
+        json={"username": "resume_fx", "password": "secret_pass_9", "email": "resume.fx@gmail.com", "name": "Resume Trader"},
+    )
+    assert req.status_code == 200
+    assert "check in spam if still not received" in req.json()["message"].lower()
+
+    # Resend must preserve pending_pw_hash & pending_name
+    resend = client.post("/api/auth/resend-otp", json={"email": "resume.fx@gmail.com", "purpose": "signup"})
+    assert resend.status_code == 200
+    assert "check in spam if still not received" in resend.json()["message"].lower()
+
+    with main.db() as conn:
+        row = conn.execute(
+            "SELECT otp, pending_username, pending_pw_hash FROM email_otps WHERE LOWER(email) = 'resume.fx@gmail.com' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert row["pending_username"] == "resume_fx"
+    assert row["pending_pw_hash"] and row["pending_pw_hash"] != "secret_pass_9"
+
+    # Simulate mobile browser tab reload where DOM password input is empty -> completes with OTP + saved pending hash
+    ok = client.post(
+        "/api/auth/signup",
+        json={"username": "resume_fx", "password": "", "email": "resume.fx@gmail.com", "otp": row["otp"]},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["email_verified"] is True
+
+    # Verify user can sign in with their original password afterwards
+    si = client.post("/api/auth/signin", json={"username": "resume_fx", "password": "secret_pass_9"})
+    assert si.status_code == 200
+
+
+
 
 
 

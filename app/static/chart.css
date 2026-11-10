@@ -5651,3 +5651,17 @@ button:active:not(:disabled),
   gap: 8px;
 }
 
+.auth-spam-banner {
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: rgba(245, 197, 24, 0.10);
+  border: 1px solid rgba(245, 197, 24, 0.34);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.auth-spam-banner strong {
+  color: #facc15;
+}
+

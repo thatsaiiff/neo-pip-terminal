@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261110-otp3">
+  <link rel="stylesheet" href="/static/styles.css?v=20261111-otp1">
 </head>
 <body class="site-locked">
   <div id="app-shell">
@@ -643,9 +643,12 @@
             <span id="main-auth-otp-target">Code sent to email</span>
             <button type="button" id="main-auth-edit-email" class="main-auth-link-btn">Change</button>
           </div>
+          <div class="main-auth-spam-banner">
+            ⚠️ <strong>Check in SPAM if still not received.</strong> Code expires in 10 min.
+          </div>
           <label class="field" style="margin:0;">
             <span>6-Digit Email Verification Code</span>
-            <input id="main-auth-otp" class="main-auth-otp-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+            <input id="main-auth-otp" class="main-auth-otp-input" type="text" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" maxlength="6" placeholder="000000" autocomplete="one-time-code">
           </label>
           <label class="field hidden" id="main-auth-newpass-wrap" style="margin:0;">
             <span>New Password</span>
@@ -665,6 +668,6 @@
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/app.js?v=20261110-otp3" defer></script>
+  <script src="/static/app.js?v=20261111-otp1" defer></script>
 </body>
 </html>

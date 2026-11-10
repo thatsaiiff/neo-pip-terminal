@@ -170,6 +170,9 @@ def init_db() -> None:
             ("users", "email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
             ("email_otps", "purpose", "TEXT NOT NULL DEFAULT 'signup'"),
             ("email_otps", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("email_otps", "pending_username", "TEXT NOT NULL DEFAULT ''"),
+            ("email_otps", "pending_name", "TEXT NOT NULL DEFAULT ''"),
+            ("email_otps", "pending_pw_hash", "TEXT NOT NULL DEFAULT ''"),
         ]
         for tbl, col, decl in migrations:
             existing_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
@@ -1973,7 +1976,7 @@ class RequestSignupOtpPayload(BaseModel):
 
 class SignupPayload(BaseModel):
     username: str = Field(min_length=3, max_length=40)
-    password: str = Field(min_length=4, max_length=128)
+    password: str | None = Field(default=None, max_length=128)
     email: str = Field(min_length=5, max_length=254)
     otp: str = Field(min_length=6, max_length=6)
     name: str | None = None
@@ -2072,13 +2075,24 @@ def _issue_user_session(
     return token
 
 
-def _issue_and_send_otp(clean_email: str, purpose: str = "signup", username: str | None = None) -> bool:
+def _issue_and_send_otp(
+    clean_email: str,
+    purpose: str = "signup",
+    username: str | None = None,
+    pending_name: str = "",
+    pending_pw_hash: str = "",
+    preserve_pending: bool = False,
+) -> bool:
     """Create a cryptographic 6-digit OTP in email_otps and deliver via configured free mail channel."""
     otp = f"{secrets.randbelow(900000) + 100000}"
     expires_at = time.time() + 600
+    eff_username = (username or "").strip()
+    eff_name = (pending_name or "").strip()
+    eff_pw_hash = pending_pw_hash or ""
+
     with db() as conn:
         latest = conn.execute(
-            "SELECT created_at FROM email_otps WHERE LOWER(email) = ? AND purpose = ? ORDER BY id DESC LIMIT 1",
+            "SELECT created_at, pending_username, pending_name, pending_pw_hash FROM email_otps WHERE LOWER(email) = ? AND purpose = ? ORDER BY id DESC LIMIT 1",
             (clean_email, purpose),
         ).fetchone()
         if latest and not os.getenv("PYTEST_CURRENT_TEST"):
@@ -2090,14 +2104,21 @@ def _issue_and_send_otp(clean_email: str, purpose: str = "signup", username: str
                 raise
             except Exception:
                 pass
+        if preserve_pending and latest:
+            eff_username = eff_username or str(latest["pending_username"] or "")
+            eff_name = eff_name or str(latest["pending_name"] or "")
+            eff_pw_hash = eff_pw_hash or str(latest["pending_pw_hash"] or "")
+
         conn.execute("DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose = ?", (clean_email, purpose))
         conn.execute(
-            "INSERT INTO email_otps (email, otp, expires_at, created_at, purpose, attempts) VALUES (?, ?, ?, ?, ?, 0)",
-            (clean_email, otp, expires_at, utc_now(), purpose),
+            """INSERT INTO email_otps
+               (email, otp, expires_at, created_at, purpose, attempts, pending_username, pending_name, pending_pw_hash)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+            (clean_email, otp, expires_at, utc_now(), purpose, eff_username, eff_name, eff_pw_hash),
         )
         conn.commit()
 
-    email_sent = send_otp_email(clean_email, otp, username=username, purpose=purpose)
+    email_sent = send_otp_email(clean_email, otp, username=eff_username or username, purpose=purpose)
     if not email_sent and not os.getenv("PYTEST_CURRENT_TEST"):
         with db() as conn:
             conn.execute("DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose = ?", (clean_email, purpose))
@@ -2106,14 +2127,15 @@ def _issue_and_send_otp(clean_email: str, purpose: str = "signup", username: str
     return email_sent
 
 
-def _consume_email_otp(clean_email: str, clean_otp: str, purposes: tuple[str, ...] = ("signup",)) -> None:
+def _consume_email_otp(clean_email: str, clean_otp: str, purposes: tuple[str, ...] = ("signup",)) -> dict[str, str]:
     """Verify 6-digit OTP from DB with expiry & brute-force attempt limit, then consume it."""
     if not re.fullmatch(r"\d{6}", clean_otp or ""):
         raise HTTPException(status_code=400, detail="Enter a valid 6-digit verification code sent to your email.")
     placeholders = ",".join("?" for _ in purposes)
     with db() as conn:
         row = conn.execute(
-            f"SELECT id, otp, expires_at, attempts FROM email_otps WHERE LOWER(email) = ? AND purpose IN ({placeholders}) ORDER BY id DESC LIMIT 1",
+            f"""SELECT id, otp, expires_at, attempts, pending_username, pending_name, pending_pw_hash
+                FROM email_otps WHERE LOWER(email) = ? AND purpose IN ({placeholders}) ORDER BY id DESC LIMIT 1""",
             (clean_email, *purposes),
         ).fetchone()
         if not row or float(row["expires_at"]) < time.time():
@@ -2129,8 +2151,14 @@ def _consume_email_otp(clean_email: str, clean_otp: str, purposes: tuple[str, ..
             conn.commit()
             rem = max(0, 5 - next_att)
             raise HTTPException(status_code=400, detail=f"Invalid verification code ({rem} attempt{'s' if rem != 1 else ''} remaining).")
+        consumed = {
+            "pending_username": str(row["pending_username"] or ""),
+            "pending_name": str(row["pending_name"] or ""),
+            "pending_pw_hash": str(row["pending_pw_hash"] or ""),
+        }
         conn.execute(f"DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose IN ({placeholders})", (clean_email, *purposes))
         conn.commit()
+        return consumed
 
 
 @app.post("/api/auth/request-signup-otp")
@@ -2155,7 +2183,15 @@ def auth_request_signup_otp(payload: RequestSignupOtpPayload):
         if existing:
             raise HTTPException(status_code=409, detail="User ID or Email is already registered. Please Sign In instead.")
 
-    email_sent = _issue_and_send_otp(clean_email, purpose="signup", username=clean_user)
+    pending_name = (payload.name or "").strip()
+    pending_pw_hash = _hash_password(payload.password)
+    email_sent = _issue_and_send_otp(
+        clean_email,
+        purpose="signup",
+        username=clean_user,
+        pending_name=pending_name,
+        pending_pw_hash=pending_pw_hash,
+    )
     audit("signup_otp_requested", {"email": clean_email, "username": clean_user})
     return {
         "ok": True,
@@ -2164,7 +2200,7 @@ def auth_request_signup_otp(payload: RequestSignupOtpPayload):
         "step": "verify_otp",
         "email_sent": email_sent,
         "expires_in": 600,
-        "message": f"6-digit verification code sent to {clean_email}.",
+        "message": f"6-digit verification code sent to {clean_email}. Check in SPAM if still not received.",
     }
 
 
@@ -2179,14 +2215,20 @@ def auth_signup(payload: SignupPayload, response: Response):
     user_lower = clean_user.lower()
     if len(clean_user) < 3 or user_lower in {ADMIN_USERNAME, ADMIN_EMAIL, "admin", "guest"}:
         raise HTTPException(status_code=400, detail="Choose a valid User ID (at least 3 alphanumeric characters).")
-    if len(payload.password or "") < 4:
+    raw_pw = payload.password or ""
+    if raw_pw and len(raw_pw) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
 
-    # Mandatory Email OTP Verification before account creation
-    _consume_email_otp(clean_email, (payload.otp or "").strip(), purposes=("signup",))
+    # Mandatory Email OTP Verification before account creation (supports tab-reload resume via pending_pw_hash)
+    consumed_otp = _consume_email_otp(clean_email, (payload.otp or "").strip(), purposes=("signup",))
+    if raw_pw:
+        pw_hash = _hash_password(raw_pw)
+    elif consumed_otp.get("pending_pw_hash"):
+        pw_hash = consumed_otp["pending_pw_hash"]
+    else:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
 
-    display_name = (payload.name or "").strip() or clean_user
-    pw_hash = _hash_password(payload.password)
+    display_name = (payload.name or "").strip() or consumed_otp.get("pending_name") or clean_user
 
     with db() as conn:
         existing = conn.execute(
@@ -2559,8 +2601,8 @@ def auth_resend_otp(payload: ResendOtpPayload):
     if clean_email == ADMIN_EMAIL:
         raise HTTPException(status_code=400, detail="Invalid request.")
     purpose = payload.purpose if payload.purpose in {"signup", "reset"} else "signup"
-    email_sent = _issue_and_send_otp(clean_email, purpose=purpose)
-    return {"ok": True, "email": clean_email, "email_sent": email_sent, "message": f"New verification code sent to {clean_email}."}
+    email_sent = _issue_and_send_otp(clean_email, purpose=purpose, preserve_pending=(purpose == "signup"))
+    return {"ok": True, "email": clean_email, "email_sent": email_sent, "message": f"New verification code sent to {clean_email}. Check in SPAM if still not received."}
 
 
 @app.post("/api/auth/forgot-password")

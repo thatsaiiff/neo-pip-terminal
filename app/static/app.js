@@ -2406,6 +2406,46 @@
   let mainAuthMode = 'signin'; // 'signin' | 'signup' | 'forgot'
   let mainAuthStep = 'details'; // 'details' | 'otp'
   let mainResendTimer = null;
+  const MAIN_PENDING_OTP_KEY = 'neo_pending_otp_v1';
+
+  function saveMainPendingOtp(data) {
+    try {
+      sessionStorage.setItem(MAIN_PENDING_OTP_KEY, JSON.stringify({
+        mode: data.mode,
+        email: data.email || '',
+        username: data.username || '',
+        name: data.name || '',
+        otpDraft: data.otpDraft || '',
+        expiresAt: data.expiresAt || (Date.now() + 600000),
+        resendUntil: data.resendUntil || (Date.now() + 30000),
+      }));
+    } catch (_) {}
+  }
+
+  function loadMainPendingOtp() {
+    try {
+      const raw = sessionStorage.getItem(MAIN_PENDING_OTP_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.email || !parsed.expiresAt || Date.now() >= Number(parsed.expiresAt)) {
+        sessionStorage.removeItem(MAIN_PENDING_OTP_KEY);
+        return null;
+      }
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function updateMainPendingOtpDraft(draft) {
+    const cur = loadMainPendingOtp();
+    if (!cur) return;
+    saveMainPendingOtp({ ...cur, otpDraft: String(draft || '').slice(0, 6) });
+  }
+
+  function clearMainPendingOtp() {
+    try { sessionStorage.removeItem(MAIN_PENDING_OTP_KEY); } catch (_) {}
+  }
 
   const TRUSTED_EMAIL_DOMAINS = new Set([
     'gmail.com', 'googlemail.com',
@@ -2450,7 +2490,12 @@
   function startResendCountdown(btn, seconds = 30) {
     if (!btn) return;
     clearInterval(mainResendTimer);
-    let rem = seconds;
+    let rem = Math.max(0, Math.ceil(Number(seconds || 0)));
+    if (rem <= 0) {
+      btn.disabled = false;
+      btn.textContent = 'Resend code';
+      return;
+    }
     btn.disabled = true;
     btn.textContent = `Resend in ${rem}s`;
     mainResendTimer = setInterval(() => {
@@ -2511,9 +2556,16 @@
 
   function applyMainSession(sess, reloadData = true) {
     if (!sess || !sess.authenticated) {
-      lockMainSite();
+      if (state.siteAuthenticated) {
+        lockMainSite();
+      } else {
+        document.body.classList.add('site-locked');
+        if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
+        if (mainAuthStep !== 'otp') restoreMainPendingOtpUI();
+      }
       return false;
     }
+    clearMainPendingOtp();
     const changedUser = !state.siteAuthenticated || state.username !== sess.username;
     state.siteAuthenticated = true;
     state.isAdmin = !!(sess.is_admin || sess.is_owner);
@@ -2560,7 +2612,7 @@
     }
   }
 
-  function setMainAuthTab(mode, step = 'details') {
+  function setMainAuthTab(mode, step = 'details', preserveOtp = false) {
     mainAuthMode = (mode === 'signup' || mode === 'forgot') ? mode : 'signin';
     mainAuthStep = step === 'otp' ? 'otp' : 'details';
     const isUp = mainAuthMode === 'signup';
@@ -2590,12 +2642,33 @@
     if ($('main-auth-pass')) $('main-auth-pass').setAttribute('autocomplete', isUp ? 'new-password' : 'current-password');
     if ($('main-auth-error')) { $('main-auth-error').classList.add('hidden'); $('main-auth-error').textContent = ''; }
     if (isOtp && $('main-auth-otp')) {
-      $('main-auth-otp').value = '';
+      if (!preserveOtp) $('main-auth-otp').value = '';
       setTimeout(() => $('main-auth-otp')?.focus(), 60);
     }
   }
 
+  function restoreMainPendingOtpUI() {
+    const saved = loadMainPendingOtp();
+    if (!saved) return false;
+    const remSec = Math.max(0, Math.ceil((Number(saved.resendUntil || 0) - Date.now()) / 1000));
+    if ($('main-auth-email')) $('main-auth-email').value = saved.email || '';
+    if (saved.mode === 'signup') {
+      if ($('main-auth-user')) $('main-auth-user').value = saved.username || '';
+      if ($('main-auth-name')) $('main-auth-name').value = saved.name || '';
+      if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Code sent to ${saved.email}`;
+    } else if (saved.mode === 'forgot') {
+      if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Reset code sent to ${saved.email}`;
+    } else {
+      return false;
+    }
+    if ($('main-auth-otp')) $('main-auth-otp').value = saved.otpDraft || '';
+    setMainAuthTab(saved.mode, 'otp', true);
+    if (remSec > 0) startResendCountdown($('main-auth-resend'), remSec);
+    return true;
+  }
+
   async function handleMainLogout() {
+    clearMainPendingOtp();
     try { await api('/api/auth/owner-logout', { method: 'POST', body: '{}' }); } catch (_) {}
     localStorage.removeItem('neo_owner_token');
     if ($('main-auth-pass')) $('main-auth-pass').value = '';
@@ -2606,11 +2679,12 @@
   }
 
   function wireMainAuthModal() {
-    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').addEventListener('click', () => setMainAuthTab('signin', 'details'));
-    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').addEventListener('click', () => setMainAuthTab('signup', 'details'));
-    if ($('main-auth-forgot-btn')) $('main-auth-forgot-btn').addEventListener('click', () => setMainAuthTab('forgot', 'details'));
-    if ($('main-auth-back-signin')) $('main-auth-back-signin').addEventListener('click', () => setMainAuthTab('signin', 'details'));
-    if ($('main-auth-edit-email')) $('main-auth-edit-email').addEventListener('click', () => setMainAuthTab(mainAuthMode, 'details'));
+    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').addEventListener('click', () => { clearMainPendingOtp(); setMainAuthTab('signin', 'details'); });
+    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').addEventListener('click', () => { clearMainPendingOtp(); setMainAuthTab('signup', 'details'); });
+    if ($('main-auth-forgot-btn')) $('main-auth-forgot-btn').addEventListener('click', () => { clearMainPendingOtp(); setMainAuthTab('forgot', 'details'); });
+    if ($('main-auth-back-signin')) $('main-auth-back-signin').addEventListener('click', () => { clearMainPendingOtp(); setMainAuthTab('signin', 'details'); });
+    if ($('main-auth-edit-email')) $('main-auth-edit-email').addEventListener('click', () => { clearMainPendingOtp(); setMainAuthTab(mainAuthMode, 'details'); });
+    if ($('main-auth-otp')) $('main-auth-otp').addEventListener('input', e => updateMainPendingOtpDraft(e.target.value));
     if ($('main-logout-btn')) $('main-logout-btn').addEventListener('click', handleMainLogout);
     if ($('main-signin-trigger')) $('main-signin-trigger').addEventListener('click', () => {
       if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
@@ -2618,7 +2692,8 @@
 
     if ($('main-auth-resend')) {
       $('main-auth-resend').addEventListener('click', async () => {
-        const email = ($('main-auth-email')?.value || '').trim().toLowerCase();
+        const saved = loadMainPendingOtp();
+        const email = ($('main-auth-email')?.value || saved?.email || '').trim().toLowerCase();
         const errBox = $('main-auth-error');
         if (!email) return;
         try {
@@ -2626,8 +2701,9 @@
             method: 'POST',
             body: JSON.stringify({ email, purpose: mainAuthMode === 'forgot' ? 'reset' : 'signup' }),
           });
+          if (saved) saveMainPendingOtp({ ...saved, email, expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
           startResendCountdown($('main-auth-resend'), 30);
-          toast(`Verification code re-sent to ${email}`, 'success');
+          toast(`Verification code re-sent to ${email}. Check in SPAM if still not received.`, 'success');
         } catch (err) {
           if (errBox) { errBox.textContent = cleanErrorMessage(err.message); errBox.classList.remove('hidden'); }
         }
@@ -2638,10 +2714,11 @@
     if (form) {
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const username = ($('main-auth-user')?.value || '').trim();
+        const saved = loadMainPendingOtp();
+        const username = (($('main-auth-user')?.value || '') || (saved?.mode === 'signup' ? saved.username : '') || '').trim();
         const password = $('main-auth-pass')?.value || '';
-        const email = ($('main-auth-email')?.value || '').trim().toLowerCase();
-        const name = ($('main-auth-name')?.value || '').trim();
+        const email = (($('main-auth-email')?.value || '') || saved?.email || '').trim().toLowerCase();
+        const name = (($('main-auth-name')?.value || '') || (saved?.mode === 'signup' ? saved.name : '') || '').trim();
         const otp = ($('main-auth-otp')?.value || '').trim();
         const newPass = $('main-auth-newpass')?.value || '';
         const errBox = $('main-auth-error');
@@ -2658,6 +2735,7 @@
             if (btn) { btn.disabled = true; btn.textContent = 'Signing In…'; }
             const res = await api('/api/auth/signin', { method: 'POST', body: JSON.stringify({ username, password }) });
             if (res.token) localStorage.setItem('neo_owner_token', res.token);
+            clearMainPendingOtp();
             if ($('main-auth-pass')) $('main-auth-pass').value = '';
             await syncMainAuthSession(true);
             toast(`Signed in as @${res.username}`, 'success');
@@ -2671,10 +2749,12 @@
               method: 'POST',
               body: JSON.stringify({ email, username, password, name }),
             });
-            if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Code sent to ${res.email || email}`;
+            const finalEmail = res.email || email;
+            saveMainPendingOtp({ mode: 'signup', email: finalEmail, username: res.username || username, name, otpDraft: '', expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
+            if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Code sent to ${finalEmail}`;
             setMainAuthTab('signup', 'otp');
             startResendCountdown($('main-auth-resend'), 30);
-            toast(`6-digit verification code sent to ${email}`, 'success');
+            toast(`6-digit verification code sent to ${finalEmail}. Check in SPAM if still not received.`, 'success');
           } else if (mainAuthMode === 'signup' && mainAuthStep === 'otp') {
             if (!/^\d{6}$/.test(otp)) return showErr('Enter the 6-digit verification code sent to your email.');
             if (btn) { btn.disabled = true; btn.textContent = 'Verifying & Creating…'; }
@@ -2682,6 +2762,7 @@
               method: 'POST',
               body: JSON.stringify({ email, username, password, name, otp }),
             });
+            clearMainPendingOtp();
             if (res.token) localStorage.setItem('neo_owner_token', res.token);
             if ($('main-auth-pass')) $('main-auth-pass').value = '';
             if ($('main-auth-otp')) $('main-auth-otp').value = '';
@@ -2692,10 +2773,11 @@
             if (emailErr) return showErr(emailErr);
             if (btn) { btn.disabled = true; btn.textContent = 'Sending Reset Code…'; }
             await api('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+            saveMainPendingOtp({ mode: 'forgot', email, otpDraft: '', expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
             if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Reset code sent to ${email}`;
             setMainAuthTab('forgot', 'otp');
             startResendCountdown($('main-auth-resend'), 30);
-            toast(`Password reset code sent to ${email}`, 'info');
+            toast(`Password reset code sent to ${email}. Check in SPAM if still not received.`, 'info');
           } else if (mainAuthMode === 'forgot' && mainAuthStep === 'otp') {
             if (!/^\d{6}$/.test(otp)) return showErr('Enter the 6-digit reset code from your email.');
             if (!newPass || newPass.length < 4) return showErr('New password must be at least 4 characters.');
@@ -2704,6 +2786,7 @@
               method: 'POST',
               body: JSON.stringify({ email, otp, new_password: newPass }),
             });
+            clearMainPendingOtp();
             if ($('main-auth-otp')) $('main-auth-otp').value = '';
             if ($('main-auth-newpass')) $('main-auth-newpass').value = '';
             setMainAuthTab('signin', 'details');

@@ -4635,6 +4635,46 @@
     let signupStage = 'details'; // 'details' | 'otp'
     let forgotStage = 'email';   // 'email' | 'otp'
     let resendCountdownTimer = null;
+    const PENDING_OTP_KEY = 'neo_pending_otp_v1';
+
+    function savePendingOtpState(data) {
+      try {
+        sessionStorage.setItem(PENDING_OTP_KEY, JSON.stringify({
+          mode: data.mode,
+          email: data.email || '',
+          username: data.username || '',
+          name: data.name || '',
+          otpDraft: data.otpDraft || '',
+          expiresAt: data.expiresAt || (Date.now() + 600000),
+          resendUntil: data.resendUntil || (Date.now() + 30000),
+        }));
+      } catch (_) {}
+    }
+
+    function loadPendingOtpState() {
+      try {
+        const raw = sessionStorage.getItem(PENDING_OTP_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !parsed.email || !parsed.expiresAt || Date.now() >= Number(parsed.expiresAt)) {
+          sessionStorage.removeItem(PENDING_OTP_KEY);
+          return null;
+        }
+        return parsed;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function updatePendingOtpDraft(draft) {
+      const cur = loadPendingOtpState();
+      if (!cur) return;
+      savePendingOtpState({ ...cur, otpDraft: String(draft || '').slice(0, 6) });
+    }
+
+    function clearPendingOtpState() {
+      try { sessionStorage.removeItem(PENDING_OTP_KEY); } catch (_) {}
+    }
 
     const TRUSTED_DOMAINS = new Set([
       'gmail.com', 'googlemail.com',
@@ -4679,7 +4719,12 @@
     function setResendTimer(btn, sec = 30) {
       if (!btn) return;
       clearInterval(resendCountdownTimer);
-      let left = sec;
+      let left = Math.max(0, Math.ceil(Number(sec || 0)));
+      if (left <= 0) {
+        btn.disabled = false;
+        btn.textContent = 'Resend Code';
+        return;
+      }
       btn.disabled = true;
       btn.textContent = `Resend in ${left}s`;
       resendCountdownTimer = setInterval(() => {
@@ -4694,7 +4739,7 @@
       }, 1000);
     }
 
-    function setSignupStage(stage) {
+    function setSignupStage(stage, preserveOtp = false) {
       signupStage = stage === 'otp' ? 'otp' : 'details';
       const isOtp = signupStage === 'otp';
       if ($('signup-details-wrap')) $('signup-details-wrap').classList.toggle('hidden', isOtp);
@@ -4707,12 +4752,12 @@
           : '<span>Send Verification Code</span><span class="btn-arrow">&rarr;</span>';
       }
       if (isOtp && $('signup-otp-input')) {
-        $('signup-otp-input').value = '';
+        if (!preserveOtp) $('signup-otp-input').value = '';
         setTimeout(() => $('signup-otp-input')?.focus(), 60);
       }
     }
 
-    function setForgotStage(stage) {
+    function setForgotStage(stage, preserveOtp = false) {
       forgotStage = stage === 'otp' ? 'otp' : 'email';
       const isOtp = forgotStage === 'otp';
       if ($('forgot-email-group')) $('forgot-email-group').classList.toggle('hidden', isOtp);
@@ -4725,12 +4770,12 @@
           : '<span>Send Reset Code</span><span class="btn-arrow">&rarr;</span>';
       }
       if (isOtp && $('forgot-otp-input')) {
-        $('forgot-otp-input').value = '';
+        if (!preserveOtp) $('forgot-otp-input').value = '';
         setTimeout(() => $('forgot-otp-input')?.focus(), 60);
       }
     }
 
-    function switchAuthTab(mode) {
+    function switchAuthTab(mode, resetStages = true) {
       if (signinErr) signinErr.classList.add('hidden');
       if (signupErr) signupErr.classList.add('hidden');
       if (forgotErr) forgotErr.classList.add('hidden');
@@ -4741,15 +4786,46 @@
       if (formSignin) formSignin.classList.toggle('hidden', isSignup || isForgot);
       if (formSignup) formSignup.classList.toggle('hidden', !isSignup);
       if (formForgot) formForgot.classList.toggle('hidden', !isForgot);
-      if (isSignup) setSignupStage('details');
-      if (isForgot) setForgotStage('email');
+      if (resetStages) {
+        if (isSignup) setSignupStage('details');
+        if (isForgot) setForgotStage('email');
+      }
     }
 
-    if (tabSignin) tabSignin.addEventListener('click', () => switchAuthTab('signin'));
-    if (tabSignup) tabSignup.addEventListener('click', () => switchAuthTab('signup'));
-    if ($('btn-open-forgot')) $('btn-open-forgot').addEventListener('click', () => switchAuthTab('forgot'));
-    if ($('btn-back-to-signin')) $('btn-back-to-signin').addEventListener('click', () => switchAuthTab('signin'));
-    if ($('btn-edit-signup-email')) $('btn-edit-signup-email').addEventListener('click', () => setSignupStage('details'));
+    function restorePendingOtpUI() {
+      const saved = loadPendingOtpState();
+      if (!saved) return false;
+      const remSec = Math.max(0, Math.ceil((Number(saved.resendUntil || 0) - Date.now()) / 1000));
+      if (saved.mode === 'forgot') {
+        if ($('forgot-email')) $('forgot-email').value = saved.email || '';
+        if ($('forgot-otp-target')) $('forgot-otp-target').textContent = `Reset code sent to ${saved.email}`;
+        if ($('forgot-otp-input')) $('forgot-otp-input').value = saved.otpDraft || '';
+        switchAuthTab('forgot', false);
+        setForgotStage('otp', true);
+        if (remSec > 0) setResendTimer($('btn-resend-forgot-otp'), remSec);
+        return true;
+      }
+      if (saved.mode === 'signup') {
+        if ($('signup-email')) $('signup-email').value = saved.email || '';
+        if ($('signup-userid')) $('signup-userid').value = saved.username || '';
+        if ($('signup-otp-target')) $('signup-otp-target').textContent = `Code sent to ${saved.email}`;
+        if ($('signup-otp-input')) $('signup-otp-input').value = saved.otpDraft || '';
+        switchAuthTab('signup', false);
+        setSignupStage('otp', true);
+        if (remSec > 0) setResendTimer($('btn-resend-signup-otp'), remSec);
+        return true;
+      }
+      return false;
+    }
+
+    if (tabSignin) tabSignin.addEventListener('click', () => { clearPendingOtpState(); switchAuthTab('signin'); });
+    if (tabSignup) tabSignup.addEventListener('click', () => { clearPendingOtpState(); switchAuthTab('signup'); });
+    if ($('btn-open-forgot')) $('btn-open-forgot').addEventListener('click', () => { clearPendingOtpState(); switchAuthTab('forgot'); });
+    if ($('btn-back-to-signin')) $('btn-back-to-signin').addEventListener('click', () => { clearPendingOtpState(); switchAuthTab('signin'); });
+    if ($('btn-edit-signup-email')) $('btn-edit-signup-email').addEventListener('click', () => { clearPendingOtpState(); setSignupStage('details'); });
+    if ($('btn-edit-forgot-email')) $('btn-edit-forgot-email').addEventListener('click', () => { clearPendingOtpState(); setForgotStage('email'); });
+    if ($('signup-otp-input')) $('signup-otp-input').addEventListener('input', e => updatePendingOtpDraft(e.target.value));
+    if ($('forgot-otp-input')) $('forgot-otp-input').addEventListener('input', e => updatePendingOtpDraft(e.target.value));
 
     if (accBtn && accMenu) {
       accBtn.addEventListener('click', e => {
@@ -4802,6 +4878,7 @@
       updateAuthModeUI(false, '');
       renderAllPaneTradeLines(true);
       if (gateModal) {
+        clearPendingOtpState();
         switchAuthTab('signin');
         gateModal.classList.remove('hidden');
       }
@@ -4827,6 +4904,7 @@
         kotak_connected: kotakUp,
       };
       recordUserActivity();
+      clearPendingOtpState();
       closeAllOverlays();
       if (gateModal) gateModal.classList.add('hidden');
 
@@ -4868,15 +4946,17 @@
 
     if ($('btn-resend-signup-otp')) {
       $('btn-resend-signup-otp').addEventListener('click', async () => {
-        const email = ($('signup-email')?.value || '').trim().toLowerCase();
+        const email = ($('signup-email')?.value || loadPendingOtpState()?.email || '').trim().toLowerCase();
         if (!email) return;
         try {
           await api('/api/auth/resend-otp', {
             method: 'POST',
             body: JSON.stringify({ email, purpose: 'signup' }),
           });
+          const cur = loadPendingOtpState() || {};
+          savePendingOtpState({ ...cur, mode: 'signup', email, username: cur.username || ($('signup-userid')?.value || '').trim(), expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
           setResendTimer($('btn-resend-signup-otp'), 30);
-          toast(`✅ New 6-digit code sent to ${email}`);
+          toast(`✅ New 6-digit code sent to ${email}. Check in SPAM if still not received.`);
         } catch (err) {
           if (signupErr) {
             signupErr.textContent = err.message;
@@ -4886,13 +4966,36 @@
       });
     }
 
+    if ($('btn-resend-forgot-otp')) {
+      $('btn-resend-forgot-otp').addEventListener('click', async () => {
+        const email = ($('forgot-email')?.value || loadPendingOtpState()?.email || '').trim().toLowerCase();
+        if (!email) return;
+        try {
+          await api('/api/auth/resend-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email, purpose: 'reset' }),
+          });
+          const cur = loadPendingOtpState() || {};
+          savePendingOtpState({ ...cur, mode: 'forgot', email, expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
+          setResendTimer($('btn-resend-forgot-otp'), 30);
+          toast(`✅ New reset code sent to ${email}. Check in SPAM if still not received.`);
+        } catch (err) {
+          if (forgotErr) {
+            forgotErr.textContent = err.message;
+            forgotErr.classList.remove('hidden');
+          }
+        }
+      });
+    }
+
     if (formSignup) {
       formSignup.addEventListener('submit', async e => {
         e.preventDefault();
         if (signupErr) signupErr.classList.add('hidden');
-        const uid = ($('signup-userid')?.value || '').trim();
+        const saved = loadPendingOtpState();
+        const uid = (($('signup-userid')?.value || '') || (saved?.mode === 'signup' ? saved.username : '') || '').trim();
         const pwd = $('signup-password')?.value || '';
-        const email = ($('signup-email')?.value || '').trim().toLowerCase();
+        const email = (($('signup-email')?.value || '') || (saved?.mode === 'signup' ? saved.email : '') || '').trim().toLowerCase();
         const otp = ($('signup-otp-input')?.value || '').trim();
         const btn = $('btn-signup-submit');
 
@@ -4907,10 +5010,12 @@
               method: 'POST',
               body: JSON.stringify({ username: uid, password: pwd, email }),
             });
-            if ($('signup-otp-target')) $('signup-otp-target').textContent = `Code sent to ${res.email || email}`;
+            const finalEmail = res.email || email;
+            savePendingOtpState({ mode: 'signup', email: finalEmail, username: res.username || uid, otpDraft: '', expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
+            if ($('signup-otp-target')) $('signup-otp-target').textContent = `Code sent to ${finalEmail}`;
             setSignupStage('otp');
             setResendTimer($('btn-resend-signup-otp'), 30);
-            toast(`📧 6-digit verification code sent to ${email}`);
+            toast(`📧 6-digit verification code sent to ${finalEmail}. Check in SPAM if still not received.`);
           } else {
             if (!/^\d{6}$/.test(otp)) throw new Error('Enter the 6-digit verification code from your email.');
             if (btn) { btn.disabled = true; btn.textContent = 'Verifying Email...'; }
@@ -4919,6 +5024,7 @@
               body: JSON.stringify({ username: uid, password: pwd, email, otp }),
             });
             if (res && res.ok) {
+              clearPendingOtpState();
               if ($('signup-password')) $('signup-password').value = '';
               if ($('signup-otp-input')) $('signup-otp-input').value = '';
               onAuthenticatedSuccess(res);
@@ -4945,7 +5051,8 @@
       formForgot.addEventListener('submit', async e => {
         e.preventDefault();
         if (forgotErr) forgotErr.classList.add('hidden');
-        const email = ($('forgot-email')?.value || '').trim().toLowerCase();
+        const saved = loadPendingOtpState();
+        const email = (($('forgot-email')?.value || '') || (saved?.mode === 'forgot' ? saved.email : '') || '').trim().toLowerCase();
         const otp = ($('forgot-otp-input')?.value || '').trim();
         const newPw = $('forgot-newpass')?.value || '';
         const btn = $('btn-forgot-submit');
@@ -4959,9 +5066,11 @@
               method: 'POST',
               body: JSON.stringify({ email }),
             });
+            savePendingOtpState({ mode: 'forgot', email, otpDraft: '', expiresAt: Date.now() + 600000, resendUntil: Date.now() + 30000 });
             if ($('forgot-otp-target')) $('forgot-otp-target').textContent = `Reset code sent to ${email}`;
             setForgotStage('otp');
-            toast(`📧 Reset code sent to ${email}`);
+            setResendTimer($('btn-resend-forgot-otp'), 30);
+            toast(`📧 Reset code sent to ${email}. Check in SPAM if still not received.`);
           } else {
             if (!/^\d{6}$/.test(otp)) throw new Error('Enter the 6-digit reset code from your email.');
             if (!newPw || newPw.length < 4) throw new Error('New password must be at least 4 characters.');
@@ -4970,6 +5079,7 @@
               method: 'POST',
               body: JSON.stringify({ email, otp, new_password: newPw }),
             });
+            clearPendingOtpState();
             if ($('forgot-otp-input')) $('forgot-otp-input').value = '';
             if ($('forgot-newpass')) $('forgot-newpass').value = '';
             switchAuthTab('signin');
@@ -5019,13 +5129,18 @@
           currentUser = null;
           updateAuthModeUI(false, '');
           if (gateModal) {
-            switchAuthTab('signin');
+            if (!restorePendingOtpUI()) {
+              switchAuthTab('signin');
+            }
             gateModal.classList.remove('hidden');
           }
         }
       } catch (e) {
         updateAuthModeUI(false, '');
-        if (gateModal) gateModal.classList.remove('hidden');
+        if (gateModal) {
+          restorePendingOtpUI();
+          gateModal.classList.remove('hidden');
+        }
       }
     }
 
@@ -5035,7 +5150,8 @@
         const st = await api('/api/auth/session-status');
         if (!st || !st.authenticated) {
           if (isAuthenticated) handleLogout('Session signed out. Please sign in to continue.');
-          else checkSession();
+          // Never call checkSession()/switchAuthTab('signin') when already unauthenticated —
+          // switching browser <-> Gmail to read an OTP must keep the active OTP view intact!
           return;
         }
         if (!isAuthenticated || !currentUser || currentUser.username !== st.username) {
