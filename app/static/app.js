@@ -10,6 +10,10 @@
     mode: 'simulation',
     liveTradingEnabled: false,
     authenticated: false,
+    siteAuthenticated: false,
+    isAdmin: false,
+    username: null,
+    marketMode: 'indian',
     kotakEgressIp: null,
     kotakSessionIp: null,
     currentSymbol: 'NIFTY',
@@ -146,14 +150,20 @@
     if (cloudDemoMode) return demoApi(path, options);
     const apiBase = (window.__API_BASE__ || localStorage.getItem('neo_api_url') || '').replace(/\/$/, '');
     const url = apiBase ? `${apiBase}${path}` : path;
+    const savedTok = localStorage.getItem('neo_owner_token');
+    const authHeaders = savedTok ? { Authorization: `Bearer ${savedTok}`, 'X-Owner-Token': savedTok } : {};
     const response = await fetch(url, {
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      credentials: 'same-origin',
       ...options,
+      headers: { 'Content-Type': 'application/json', ...authHeaders, ...(options.headers || {}) },
     });
     let data = {};
     try { data = await response.json(); } catch (_) { data = {}; }
     if (!response.ok) {
+      if (response.status === 401 && !path.startsWith('/api/auth/')) {
+        if (typeof lockMainSite === 'function') lockMainSite();
+      }
       const detail = typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
       if (response.status === 404 && path.startsWith('/api/')) {
         throw new Error('Local API route not found (404). Restart the backend service.');
@@ -278,15 +288,20 @@
     } else {
       $('cloud-demo-banner').classList.add('hidden');
     }
-    $('connect-btn').classList.remove('hidden');
+    const canSeeConnect = state.siteAuthenticated && state.isAdmin;
+    $('connect-btn').classList.toggle('hidden', !canSeeConnect);
 
     $('connect-btn').title = state.authenticated ? 'Disconnect Kotak Neo' : 'Connect Kotak Neo';
     $('connect-btn').setAttribute('aria-label', state.authenticated ? 'Disconnect Kotak Neo' : 'Connect Kotak Neo');
-    $('connection-footer').textContent = state.authenticated
-      ? `Kotak API active · IP ${state.kotakEgressIp || 'verified'}`
-      : (state.liveTradingEnabled
-        ? (state.kotakEgressIp ? `API session needs login · last IP ${state.kotakEgressIp}` : 'Live gate enabled · not authenticated')
-        : 'Local simulation mode');
+    $('connection-footer').textContent = !state.siteAuthenticated
+      ? 'Sign in required'
+      : (state.isAdmin
+        ? (state.authenticated
+          ? `Kotak API active · IP ${state.kotakEgressIp || 'verified'}`
+          : (state.liveTradingEnabled
+            ? (state.kotakEgressIp ? `API session needs login · last IP ${state.kotakEgressIp}` : 'Live gate enabled · not authenticated')
+            : 'Local simulation mode'))
+        : `Paper account @${state.username || 'trader'} · Live quotes active`);
     $('connect-btn').style.color = state.authenticated ? '#1b732d' : '';
   }
 
@@ -968,6 +983,7 @@
   }
 
   async function refreshLimits() {
+    if (!state.siteAuthenticated) return;
     try {
       const data = await api('/api/limits');
       const funds = Number(data.available_cash ?? data.total_margin ?? 0);
@@ -981,6 +997,10 @@
   }
 
   async function loadSltpRules() {
+    if (!state.siteAuthenticated) {
+      state.activeSltpRules = [];
+      return;
+    }
     try {
       const data = await api('/api/sltp');
       state.activeSltpRules = Array.isArray(data) ? data : (data.rules || []);
@@ -1316,6 +1336,10 @@
   }
 
   async function loadOrders() {
+    if (!state.siteAuthenticated) {
+      renderOrders([]);
+      return;
+    }
     if (cloudDemoMode) {
       renderOrders(state.demoOrders);
       return;
@@ -1358,7 +1382,18 @@
   }
 
   async function loadPositions() {
-    $('positions-note').textContent = 'Refreshing Kotak positions and quotes…';
+    if (!state.siteAuthenticated) {
+      if ($('positions-note')) $('positions-note').textContent = 'Sign in required to view positions and P&L.';
+      if ($('today-pnl')) $('today-pnl').textContent = '—';
+      if ($('total-net-pnl')) $('total-net-pnl').textContent = '—';
+      if ($('header-pnl-value')) { $('header-pnl-value').textContent = '—'; $('header-pnl-value').className = 'header-pnl-value'; }
+      if ($('header-net-pnl-value')) { $('header-net-pnl-value').textContent = '—'; $('header-net-pnl-value').className = 'header-pnl-value'; }
+      if ($('total-mtm')) $('total-mtm').textContent = '—';
+      if ($('total-position-pnl')) $('total-position-pnl').textContent = '—';
+      if ($('positions-list')) $('positions-list').replaceChildren();
+      return;
+    }
+    $('positions-note').textContent = 'Refreshing positions and quotes…';
     if (cloudDemoMode) {
       $('positions-note').textContent = 'Live positions and current P&L require the local Kotak backend.';
       if ($('today-pnl')) $('today-pnl').textContent = '—';
@@ -1572,6 +1607,10 @@
 
   async function loadAuditLogs() {
     const list = $('audit-list');
+    if (!state.siteAuthenticated) {
+      if (list) list.replaceChildren();
+      return;
+    }
     try {
       const logs = await api('/api/audit?limit=40');
       if (!logs || !logs.length) {
@@ -1665,29 +1704,31 @@
     try {
       const data = await api('/api/status');
       state.liveTradingEnabled = !!data.live_trading_enabled;
-      state.authenticated = !!data.broker_authenticated;
-      state.kotakEgressIp = data.kotak_egress_ip || null;
-      state.kotakSessionIp = data.kotak_session_ip || null;
-      state.serverEgressIp = data.server_egress_ip || null;
+      state.authenticated = !!(state.siteAuthenticated && state.isAdmin && data.broker_authenticated);
+      state.kotakEgressIp = (state.siteAuthenticated && state.isAdmin) ? (data.kotak_egress_ip || null) : null;
+      state.kotakSessionIp = (state.siteAuthenticated && state.isAdmin) ? (data.kotak_session_ip || null) : null;
+      state.serverEgressIp = (state.siteAuthenticated && state.isAdmin) ? (data.server_egress_ip || null) : null;
       const modalIp = $('modal-egress-ip');
-      if (modalIp) {
+      if (modalIp && state.isAdmin) {
         modalIp.textContent = state.kotakEgressIp || state.serverEgressIp || 'Fetching...';
       }
-      api('/api/chart/upstox-status').then(res => {
-        const uStatus = $('modal-upstox-status');
-        if (uStatus) {
-          if (res.token_configured) {
-            uStatus.textContent = `Active (${res.token_preview})`;
-            uStatus.style.background = 'rgba(16,185,129,0.25)';
-            uStatus.style.color = '#34d399';
-          } else {
-            uStatus.textContent = 'Not Configured';
-            uStatus.style.background = 'rgba(239,68,68,0.25)';
-            uStatus.style.color = '#f87171';
+      if (state.siteAuthenticated && state.isAdmin) {
+        api('/api/chart/upstox-status').then(res => {
+          const uStatus = $('modal-upstox-status');
+          if (uStatus) {
+            if (res.token_configured) {
+              uStatus.textContent = `Active (${res.token_preview})`;
+              uStatus.style.background = 'rgba(16,185,129,0.25)';
+              uStatus.style.color = '#34d399';
+            } else {
+              uStatus.textContent = 'Not Configured';
+              uStatus.style.background = 'rgba(239,68,68,0.25)';
+              uStatus.style.color = '#f87171';
+            }
           }
-        }
-      }).catch(() => {});
-      state.mode = data.mode || 'simulation';
+        }).catch(() => {});
+      }
+      state.mode = (state.siteAuthenticated && state.isAdmin) ? (data.mode || 'simulation') : 'simulation';
       updateModeUI();
 
       if (data.selected_symbol && data.selected_symbol.updated_at && data.selected_symbol.updated_at !== state.remoteSymbolTimestamp) {
@@ -1712,6 +1753,10 @@
   }
 
   function openConnect() {
+    if (!state.siteAuthenticated || !state.isAdmin) {
+      toast('Only Terminal Admin can connect live Kotak Neo API.', 'warning');
+      return;
+    }
     if (state.authenticated) {
       api('/api/auth/logout', { method: 'POST', body: '{}' })
         .then(() => {
@@ -1757,6 +1802,9 @@
       updateModeUI();
       toast(result.message || 'Connected to Kotak Neo.', 'success');
       loadOrders();
+      loadPositions();
+      refreshLimits();
+      maybeRefreshPnl();
       loadIndexQuotes();
     } catch (error) {
       toast(error.message, 'error', 6000);
@@ -2147,7 +2195,7 @@
   // --- Header P&L Background Poller ---
   let lastPnlPoll = 0;
   async function maybeRefreshPnl() {
-    if (!state.authenticated || cloudDemoMode) return;
+    if (!state.siteAuthenticated || cloudDemoMode) return;
     const now = Date.now();
     if (now - lastPnlPoll < 4000) return;
     lastPnlPoll = now;
@@ -2341,13 +2389,182 @@
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      openReview(state.side);
+      if (state.siteAuthenticated) openReview(state.side);
     }
     if (e.key === 'Escape') {
       $('review-modal').classList.add('hidden');
       $('connect-modal').classList.add('hidden');
+      if (state.siteAuthenticated && $('main-auth-modal')) {
+        $('main-auth-modal').classList.add('hidden');
+      }
     }
   });
+
+  // ========================================================================
+  // Shared Gatekeeper Session Sync across / and /chart
+  // ========================================================================
+  let mainAuthMode = 'signin';
+
+  function closeMainModals() {
+    if ($('review-modal')) $('review-modal').classList.add('hidden');
+    if ($('connect-modal')) $('connect-modal').classList.add('hidden');
+  }
+
+  function resetSensitiveMainUI() {
+    state.authenticated = false;
+    state.kotakEgressIp = null;
+    state.kotakSessionIp = null;
+    state.serverEgressIp = null;
+    state.availableFunds = null;
+    state.activeSltpRules = [];
+    if ($('header-pnl-value')) {
+      $('header-pnl-value').textContent = '—';
+      $('header-pnl-value').className = 'header-pnl-value';
+    }
+    if ($('header-net-pnl-value')) {
+      $('header-net-pnl-value').textContent = '—';
+      $('header-net-pnl-value').className = 'header-pnl-value';
+    }
+    if ($('today-pnl')) { $('today-pnl').textContent = '—'; $('today-pnl').className = 'pnl-primary-value'; }
+    if ($('total-net-pnl')) { $('total-net-pnl').textContent = '—'; $('total-net-pnl').className = 'pnl-primary-value'; }
+    if ($('total-mtm')) { $('total-mtm').textContent = '—'; $('total-mtm').className = ''; }
+    if ($('total-position-pnl')) { $('total-position-pnl').textContent = '—'; $('total-position-pnl').className = ''; }
+    if ($('orders-list')) $('orders-list').replaceChildren();
+    if ($('positions-list')) $('positions-list').replaceChildren();
+    if ($('audit-list')) $('audit-list').replaceChildren();
+    if ($('scalper-funds-pill')) $('scalper-funds-pill').textContent = 'Funds: —';
+    if ($('charges-card')) $('charges-card').classList.add('hidden');
+  }
+
+  function lockMainSite() {
+    state.siteAuthenticated = false;
+    state.isAdmin = false;
+    state.username = null;
+    document.body.classList.add('site-locked');
+    closeMainModals();
+    resetSensitiveMainUI();
+    if ($('main-user-pill')) $('main-user-pill').classList.add('hidden');
+    if ($('main-signin-trigger')) $('main-signin-trigger').classList.remove('hidden');
+    if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
+    updateModeUI();
+  }
+
+  function applyMainSession(sess, reloadData = true) {
+    if (!sess || !sess.authenticated) {
+      lockMainSite();
+      return false;
+    }
+    const changedUser = !state.siteAuthenticated || state.username !== sess.username;
+    state.siteAuthenticated = true;
+    state.isAdmin = !!(sess.is_admin || sess.is_owner);
+    state.username = sess.username || 'trader';
+    state.marketMode = sess.market_mode || 'indian';
+    state.authenticated = !!(state.isAdmin && sess.broker_authenticated);
+
+    document.body.classList.remove('site-locked');
+    if ($('main-auth-modal')) $('main-auth-modal').classList.add('hidden');
+    if ($('main-signin-trigger')) $('main-signin-trigger').classList.add('hidden');
+    if ($('main-user-pill')) {
+      $('main-user-pill').classList.remove('hidden');
+      $('main-user-pill').classList.toggle('is-admin', state.isAdmin);
+    }
+    if ($('main-user-name')) {
+      $('main-user-name').textContent = `@${state.username}${state.isAdmin ? ' · ADMIN' : ''}`;
+    }
+    updateModeUI();
+
+    if (reloadData || changedUser) {
+      refreshStatus();
+      refreshLimits();
+      loadOrders();
+      loadPositions();
+      loadSltpRules();
+      maybeRefreshPnl();
+      if (state.activityTab === 'audit') loadAuditLogs();
+    }
+    return true;
+  }
+
+  async function syncMainAuthSession(reloadData = false) {
+    if (cloudDemoMode) {
+      document.body.classList.remove('site-locked');
+      if ($('main-auth-modal')) $('main-auth-modal').classList.add('hidden');
+      return true;
+    }
+    try {
+      const sess = await api('/api/auth/session-status');
+      return applyMainSession(sess, reloadData);
+    } catch (_) {
+      lockMainSite();
+      return false;
+    }
+  }
+
+  function setMainAuthTab(mode) {
+    mainAuthMode = mode === 'signup' ? 'signup' : 'signin';
+    const isUp = mainAuthMode === 'signup';
+    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').classList.toggle('active', !isUp);
+    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').classList.toggle('active', isUp);
+    if ($('main-auth-name-wrap')) $('main-auth-name-wrap').style.display = isUp ? 'flex' : 'none';
+    if ($('main-auth-submit')) $('main-auth-submit').textContent = isUp ? 'Create Account' : 'Sign In';
+    if ($('main-auth-pass')) $('main-auth-pass').setAttribute('autocomplete', isUp ? 'new-password' : 'current-password');
+    if ($('main-auth-error')) { $('main-auth-error').classList.add('hidden'); $('main-auth-error').textContent = ''; }
+  }
+
+  async function handleMainLogout() {
+    try { await api('/api/auth/owner-logout', { method: 'POST', body: '{}' }); } catch (_) {}
+    localStorage.removeItem('neo_owner_token');
+    lockMainSite();
+    toast('Signed out cleanly across terminal.', 'info');
+  }
+
+  function wireMainAuthModal() {
+    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').addEventListener('click', () => setMainAuthTab('signin'));
+    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').addEventListener('click', () => setMainAuthTab('signup'));
+    if ($('main-logout-btn')) $('main-logout-btn').addEventListener('click', handleMainLogout);
+    if ($('main-signin-trigger')) $('main-signin-trigger').addEventListener('click', () => {
+      if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
+    });
+
+    const form = $('main-auth-form');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = ($('main-auth-user')?.value || '').trim();
+        const password = $('main-auth-pass')?.value || '';
+        const name = ($('main-auth-name')?.value || '').trim();
+        const errBox = $('main-auth-error');
+        const btn = $('main-auth-submit');
+        if (errBox) { errBox.classList.add('hidden'); errBox.textContent = ''; }
+        if (!username || !password) {
+          if (errBox) { errBox.textContent = 'Enter your User ID and password.'; errBox.classList.remove('hidden'); }
+          return;
+        }
+        if (btn) { btn.disabled = true; btn.textContent = mainAuthMode === 'signup' ? 'Creating Account…' : 'Signing In…'; }
+        try {
+          const endpoint = mainAuthMode === 'signup' ? '/api/auth/signup' : '/api/auth/signin';
+          const body = mainAuthMode === 'signup' ? { username, password, name } : { username, password };
+          const res = await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+          if (res.token) localStorage.setItem('neo_owner_token', res.token);
+          if ($('main-auth-pass')) $('main-auth-pass').value = '';
+          await syncMainAuthSession(true);
+          toast(`Signed in as @${res.username}`, 'success');
+        } catch (err) {
+          if (errBox) { errBox.textContent = cleanErrorMessage(err.message); errBox.classList.remove('hidden'); }
+        } finally {
+          if (btn) { btn.disabled = false; btn.textContent = mainAuthMode === 'signup' ? 'Create Account' : 'Sign In'; }
+        }
+      });
+    }
+
+    // Cross-tab & back/forward cache session sync between / and /chart
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === 'neo_owner_token') syncMainAuthSession(true);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') syncMainAuthSession(false);
+    });
+  }
 
   // Initial State Setup
   updateOrderTypeFields();
@@ -2358,25 +2575,24 @@
   if ($('validity-select')) $('validity-select').value = 'DAY';
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);
   updateTradingViewSymbol('NIFTY');
-  refreshLimits();
-  loadSltpRules();
 
   setupIndexTickerSlide();
   setupMoversControls();
+  wireMainAuthModal();
+  lockMainSite();
 
   requestLanAccess().then(() => {
-    refreshStatus();
-    loadOrders();
-    if (state.authenticated) loadPositions();
+    syncMainAuthSession(true);
   });
   loadIndexQuotes();
 
-  // Background Polls
-  setInterval(refreshStatus, 900);
-  setInterval(loadOrders, 5000);
-  setInterval(loadSltpRules, 5000);
+  // Background Polls (authenticated data gated strictly on siteAuthenticated)
+  setInterval(() => { if (state.siteAuthenticated) refreshStatus(); }, 1800);
+  setInterval(() => { if (state.siteAuthenticated) loadOrders(); }, 5000);
+  setInterval(() => { if (state.siteAuthenticated) loadSltpRules(); }, 5000);
   setInterval(loadIndexQuotes, 5000);
   setInterval(() => {
+    if (!state.siteAuthenticated) return;
     if (state.activityTab === 'positions') {
       loadPositions();
     } else {

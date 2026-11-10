@@ -21,8 +21,8 @@
   --ex-buy-hover: #1976d2;
   --bull: #00b074;
   --bear: #ff4757;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'DM Mono', monospace;
+  --font-sans: 'DM Sans', 'Trebuchet MS', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * {
@@ -586,7 +586,24 @@ body.ex-theme-dark {
 
 .td-sym-wrap {
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.td-sym-text {
+  display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+
+.tv-sym-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
 }
 
 .sym-main {
@@ -1712,11 +1729,16 @@ body.ex-theme-dark {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(5px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: 5000;
+}
+
+#modal-gatekeeper,
+#modal-market-choice {
+  z-index: 6000;
 }
 
 .ex-modal-card {
@@ -2100,7 +2122,7 @@ body.ex-theme-dark {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: 5100;
 }
 
 .oc-modal-card {
@@ -2577,14 +2599,61 @@ body.ex-theme-dark {
 .btn-toggle-mask:hover {
   color: #fff;
 }
-.keys-field-group input[type="password"] {
+.keys-field-group input[type="password"],
+.keys-field-group input[type="text"],
+.keys-field-group input[type="number"] {
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border: 1px solid var(--border-hover);
+  border-radius: 7px;
+  padding: 10px 12px;
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;
+  font-family: var(--font-sans);
   outline: none;
+  width: 100%;
+  transition: border-color 0.15s ease;
+}
+
+.keys-field-group input:focus {
+  border-color: var(--accent-gold);
+}
+
+.btn-secondary-choice {
+  background: #1d232e;
+  color: #e2e8f0;
+  border: 1px solid #2f384a;
+  padding: 9px 15px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-secondary-choice:hover {
+  background: #273040;
+  color: #fff;
+}
+
+.btn-owner-submit {
+  background: var(--accent-gold);
+  color: #0e1117;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-owner-submit:hover {
+  filter: brightness(1.07);
+}
+
+.m-acc-balance-val.is-status-msg {
+  font-size: 14px !important;
+  line-height: 1.35 !important;
+  color: #ff6b7a !important;
+  font-weight: 700 !important;
 }
 .profile-input-wrap input {
   background: var(--bg-surface);
@@ -3302,7 +3371,10 @@ body.ex-theme-dark {
   }
 
   .m-card-icon {
-    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
 
   .m-card-sym {
@@ -3613,14 +3685,14 @@ body.ex-theme-dark {
   }
 
   .m-ti-icon {
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
     border-radius: 50%;
-    background: #202735;
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
+    flex-shrink: 0;
   }
 
   .m-ti-names {
@@ -4248,12 +4320,14 @@ body.ex-theme-dark {
   position: absolute;
   left: 0;
   right: 0;
-  height: 18px;
-  margin-top: -9px;
+  height: 20px;
+  margin-top: -10px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   pointer-events: none;
+  z-index: 12;
+  transition: opacity 0.12s ease;
 }
 
 .trade-price-line .tpl-line {
@@ -4263,7 +4337,30 @@ body.ex-theme-dark {
   top: 50%;
   height: 0;
   border-top: 1.5px dashed #3b82f6;
+  pointer-events: none;
 }
+
+.trade-price-line .tpl-hit-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  bottom: 2px;
+  cursor: ns-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.trade-price-line.is-dragging {
+  z-index: 30;
+}
+
+.trade-price-line.is-dragging .tpl-line {
+  border-top-width: 2.5px;
+  border-top-style: solid;
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.45));
+}
+
 .trade-price-line.tpl-entry .tpl-line {
   border-top: 1.5px solid #2962ff;
 }
@@ -4276,44 +4373,177 @@ body.ex-theme-dark {
 
 .tpl-badge-group {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   gap: 0;
   margin-right: 10px;
-  border-radius: 4px;
+  border-radius: 5px;
   overflow: hidden;
   pointer-events: auto;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   font-weight: 700;
   touch-action: none;
 }
 
 .tpl-drag-handle {
-  padding: 2px 7px;
+  padding: 3px 8px;
   cursor: ns-resize;
   color: #fff;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   user-select: none;
+  touch-action: none;
 }
 .trade-price-line.tpl-entry .tpl-drag-handle { background: #2962ff; cursor: default; }
 .trade-price-line.tpl-sl .tpl-drag-handle { background: #d92d3a; }
 .trade-price-line.tpl-tp .tpl-drag-handle { background: #089981; }
+
+.tpl-drag-quick {
+  cursor: ns-resize;
+  touch-action: none;
+  font-weight: 800;
+}
+.tpl-drag-quick.tp-chip { color: #34d399; }
+.tpl-drag-quick.sl-chip { color: #fb7185; }
 
 .tpl-action-chip {
   background: #1c222e;
   color: #eaecef;
   border: none;
   border-left: 1px solid rgba(255, 255, 255, 0.16);
-  padding: 2px 6px;
+  padding: 3px 7px;
   font-size: 10px;
   font-weight: 800;
   cursor: pointer;
 }
 .tpl-action-chip:hover { background: #2e374b; color: #fff; }
 .tpl-action-chip.close-x { color: #ff8a93; }
+
+/* ==========================================================================
+   Kotak Auth Badges, Auth Lock & Tactile Micro-Animations
+   ========================================================================== */
+body.auth-locked .ex-header,
+body.auth-locked .ex-workspace,
+body.auth-locked .ex-footer,
+body.auth-locked .mobile-trade-dock,
+body.auth-locked .mobile-views-wrapper,
+body.auth-locked .mobile-nav-bar {
+  pointer-events: none !important;
+  user-select: none;
+  filter: blur(5px);
+}
+
+.kotak-auth-pill {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 71, 87, 0.14);
+  color: #ff6b7a;
+  border: 1px solid rgba(255, 71, 87, 0.3);
+}
+
+.kotak-auth-pill.connected {
+  background: rgba(0, 176, 116, 0.16);
+  color: #2ee59d;
+  border-color: rgba(0, 176, 116, 0.35);
+}
+
+.m-acc-badge.kotak-auth {
+  background: rgba(255, 71, 87, 0.14);
+  color: #ff6b7a;
+  border: 1px solid rgba(255, 71, 87, 0.3);
+}
+
+.m-acc-badge.kotak-auth.connected {
+  background: rgba(0, 176, 116, 0.16);
+  color: #2ee59d;
+  border-color: rgba(0, 176, 116, 0.35);
+}
+
+.kotak-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kotak-status-banner.connected {
+  background: rgba(0, 176, 116, 0.14);
+  color: #2ee59d;
+  border: 1px solid rgba(0, 176, 116, 0.35);
+}
+
+.kotak-status-banner.disconnected {
+  background: rgba(255, 183, 3, 0.12);
+  color: #ffd166;
+  border: 1px solid rgba(255, 183, 3, 0.32);
+}
+
+.btn-mini-disconnect {
+  border: 1px solid rgba(255, 71, 87, 0.45);
+  background: rgba(255, 71, 87, 0.16);
+  color: #ff808b;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Tactile Press & Navigation Transitions */
+button,
+.ex-tab,
+.ex-inst-row,
+.m-trade-item,
+.m-order-card,
+.m-quick-card,
+.m-profile-clickable-row,
+.mobile-nav-item,
+.oc-row td.oc-clickable,
+.quick-search-item,
+.acc-menu-item {
+  transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+button:active:not(:disabled),
+.ex-tab:active,
+.ex-inst-row:active,
+.m-trade-item:active,
+.m-quick-card:active,
+.m-profile-clickable-row:active,
+.mobile-nav-item:active,
+.quick-search-item:active,
+.acc-menu-item:active,
+.m-action-circle-btn:active {
+  transform: scale(0.95) !important;
+  opacity: 0.92;
+}
+
+.m-acc-balance-val,
+.m-ti-price,
+.m-card-pnl,
+.m-card-ltp,
+.ex-acc-balance,
+.btn-price-bid,
+.btn-price-ask,
+.btn-sell-big,
+.btn-buy-big,
+.m-dock-btn {
+  font-variant-numeric: tabular-nums;
+}
 

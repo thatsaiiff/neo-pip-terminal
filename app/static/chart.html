@@ -7,10 +7,10 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness5">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-tv1">
 </head>
-<body class="ex-theme-dark">
+<body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
   <header class="ex-header">
     <div class="ex-header-left">
@@ -71,6 +71,7 @@
           <div class="acc-menu-mode-info">
             <span id="menu-mode-title">Paper Trading Account</span>
             <small id="menu-mode-sub">Isolated virtual portfolio active</small>
+            <div id="menu-kotak-status-badge" class="kotak-auth-pill admin-only-ctrl hidden">Kotak Neo: Not Authenticated</div>
           </div>
           <div class="acc-menu-divider"></div>
           <button type="button" id="btn-switch-market-menu" class="acc-menu-item">
@@ -571,7 +572,7 @@
     <aside class="ex-order-panel" id="ex-order-panel">
       <div class="order-panel-header">
         <div class="op-title-wrap">
-          <span class="op-sym-icon">🪙</span>
+          <span class="op-sym-icon" id="op-sym-icon">📈</span>
           <span class="op-sym-name" id="op-sym-name">NIFTY 25000 CE</span>
         </div>
         <button type="button" id="btn-close-order-panel" class="op-close-btn" title="Close Ticket">✕</button>
@@ -796,12 +797,12 @@
               <span class="m-acc-name">STANDARD</span>
               <span class="m-acc-id" id="m-acc-id"># 472963350</span>
             </div>
-            <button type="button" class="m-acc-cog" id="m-btn-acc-settings" title="Settings">⚙</button>
+            <button type="button" class="m-acc-cog" id="m-btn-acc-settings" title="Kotak Neo Auth &amp; Settings">⚙</button>
           </div>
 
           <div class="m-acc-badges">
             <span class="m-acc-badge demo" id="m-acc-badge-demo">Demo</span>
-            <span class="m-acc-badge">Kotak Neo</span>
+            <span class="m-acc-badge kotak-auth admin-only-ctrl hidden" id="m-acc-badge-kotak">Kotak: Not Auth</span>
             <span class="m-acc-badge">Standard</span>
           </div>
 
@@ -1207,6 +1208,10 @@
         <button type="button" id="btn-close-kotak-modal" class="modal-close-btn">✕</button>
       </div>
       <form id="kotak-connect-form" class="keys-modal-body">
+        <div id="kotak-modal-status-banner" class="kotak-status-banner disconnected">
+          <span id="kotak-modal-status-text">Kotak Neo: Not Authenticated</span>
+          <button type="button" id="btn-kotak-disconnect" class="btn-mini-disconnect hidden">Disconnect</button>
+        </div>
         <p class="keys-prompt-text">
           Enter your Kotak Neo 6-digit authenticator TOTP and MPIN to unlock real live order execution &amp; portfolio reporting.
         </p>
@@ -1559,6 +1564,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-exness5"></script>
+  <script src="/static/chart.js?v=20261110-tv1"></script>
 </body>
 </html>

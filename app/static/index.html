@@ -9,9 +9,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261110-chartbtn">
+  <link rel="stylesheet" href="/static/styles.css?v=20261110-auth2">
 </head>
-<body>
+<body class="site-locked">
   <div id="app-shell">
     <header class="topbar">
       <div class="brand-group">
@@ -35,6 +35,12 @@
       </div>
 
       <div class="top-actions">
+        <div id="main-user-pill" class="main-user-pill hidden" title="Signed in account">
+          <span class="main-user-dot"></span>
+          <span id="main-user-name">@user</span>
+          <button id="main-logout-btn" type="button" class="main-logout-btn" title="Sign Out">Sign Out</button>
+        </div>
+        <button id="main-signin-trigger" type="button" class="pip-button" title="Sign In">Sign In</button>
         <span id="ip-pill" class="ip-pill hidden" title="Broker API egress IP">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span id="ip-text">—</span>
@@ -49,7 +55,7 @@
           <span>Trade on Chart</span>
           <span class="chart-btn-badge">PRO</span>
         </a>
-        <button id="connect-btn" class="icon-button" title="Connect Kotak Neo" aria-label="Connect Kotak Neo">
+        <button id="connect-btn" class="icon-button hidden" title="Connect Kotak Neo" aria-label="Connect Kotak Neo">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
           </svg>
@@ -588,7 +594,47 @@
     </div>
   </div>
 
+  <!-- Account Sign In / Create Account Gatekeeper Modal -->
+  <div id="main-auth-modal" class="modal-backdrop auth-gate-backdrop" role="dialog" aria-modal="true" aria-labelledby="main-auth-title">
+    <div class="modal-card main-auth-card">
+      <div class="modal-top">
+        <span class="modal-label">TERMINAL ACCESS</span>
+        <span class="main-auth-shield">🔒 Encrypted Session</span>
+      </div>
+      <div class="main-auth-brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div>
+          <h2 id="main-auth-title">Neo PIP Terminal<span class="title-dot">.</span></h2>
+          <p class="modal-description" style="margin:0;">Sign in to access your isolated portfolio, live P&amp;L, and order execution.</p>
+        </div>
+      </div>
+
+      <div class="main-auth-tabs" role="tablist">
+        <button id="main-auth-tab-signin" type="button" class="main-auth-tab active" data-auth-mode="signin">Sign In</button>
+        <button id="main-auth-tab-signup" type="button" class="main-auth-tab" data-auth-mode="signup">Create Account</button>
+      </div>
+
+      <form id="main-auth-form" class="main-auth-form" autocomplete="on">
+        <label class="field" id="main-auth-name-wrap" style="display:none;">
+          <span>Full Name <small style="font-weight:400;color:var(--ink-muted);">(optional)</small></span>
+          <input id="main-auth-name" type="text" placeholder="Your name" autocomplete="name">
+        </label>
+        <label class="field">
+          <span>User ID</span>
+          <input id="main-auth-user" type="text" placeholder="Enter your user ID" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="main-auth-pass" type="password" placeholder="••••••••" autocomplete="current-password" required>
+        </label>
+        <div id="main-auth-error" class="main-auth-error hidden"></div>
+        <button id="main-auth-submit" type="submit" class="confirm-order-button" style="width:100%;height:42px;margin-top:4px;">Sign In</button>
+      </form>
+      <p class="modal-footnote" style="margin-top:12px;">Your session stays synchronized cleanly across both Trading Ticket (<code>/</code>) and Advanced Charts (<code>/chart</code>).</p>
+    </div>
+  </div>
+
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/app.js?v=20261107-1" defer></script>
+  <script src="/static/app.js?v=20261110-auth2" defer></script>
 </body>
 </html>

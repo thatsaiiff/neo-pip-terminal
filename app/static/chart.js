@@ -47,6 +47,105 @@
   let activeSltpRules = [];
   let updateMobileOrdersFn = null;
   let _lastSltpTickMs = 0;
+  let _isDraggingTradeLine = false;
+
+  function closeAllOverlays(exceptId = null) {
+    [
+      'modal-kotak-connect',
+      'modal-admin-analytics',
+      'modal-setup-guide',
+      'modal-market-choice',
+      'option-chain-modal',
+      'token-modal',
+      'modal-api-keys',
+      'modal-guest-profile',
+    ].forEach(id => {
+      if (id !== exceptId && $(id)) $(id).classList.add('hidden');
+    });
+    if (exceptId !== 'modal-gatekeeper' && isAuthenticated && $('modal-gatekeeper')) {
+      $('modal-gatekeeper').classList.add('hidden');
+    }
+    [
+      'ex-account-menu',
+      'indicators-menu',
+      'layout-dropdown',
+      'quick-tab-search-popup',
+      'ex-inst-search-results',
+      'chart-plus-menu',
+    ].forEach(id => {
+      if (id !== exceptId && $(id)) $(id).classList.add('hidden');
+    });
+  }
+
+  function _svgCurrencyFlag(code) {
+    if (code === 'US') {
+      return '<rect width="24" height="24" fill="#1d4ed8"/><path d="M0 5h24M0 10h24M0 15h24M0 20h24" stroke="#ef4444" stroke-width="2.2"/><rect width="11" height="12" fill="#1e3a8a"/><circle cx="3.5" cy="3.5" r="1" fill="#fff"/><circle cx="7.5" cy="3.5" r="1" fill="#fff"/><circle cx="5.5" cy="6.5" r="1" fill="#fff"/><circle cx="3.5" cy="9" r="1" fill="#fff"/><circle cx="7.5" cy="9" r="1" fill="#fff"/>';
+    }
+    if (code === 'EU') {
+      return '<rect width="24" height="24" fill="#1d4ed8"/><circle cx="12" cy="12" r="6" fill="none" stroke="#facc15" stroke-width="2" stroke-dasharray="1.5 2.4"/>';
+    }
+    if (code === 'GB') {
+      return '<rect width="24" height="24" fill="#1e3a8a"/><path d="M0 0L24 24M24 0L0 24" stroke="#fff" stroke-width="4"/><path d="M0 0L24 24M24 0L0 24" stroke="#ef4444" stroke-width="2"/><path d="M12 0v24M0 12h24" stroke="#fff" stroke-width="6"/><path d="M12 0v24M0 12h24" stroke="#ef4444" stroke-width="3.5"/>';
+    }
+    if (code === 'JP') {
+      return '<rect width="24" height="24" fill="#f8fafc"/><circle cx="12" cy="12" r="5.5" fill="#dc2626"/>';
+    }
+    if (code === 'AU') {
+      return '<rect width="24" height="24" fill="#1e3a8a"/><path d="M0 0h11v11H0z" fill="#1d4ed8"/><path d="M5.5 0v11M0 5.5h11" stroke="#ef4444" stroke-width="2.5"/><circle cx="18" cy="7" r="1.5" fill="#fff"/><circle cx="17" cy="17" r="2" fill="#fff"/>';
+    }
+    return '<rect width="24" height="24" fill="#334155"/>';
+  }
+
+  function getInstrumentIconHtml(sym, size = 24) {
+    const raw = String(sym || '').trim().toUpperCase();
+    const fx = normFxSym(raw);
+    const s = size;
+    const uid = Math.random().toString(36).slice(2, 7);
+
+    if (fx === 'BTCUSD' || fx === 'BTC') {
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 24 24" width="${s}" height="${s}"><circle cx="12" cy="12" r="11" fill="#f7931a"/><path d="M13.6 10.9c1.1-.3 1.7-1 1.5-2.1-.2-1.2-1.1-1.6-2.4-1.8V5.5h-1v1.4h-.8V5.5h-1v1.4H8.1v1.2h.7c.4 0 .6.2.6.5v6.8c0 .3-.1.5-.5.5h-.8v1.3h1.8v1.4h1v-1.4h.8v1.4h1v-1.4c1.9-.1 3.1-.7 3.3-2.3.1-1.2-.5-1.9-1.4-2.2zm-2.7-2.6h.8c.9 0 1.4.3 1.4 1s-.5 1-1.4 1h-.8v-2zm1.1 5.6h-1.1v-2.2h1.1c1 0 1.6.3 1.6 1.1s-.6 1.1-1.6 1.1z" fill="#fff"/></svg></span>`;
+    }
+    if (fx === 'ETHUSD' || fx === 'ETH') {
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 24 24" width="${s}" height="${s}"><circle cx="12" cy="12" r="11" fill="#627eea"/><path d="M12 4.5l4.7 7.6L12 14.9l-4.7-2.8L12 4.5zm0 11.4l4.7-2.7L12 19.5l-4.7-6.3L12 15.9z" fill="#fff"/></svg></span>`;
+    }
+    if (fx === 'XAUUSD' || fx === 'XAGUSD') {
+      const isGold = fx === 'XAUUSD';
+      const c1 = isGold ? '#f59e0b' : '#94a3b8';
+      const c2 = isGold ? '#fde68a' : '#e2e8f0';
+      const c3 = isGold ? '#92400e' : '#334155';
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 28 24" width="${Math.round(s * 1.16)}" height="${s}"><defs><clipPath id="cp_us_${uid}"><circle cx="19" cy="10" r="7.5"/></clipPath></defs><circle cx="10" cy="13" r="8.5" fill="${c1}" stroke="#0e1117" stroke-width="1.2"/><rect x="6" y="10" width="8" height="5.5" rx="1.2" fill="${c2}"/><circle cx="19" cy="10" r="7.5" fill="#1e3a8a" stroke="#0e1117" stroke-width="1.2"/><g clip-path="url(#cp_us_${uid})" transform="translate(11.5,2.5) scale(0.625)">${_svgCurrencyFlag('US')}</g><text x="10" y="14.5" text-anchor="middle" font-size="4.2" font-weight="800" fill="${c3}" font-family="sans-serif">${isGold ? 'Au' : 'Ag'}</text></svg></span>`;
+    }
+    if (fx === 'USOIL') {
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 24 24" width="${s}" height="${s}"><circle cx="12" cy="12" r="11" fill="#0f172a" stroke="#334155" stroke-width="1"/><path d="M12 5.2C12 5.2 7.2 10.6 7.2 14.1a4.8 4.8 0 0 0 9.6 0C16.8 10.6 12 5.2 12 5.2zm-1.4 9.9a1.4 1.4 0 0 1-.8-1.5c.1-.7.7-1.6 1-2-.2.9.2 1.8.8 2.2-.3.7-.7 1.1-1 1.3z" fill="#f8fafc"/></svg></span>`;
+    }
+    if (fx === 'USTEC') {
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 24 24" width="${s}" height="${s}"><defs><clipPath id="cp_ndx_${uid}"><circle cx="12" cy="12" r="10.5"/></clipPath></defs><g clip-path="url(#cp_ndx_${uid})">${_svgCurrencyFlag('US')}</g><rect x="3" y="8.2" width="18" height="7.6" rx="3" fill="rgba(14,17,23,0.9)"/><text x="12" y="13.8" text-anchor="middle" font-size="5.6" font-weight="800" fill="#fff" font-family="sans-serif">NDX</text></svg></span>`;
+    }
+    if (['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'].includes(fx)) {
+      const f1 = fx.slice(0, 2);
+      const f2 = fx.slice(3, 5);
+      return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 28 24" width="${Math.round(s * 1.16)}" height="${s}"><defs><clipPath id="cp_a_${uid}"><circle cx="9.5" cy="14" r="8.2"/></clipPath><clipPath id="cp_b_${uid}"><circle cx="18.5" cy="9.5" r="8.2"/></clipPath></defs><g clip-path="url(#cp_b_${uid})" transform="translate(10.3,1.3) scale(0.683)">${_svgCurrencyFlag(f2)}</g><circle cx="18.5" cy="9.5" r="8.2" fill="none" stroke="#0e1117" stroke-width="1.3"/><g clip-path="url(#cp_a_${uid})" transform="translate(1.3,5.8) scale(0.683)">${_svgCurrencyFlag(f1)}</g><circle cx="9.5" cy="14" r="8.2" fill="none" stroke="#0e1117" stroke-width="1.3"/></svg></span>`;
+    }
+
+    const isCall = /\bCE\b/.test(raw);
+    const isPut = /\bPE\b/.test(raw);
+    let bg = '#2563eb';
+    let label = raw.replace(/[^A-Z0-9]/g, '').slice(0, 2) || 'EQ';
+    if (raw.includes('BANKNIFTY')) { bg = '#0891b2'; label = 'BN'; }
+    else if (raw.includes('FINNIFTY')) { bg = '#7c3aed'; label = 'FN'; }
+    else if (raw.includes('SENSEX')) { bg = '#d97706'; label = 'SX'; }
+    else if (raw.includes('NIFTY')) { bg = '#2563eb'; label = 'N5'; }
+    else if (raw.includes('RELIANCE')) { bg = '#0284c7'; label = 'RL'; }
+    else if (raw.includes('HDFC')) { bg = '#dc2626'; label = 'HD'; }
+    else if (raw.includes('ICICI')) { bg = '#ea580c'; label = 'IC'; }
+    else if (raw.includes('TCS')) { bg = '#4f46e5'; label = 'TC'; }
+    else if (raw.includes('INFY')) { bg = '#0d9488'; label = 'IN'; }
+    else if (raw.includes('SBI')) { bg = '#1d4ed8'; label = 'SB'; }
+
+    const optDot = isCall ? '#10b981' : (isPut ? '#f43f5e' : '');
+    const optText = isCall ? 'C' : (isPut ? 'P' : '');
+    return `<span class="tv-sym-icon" style="width:${s}px;height:${s}px;"><svg viewBox="0 0 24 24" width="${s}" height="${s}"><circle cx="12" cy="12" r="10.5" fill="${bg}" stroke="#1f2937" stroke-width="1"/><text x="12" y="14.7" text-anchor="middle" font-size="8.2" font-weight="800" fill="#fff" font-family="sans-serif">${escapeHtml(label)}</text>${optDot ? `<circle cx="18.5" cy="18.5" r="4.8" fill="${optDot}" stroke="#0e1117" stroke-width="1.2"/><text x="18.5" y="20.4" text-anchor="middle" font-size="5.6" font-weight="900" fill="#fff" font-family="sans-serif">${optText}</text>` : ''}</svg></span>`;
+  }
 
   const FOREX_CATALOG = {
     XAUUSD: { symbol: 'XAUUSD', name: 'Gold Spot / US Dollar', type: 'COMMODITY', decimals: 2, spread: 0.40, leverage: 200, qty_per_lot: 100, lot_units: 100, multiplier: 1.0, signal: 'BUY' },
@@ -340,11 +439,19 @@
     }
     const res = await fetch(path, {
       cache: 'no-store',
+      credentials: 'same-origin',
       headers,
       ...options,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    if (!res.ok) {
+      if (res.status === 401 && !path.startsWith('/api/auth/')) {
+        if (typeof window._handleLogoutFn === 'function' && isAuthenticated) {
+          window._handleLogoutFn('Session ended. Please sign in again.');
+        }
+      }
+      throw new Error(data.detail || `HTTP ${res.status}`);
+    }
     return data;
   }
 
@@ -645,7 +752,7 @@
       layout: {
         background: { type: 'solid', color: '#0e1117' },
         textColor: '#8b95a5',
-        fontFamily: "'Inter', sans-serif",
+        fontFamily: "'DM Sans', 'Trebuchet MS', -apple-system, Roboto, sans-serif",
       },
       grid: {
         vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
@@ -762,7 +869,6 @@
         if (plusBtn) plusBtn.classList.add('hidden');
       });
       canvasWrap.addEventListener('wheel', () => requestAnimationFrame(() => renderPaneTradeLines(pane)), { passive: true });
-      canvasWrap.addEventListener('pointermove', () => renderPaneTradeLines(pane), { passive: true });
     }
 
     // Visible logical range change for VPVR + Draggable Chart Trade Lines sync
@@ -906,17 +1012,51 @@
     }
   }
 
-  // --- Draggable Entry / SL / TP Price Lines Directly on Chart Canvas ---
-  function attachPriceLineDrag(handleEl, lineEl, pane, rule, fieldKey, labelPrefix, decs) {
+  // --- Draggable Entry / SL / TP Price Lines Directly on Chart Canvas (TradingView-style) ---
+  function attachPriceLineDrag(dragEls, handleEl, lineEl, pane, rule, fieldKey, labelPrefix, decs, pos = null) {
     let dragging = false;
+    const cs = curSym(pane.sym);
+    const entryP = Number((pos && (pos.average_price || pos.avg_price)) || rule.entry_price || 0);
+    const qty = Math.abs(Number((pos && pos.quantity) || rule.quantity || 1));
+    const fx = getForexSpec(pane.sym);
+    const mult = Number((pos && pos.multiplier) || (fx && fx.multiplier) || 1);
+    const sideSign = String((pos && pos.side) || rule.side || 'BUY').toUpperCase() === 'BUY' ? 1 : -1;
 
-    const getClientY = ev => (ev.touches && ev.touches[0] ? ev.touches[0].clientY : ev.clientY);
+    const getClientY = ev => {
+      if (ev.touches && ev.touches[0]) return ev.touches[0].clientY;
+      if (ev.changedTouches && ev.changedTouches[0]) return ev.changedTouches[0].clientY;
+      return ev.clientY;
+    };
+
+    const formatPillText = (pVal) => {
+      let pnlPart = '';
+      if (entryP > 0 && Number.isFinite(pVal)) {
+        const pnl = (pVal - entryP) * qty * mult * sideSign;
+        pnlPart = ` (${pnl >= 0 ? '+' : '-'}${cs}${Math.abs(pnl).toFixed(2)})`;
+      }
+      return `${labelPrefix} ${cs}${pVal.toFixed(decs)}${pnlPart}`;
+    };
 
     function onStart(ev) {
+      if (dragging) return;
+      if (ev.button !== undefined && ev.button !== 0 && ev.type === 'mousedown') return;
       ev.preventDefault();
       ev.stopPropagation();
       dragging = true;
+      _isDraggingTradeLine = true;
+      lineEl.classList.add('is-dragging');
       document.body.style.cursor = 'ns-resize';
+      if (pane.chart) {
+        try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
+      }
+      try {
+        if (ev.pointerId !== undefined && ev.currentTarget && ev.currentTarget.setPointerCapture) {
+          ev.currentTarget.setPointerCapture(ev.pointerId);
+        }
+      } catch (_) {}
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onEnd);
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onEnd);
       window.addEventListener('touchmove', onMove, { passive: false });
@@ -927,20 +1067,28 @@
       if (!dragging || !pane.candleSeries || !pane.canvasWrap) return;
       if (ev.cancelable) ev.preventDefault();
       const wrapRect = pane.canvasWrap.getBoundingClientRect();
-      const y = Math.max(8, Math.min(wrapRect.height - 28, getClientY(ev) - wrapRect.top));
+      const y = Math.max(8, Math.min(wrapRect.height - 20, getClientY(ev) - wrapRect.top));
       const newPrice = pane.candleSeries.coordinateToPrice(y);
       if (newPrice !== null && Number.isFinite(newPrice) && newPrice > 0) {
         const rounded = Number(newPrice.toFixed(decs));
         lineEl.style.top = `${y}px`;
         lineEl.dataset.dragPrice = String(rounded);
-        handleEl.textContent = `${labelPrefix} ${curSym(pane.sym)}${rounded.toFixed(decs)}`;
+        handleEl.textContent = formatPillText(rounded);
       }
     }
 
     async function onEnd() {
       if (!dragging) return;
       dragging = false;
+      _isDraggingTradeLine = false;
+      lineEl.classList.remove('is-dragging');
       document.body.style.cursor = '';
+      if (pane.chart) {
+        try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
+      }
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onEnd);
       window.removeEventListener('touchmove', onMove);
@@ -949,26 +1097,32 @@
       const finalP = Number(lineEl.dataset.dragPrice || 0);
       if (finalP > 0) {
         rule[fieldKey] = finalP;
+        handleEl.textContent = formatPillText(finalP);
         try {
           await api(`/api/sltp/${rule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
             method: 'PATCH',
             body: JSON.stringify({ [fieldKey]: finalP }),
           });
-          toast(`✅ Updated ${labelPrefix} to ${curSym(pane.sym)}${finalP.toFixed(decs)}`);
-          renderPaneTradeLines(pane);
+          toast(`✅ Updated ${labelPrefix} to ${cs}${finalP.toFixed(decs)}`);
+          renderPaneTradeLines(pane, true);
         } catch (err) {
           toast(`❌ ${err.message}`);
-          renderPaneTradeLines(pane);
+          renderPaneTradeLines(pane, true);
         }
+      } else {
+        renderPaneTradeLines(pane, true);
       }
     }
 
-    handleEl.addEventListener('mousedown', onStart);
-    handleEl.addEventListener('touchstart', onStart, { passive: false });
+    (Array.isArray(dragEls) ? dragEls : [dragEls]).filter(Boolean).forEach(el => {
+      el.addEventListener('pointerdown', onStart);
+      el.addEventListener('mousedown', onStart);
+      el.addEventListener('touchstart', onStart, { passive: false });
+    });
   }
 
-  function renderPaneTradeLines(pane) {
-    if (!pane) return;
+  function renderPaneTradeLines(pane, force = false) {
+    if (!pane || (_isDraggingTradeLine && !force)) return;
     const overlay = $(`p${pane.idx + 1}-trade-overlay`);
     if (!overlay || !pane.candleSeries || !pane.candles || !pane.candles.length) {
       if (overlay) overlay.innerHTML = '';
@@ -984,13 +1138,15 @@
     const cs = curSym(pane.sym);
     const wrapH = overlay.clientHeight || 280;
 
-    function createLineEl(cls, priceVal) {
+    function createLineEl(cls, priceVal, draggableLine = false) {
       const y = pane.candleSeries.priceToCoordinate(Number(priceVal));
       if (y === null || !Number.isFinite(y) || y < 2 || y > wrapH - 2) return null;
       const el = document.createElement('div');
       el.className = `trade-price-line ${cls}`;
       el.style.top = `${y}px`;
-      el.innerHTML = '<div class="tpl-line"></div>';
+      el.innerHTML = draggableLine
+        ? '<div class="tpl-hit-bar" title="Drag up/down"></div><div class="tpl-line"></div>'
+        : '<div class="tpl-line"></div>';
       return el;
     }
 
@@ -1000,7 +1156,7 @@
       const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY')).toUpperCase();
       const qtyDisp = pos.lots && isForexSym(pane.sym) ? `${pos.lots} lot` : `${Math.abs(Number(pos.quantity || 0))}`;
       const m2m = Number(pos.m2m || 0);
-      const entryLine = createLineEl('tpl-entry', avg);
+      const entryLine = createLineEl('tpl-entry', avg, false);
       if (entryLine) {
         const bg = document.createElement('div');
         bg.className = 'tpl-badge-group';
@@ -1009,19 +1165,37 @@
         tag.textContent = `${side} ${qtyDisp} (${m2m >= 0 ? '+' : ''}${cs}${m2m.toFixed(2)})`;
         bg.appendChild(tag);
 
-        if (!rules.length) {
-          const addSltpBtn = document.createElement('button');
-          addSltpBtn.type = 'button';
-          addSltpBtn.className = 'tpl-action-chip';
-          addSltpBtn.textContent = '+SL/TP';
-          addSltpBtn.title = 'Attach draggable SL & TP lines on chart';
-          addSltpBtn.addEventListener('click', async e => {
-            e.stopPropagation();
-            const ref = Number(pane.lastLtp || avg);
-            const delta = Math.max(ref * 0.004, decs >= 3 ? 0.0020 : 1.0);
-            const slP = Number((side === 'BUY' ? ref - delta : ref + delta).toFixed(decs));
-            const tpP = Number((side === 'BUY' ? ref + delta * 1.5 : ref - delta * 1.5).toFixed(decs));
-            try {
+        const existingRule = rules[0] || null;
+        const hasTp = existingRule && existingRule.tp_price !== null && existingRule.tp_price !== undefined && Number(existingRule.tp_price) > 0;
+        const hasSl = existingRule && existingRule.sl_price !== null && existingRule.sl_price !== undefined && Number(existingRule.sl_price) > 0;
+
+        async function saveQuickLevel(kind, targetPrice = null) {
+          const ref = Number(pane.lastLtp || avg);
+          const recentBars = (pane.candles || []).slice(-30);
+          let span = 0;
+          if (recentBars.length) {
+            const hi = Math.max(...recentBars.map(b => Number(b.high || b.close || 0)));
+            const lo = Math.min(...recentBars.map(b => Number(b.low || b.close || 0)));
+            if (hi > lo) span = (hi - lo) * 0.28;
+          }
+          const delta = Math.max(span || (ref * 0.003), decs >= 4 ? 0.0008 : (decs === 3 ? 0.05 : 0.8));
+          const defSl = Number((side === 'BUY' ? ref - delta : ref + delta).toFixed(decs));
+          const defTp = Number((side === 'BUY' ? ref + delta * 1.25 : ref - delta * 1.25).toFixed(decs));
+          const val = targetPrice !== null ? Number(targetPrice.toFixed(decs)) : null;
+          try {
+            if (existingRule) {
+              const patch = {};
+              if (kind === 'tp') patch.tp_price = val || defTp;
+              else if (kind === 'sl') patch.sl_price = val || defSl;
+              else {
+                if (!hasTp) patch.tp_price = defTp;
+                if (!hasSl) patch.sl_price = defSl;
+              }
+              await api(`/api/sltp/${existingRule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
+                method: 'PATCH',
+                body: JSON.stringify(patch),
+              });
+            } else {
               const fx = getForexSpec(pane.sym);
               await api(`/api/sltp?market=${encodeURIComponent(currentMarketMode)}`, {
                 method: 'POST',
@@ -1032,17 +1206,114 @@
                   side,
                   quantity: Math.abs(Number(pos.quantity || 1)),
                   entry_price: avg,
-                  sl_price: slP,
-                  tp_price: tpP,
+                  sl_price: kind === 'tp' ? null : (kind === 'sl' && val ? val : defSl),
+                  tp_price: kind === 'sl' ? null : (kind === 'tp' && val ? val : defTp),
                 }),
               });
-              toast('✅ Added draggable SL & TP lines! Drag them up/down on chart.');
-              await fetchPositionsAndOrders();
-            } catch (err) {
-              toast(`❌ ${err.message}`);
             }
-          });
-          bg.appendChild(addSltpBtn);
+            toast('✅ SL/TP line active on chart — grab line or badge to drag!');
+            await fetchPositionsAndOrders();
+          } catch (err) {
+            toast(`❌ ${err.message}`);
+          }
+        }
+
+        function attachEntryDragSpawn(btnEl, kind, labelText) {
+          let dragActive = false;
+          let moved = false;
+          let startY = 0;
+          let previewEl = null;
+
+          const getY = ev => (ev.touches && ev.touches[0] ? ev.touches[0].clientY : (ev.changedTouches && ev.changedTouches[0] ? ev.changedTouches[0].clientY : ev.clientY));
+
+          function startDrag(ev) {
+            if (dragActive) return;
+            if (ev.button !== undefined && ev.button !== 0 && ev.type === 'mousedown') return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            dragActive = true;
+            moved = false;
+            startY = getY(ev);
+            _isDraggingTradeLine = true;
+            if (pane.chart) {
+              try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
+            }
+            window.addEventListener('pointermove', moveDrag, { passive: false });
+            window.addEventListener('pointerup', endDrag);
+            window.addEventListener('mousemove', moveDrag);
+            window.addEventListener('mouseup', endDrag);
+            window.addEventListener('touchmove', moveDrag, { passive: false });
+            window.addEventListener('touchend', endDrag);
+          }
+
+          function moveDrag(ev) {
+            if (!dragActive || !pane.canvasWrap || !pane.candleSeries) return;
+            const cy = getY(ev);
+            if (Math.abs(cy - startY) >= 5) moved = true;
+            if (!moved) return;
+            if (ev.cancelable) ev.preventDefault();
+            const wrapRect = pane.canvasWrap.getBoundingClientRect();
+            const y = Math.max(8, Math.min(wrapRect.height - 20, cy - wrapRect.top));
+            const pr = pane.candleSeries.coordinateToPrice(y);
+            if (!pr || !Number.isFinite(pr) || pr <= 0) return;
+            const rounded = Number(pr.toFixed(decs));
+            if (!previewEl) {
+              previewEl = document.createElement('div');
+              previewEl.className = `trade-price-line ${kind === 'tp' ? 'tpl-tp' : 'tpl-sl'} is-dragging`;
+              previewEl.innerHTML = `<div class="tpl-line"></div><div class="tpl-badge-group"><span class="tpl-drag-handle">${labelText}</span></div>`;
+              overlay.appendChild(previewEl);
+            }
+            previewEl.style.top = `${y}px`;
+            previewEl.dataset.dragPrice = String(rounded);
+            const hSpan = previewEl.querySelector('.tpl-drag-handle');
+            if (hSpan) hSpan.textContent = `${labelText} ${cs}${rounded.toFixed(decs)}`;
+          }
+
+          async function endDrag() {
+            if (!dragActive) return;
+            dragActive = false;
+            _isDraggingTradeLine = false;
+            if (pane.chart) {
+              try { pane.chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (_) {}
+            }
+            window.removeEventListener('pointermove', moveDrag);
+            window.removeEventListener('pointerup', endDrag);
+            window.removeEventListener('mousemove', moveDrag);
+            window.removeEventListener('mouseup', endDrag);
+            window.removeEventListener('touchmove', moveDrag);
+            window.removeEventListener('touchend', endDrag);
+
+            const dropped = previewEl ? Number(previewEl.dataset.dragPrice || 0) : 0;
+            if (previewEl) { previewEl.remove(); previewEl = null; }
+            if (moved && dropped > 0) {
+              await saveQuickLevel(kind, dropped);
+            } else {
+              await saveQuickLevel(kind, null);
+            }
+          }
+
+          btnEl.addEventListener('pointerdown', startDrag);
+          btnEl.addEventListener('mousedown', startDrag);
+          btnEl.addEventListener('touchstart', startDrag, { passive: false });
+        }
+
+        if (!hasTp) {
+          const tpChip = document.createElement('button');
+          tpChip.type = 'button';
+          tpChip.className = 'tpl-action-chip tpl-drag-quick tp-chip';
+          tpChip.textContent = '+TP ↕';
+          tpChip.title = 'Click or drag up/down directly onto chart to set Take Profit';
+          attachEntryDragSpawn(tpChip, 'tp', 'TP');
+          bg.appendChild(tpChip);
+        }
+        if (!hasSl) {
+          const slChip = document.createElement('button');
+          slChip.type = 'button';
+          slChip.className = 'tpl-action-chip tpl-drag-quick sl-chip';
+          slChip.textContent = '+SL ↕';
+          slChip.title = 'Click or drag up/down directly onto chart to set Stop Loss';
+          attachEntryDragSpawn(slChip, 'sl', 'SL');
+          bg.appendChild(slChip);
         }
 
         const closePosBtn = document.createElement('button');
@@ -1070,18 +1341,26 @@
     }
 
     // 2. Draggable SL & TP Price Lines
+    const qtyForRule = Math.abs(Number((pos && pos.quantity) || (rules[0] && rules[0].quantity) || 1));
+    const entryForRule = Number((pos && (pos.average_price || pos.avg_price)) || (rules[0] && rules[0].entry_price) || 0);
+    const fxSpec = getForexSpec(pane.sym);
+    const multRule = Number((pos && pos.multiplier) || (fxSpec && fxSpec.multiplier) || 1);
+
     rules.forEach(rule => {
+      const rSign = String((pos && pos.side) || rule.side || 'BUY').toUpperCase() === 'BUY' ? 1 : -1;
       if (rule.tp_price !== null && rule.tp_price !== undefined && Number(rule.tp_price) > 0) {
         const tpP = Number(rule.tp_price);
-        const tpLine = createLineEl('tpl-tp', tpP);
+        const tpLine = createLineEl('tpl-tp', tpP, true);
         if (tpLine) {
           const bg = document.createElement('div');
           bg.className = 'tpl-badge-group';
           const handle = document.createElement('span');
           handle.className = 'tpl-drag-handle';
-          handle.textContent = `TP ${cs}${tpP.toFixed(decs)}`;
+          const projTp = entryForRule > 0 ? (tpP - entryForRule) * qtyForRule * multRule * rSign : null;
+          const tpSuffix = projTp !== null && Number.isFinite(projTp) ? ` (${projTp >= 0 ? '+' : '-'}${cs}${Math.abs(projTp).toFixed(2)})` : '';
+          handle.textContent = `TP ${cs}${tpP.toFixed(decs)}${tpSuffix}`;
           handle.title = 'Drag up/down to adjust Take Profit';
-          attachPriceLineDrag(handle, tpLine, pane, rule, 'tp_price', 'TP', decs);
+          attachPriceLineDrag([handle, tpLine.querySelector('.tpl-hit-bar')], handle, tpLine, pane, rule, 'tp_price', 'TP', decs, pos);
           const rmBtn = document.createElement('button');
           rmBtn.type = 'button';
           rmBtn.className = 'tpl-action-chip close-x';
@@ -1108,15 +1387,17 @@
 
       if (rule.sl_price !== null && rule.sl_price !== undefined && Number(rule.sl_price) > 0) {
         const slP = Number(rule.sl_price);
-        const slLine = createLineEl('tpl-sl', slP);
+        const slLine = createLineEl('tpl-sl', slP, true);
         if (slLine) {
           const bg = document.createElement('div');
           bg.className = 'tpl-badge-group';
           const handle = document.createElement('span');
           handle.className = 'tpl-drag-handle';
-          handle.textContent = `SL ${cs}${slP.toFixed(decs)}`;
+          const projSl = entryForRule > 0 ? (slP - entryForRule) * qtyForRule * multRule * rSign : null;
+          const slSuffix = projSl !== null && Number.isFinite(projSl) ? ` (${projSl >= 0 ? '+' : '-'}${cs}${Math.abs(projSl).toFixed(2)})` : '';
+          handle.textContent = `SL ${cs}${slP.toFixed(decs)}${slSuffix}`;
           handle.title = 'Drag up/down to adjust Stop Loss';
-          attachPriceLineDrag(handle, slLine, pane, rule, 'sl_price', 'SL', decs);
+          attachPriceLineDrag([handle, slLine.querySelector('.tpl-hit-bar')], handle, slLine, pane, rule, 'sl_price', 'SL', decs, pos);
           const rmBtn = document.createElement('button');
           rmBtn.type = 'button';
           rmBtn.className = 'tpl-action-chip close-x';
@@ -1144,6 +1425,7 @@
   }
 
   function renderAllPaneTradeLines() {
+    if (_isDraggingTradeLine) return;
     panes.forEach(p => {
       if (p && p.chart) renderPaneTradeLines(p);
     });
@@ -1856,7 +2138,7 @@
       const tabEl = document.createElement('div');
       tabEl.className = `ex-tab ${idx === activeTabIndex ? 'active' : ''}`;
       tabEl.innerHTML = `
-        <span class="tab-icon">${tab.isOption ? '🪙' : '📈'}</span>
+        <span class="tab-icon">${getInstrumentIconHtml(tab.symbol, 16)}</span>
         <span class="tab-name">${escapeHtml(tab.symbol)}</span>
         <button type="button" class="tab-close" data-idx="${idx}" title="Close Tab">✕</button>
       `;
@@ -1957,6 +2239,8 @@
 
     const opSym = $('op-sym-name');
     if (opSym) opSym.textContent = selected.symbol;
+    const opIcon = $('op-sym-icon');
+    if (opIcon) opIcon.innerHTML = getInstrumentIconHtml(selected.symbol, 20);
 
     syncToolbarForPane(panes[0]);
 
@@ -2094,9 +2378,12 @@
         item.className = 'quick-search-item';
         const hasSubName = r.name && r.name.toUpperCase() !== r.symbol.toUpperCase();
         item.innerHTML = `
-          <div class="item-main">
-            <b>${escapeHtml(r.symbol)}</b>
-            ${hasSubName ? `<div class="ex-search-row-sub">${escapeHtml(r.name)}</div>` : ''}
+          <div style="display:flex;align-items:center;gap:9px;min-width:0;flex:1;">
+            ${getInstrumentIconHtml(r.symbol, 22)}
+            <div class="item-main">
+              <b>${escapeHtml(r.symbol)}</b>
+              ${hasSubName ? `<div class="ex-search-row-sub">${escapeHtml(r.name)}</div>` : ''}
+            </div>
           </div>
           <div class="item-sub">${escapeHtml(r.segment || (currentMarketMode === 'forex' ? 'FOREX' : 'NSE'))}</div>
         `;
@@ -2243,9 +2530,12 @@
                 item.className = 'acc-menu-item ex-search-result-item';
                 const hasSubName = r.name && r.name.toUpperCase() !== r.symbol.toUpperCase();
                 item.innerHTML = `
-                  <div style="display:flex;flex-direction:column;min-width:0;flex:1;">
-                    <b>${escapeHtml(r.symbol)}</b>
-                    ${hasSubName ? `<span class="ex-search-row-sub">${escapeHtml(r.name)}</span>` : ''}
+                  <div style="display:flex;align-items:center;gap:9px;min-width:0;flex:1;">
+                    ${getInstrumentIconHtml(r.symbol, 22)}
+                    <div style="display:flex;flex-direction:column;min-width:0;flex:1;">
+                      <b>${escapeHtml(r.symbol)}</b>
+                      ${hasSubName ? `<span class="ex-search-row-sub">${escapeHtml(r.name)}</span>` : ''}
+                    </div>
                   </div>
                   <small style="margin-left:8px;color:#8b95a5;white-space:nowrap;">${escapeHtml(r.segment || 'NSE')}</small>
                 `;
@@ -2302,8 +2592,11 @@
       tr.innerHTML = `
         <td>
           <div class="td-sym-wrap">
-            <span class="sym-main">${escapeHtml(inst.symbol)}</span>
-            <span class="sym-sub">${escapeHtml(inst.name)}</span>
+            ${getInstrumentIconHtml(inst.symbol, 22)}
+            <div class="td-sym-text">
+              <span class="sym-main">${escapeHtml(inst.symbol)}</span>
+              <span class="sym-sub">${escapeHtml(inst.name)}</span>
+            </div>
           </div>
         </td>
         <td>
@@ -2807,6 +3100,7 @@
 
     function openModal() {
       if (!modal) return;
+      closeAllOverlays('option-chain-modal');
       modal.classList.remove('hidden');
       if (undSelect) currentUnd = undSelect.value;
       loadOptionChain(currentUnd);
@@ -3034,11 +3328,35 @@
     const menuSub = $('menu-mode-sub');
     const profileLogin = $('m-profile-login');
     const sessionBadge = $('session-timer-badge');
+    const menuKotakBadge = $('menu-kotak-status-badge');
+    const mKotakBadge = $('m-acc-badge-kotak');
+    const modalKotakBanner = $('kotak-modal-status-banner');
+    const modalKotakTxt = $('kotak-modal-status-text');
+    const btnKotakDisc = $('btn-kotak-disconnect');
+
+    document.body.classList.toggle('auth-locked', !(adminActive || isAuthenticated));
 
     // Strictly hide API token & Kotak Admin controls from non-admin users
     document.querySelectorAll('.admin-only-ctrl').forEach(el => {
       el.classList.toggle('hidden', !adminActive);
     });
+
+    if (adminActive) {
+      const kText = kotakConnected ? '🟢 Kotak Neo: Authenticated (Live)' : '🔴 Kotak Neo: Not Authenticated';
+      if (menuKotakBadge) {
+        menuKotakBadge.textContent = kText;
+        menuKotakBadge.className = `kotak-auth-pill admin-only-ctrl ${kotakConnected ? 'connected' : ''}`;
+      }
+      if (mKotakBadge) {
+        mKotakBadge.textContent = kotakConnected ? 'Kotak: Authenticated' : 'Kotak: Not Auth';
+        mKotakBadge.className = `m-acc-badge kotak-auth admin-only-ctrl ${kotakConnected ? 'connected' : ''}`;
+      }
+      if (modalKotakBanner) {
+        modalKotakBanner.className = `kotak-status-banner ${kotakConnected ? 'connected' : 'disconnected'}`;
+      }
+      if (modalKotakTxt) modalKotakTxt.textContent = kText;
+      if (btnKotakDisc) btnKotakDisc.classList.toggle('hidden', !kotakConnected);
+    }
 
     const uname = (username || (currentUser && currentUser.username) || 'Trader').trim();
     if (adminActive) {
@@ -3115,8 +3433,7 @@
     }
     if (switchMenuBtn) {
       switchMenuBtn.addEventListener('click', () => {
-        const am = $('ex-account-menu');
-        if (am) am.classList.add('hidden');
+        closeAllOverlays('modal-market-choice');
         if (mktModal) mktModal.classList.remove('hidden');
       });
     }
@@ -3127,13 +3444,26 @@
     const btnOpenKotak = $('btn-open-owner-login');
     const btnCloseKotak = $('btn-close-kotak-modal');
     const btnCancelKotak = $('btn-cancel-kotak');
+    const btnKotakDisc = $('btn-kotak-disconnect');
     const kotakForm = $('kotak-connect-form');
     const kotakErr = $('kotak-connect-error');
 
-    function openKotakModal() {
-      if (!isAdminUser) return;
+    async function openKotakModal() {
+      if (!isAdminUser) {
+        toast('Live Kotak Neo connection is restricted to Terminal Admin.');
+        return;
+      }
+      closeAllOverlays('modal-kotak-connect');
       if (kotakErr) kotakErr.classList.add('hidden');
+      if ($('input-kotak-totp')) $('input-kotak-totp').value = '';
+      if ($('input-kotak-mpin-login')) $('input-kotak-mpin-login').value = '';
       if (kotakModal) kotakModal.classList.remove('hidden');
+      try {
+        const st = await api('/api/auth/session-status');
+        const connected = Boolean(st && (st.broker_authenticated ?? st.kotak_connected));
+        if (currentUser) currentUser.kotak_connected = connected;
+        updateAuthModeUI(true, (currentUser && currentUser.username) || '', connected);
+      } catch (_) {}
       const totpIn = $('input-kotak-totp');
       if (totpIn) setTimeout(() => totpIn.focus(), 80);
     }
@@ -3141,6 +3471,19 @@
     if (btnOpenKotak) btnOpenKotak.addEventListener('click', openKotakModal);
     if (btnCloseKotak) btnCloseKotak.addEventListener('click', () => kotakModal && kotakModal.classList.add('hidden'));
     if (btnCancelKotak) btnCancelKotak.addEventListener('click', () => kotakModal && kotakModal.classList.add('hidden'));
+    if (btnKotakDisc) {
+      btnKotakDisc.addEventListener('click', async () => {
+        try {
+          await api('/api/auth/logout', { method: 'POST', body: '{}' });
+          if (currentUser) currentUser.kotak_connected = false;
+          updateAuthModeUI(true, (currentUser && currentUser.username) || '', false);
+          toast('Kotak Neo live session disconnected.');
+          fetchPositionsAndOrders();
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
 
     if (kotakForm) {
       kotakForm.addEventListener('submit', async e => {
@@ -3176,6 +3519,7 @@
 
     async function openAdminAnalytics() {
       if (!isAdminUser || !admModal) return;
+      closeAllOverlays('modal-admin-analytics');
       admModal.classList.remove('hidden');
       const tbody = $('admin-users-tbody');
       if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty-row">Loading user analytics…</td></tr>';
@@ -3259,7 +3603,9 @@
     if (accBtn && accMenu) {
       accBtn.addEventListener('click', e => {
         e.stopPropagation();
-        accMenu.classList.toggle('hidden');
+        const willOpen = accMenu.classList.contains('hidden');
+        closeAllOverlays(willOpen ? 'ex-account-menu' : null);
+        accMenu.classList.toggle('hidden', !willOpen);
       });
       document.addEventListener('click', () => {
         accMenu.classList.add('hidden');
@@ -3267,7 +3613,7 @@
     }
 
     async function handleLogout(msg = 'Signed out. Please sign in to continue.') {
-      await api('/api/auth/owner-logout', { method: 'POST' }).catch(() => ({}));
+      await api('/api/auth/owner-logout', { method: 'POST', body: '{}' }).catch(() => ({}));
       localStorage.removeItem('neo_owner_token');
       ownerToken = '';
       isAuthenticated = false;
@@ -3278,9 +3624,31 @@
       cachedOrders = [];
       cachedClosedPositions = [];
       cachedExecutions = [];
+      cachedPnlSummary = {};
       activeSltpRules = [];
+      closeAllOverlays('modal-gatekeeper');
+      if (typeof window._switchMobileTabFn === 'function') {
+        window._switchMobileTabFn('chart', true);
+      } else {
+        document.body.classList.remove('mobile-view-active');
+        document.querySelectorAll('.mobile-screen-view').forEach(v => v.classList.add('hidden'));
+      }
+      if ($('open-positions-tbody')) $('open-positions-tbody').innerHTML = '<tr><td colspan="8" class="empty-row">Sign in required.</td></tr>';
+      if ($('pending-orders-tbody')) $('pending-orders-tbody').innerHTML = '<tr><td colspan="8" class="empty-row">Sign in required.</td></tr>';
+      if ($('closed-trades-tbody')) $('closed-trades-tbody').innerHTML = '<tr><td colspan="11" class="empty-row">Sign in required.</td></tr>';
+      if ($('trade-history-tbody')) $('trade-history-tbody').innerHTML = '<tr><td colspan="10" class="empty-row">Sign in required.</td></tr>';
+      if ($('m-orders-list')) $('m-orders-list').innerHTML = '';
+      if ($('ex-acc-balance')) $('ex-acc-balance').textContent = '—';
+      if ($('m-acc-balance')) $('m-acc-balance').textContent = '—';
+      if ($('m-trade-pill-bal')) $('m-trade-pill-bal').textContent = '—';
+      if ($('f-equity')) $('f-equity').textContent = '—';
+      if ($('f-free-margin')) $('f-free-margin').textContent = '—';
+      if ($('f-margin-used')) $('f-margin-used').textContent = '—';
+      if ($('f-realized-pnl')) $('f-realized-pnl').textContent = '—';
+      if ($('signin-password')) $('signin-password').value = '';
+      if ($('signup-password')) $('signup-password').value = '';
       updateAuthModeUI(false, '');
-      renderAllPaneTradeLines();
+      renderAllPaneTradeLines(true);
       if (gateModal) {
         switchAuthTab('signin');
         gateModal.classList.remove('hidden');
@@ -3296,6 +3664,7 @@
     function onAuthenticatedSuccess(res) {
       ownerToken = res.token || '';
       if (ownerToken) localStorage.setItem('neo_owner_token', ownerToken);
+      const kotakUp = Boolean(res.broker_authenticated ?? res.kotak_connected);
       isAuthenticated = true;
       isAdminUser = Boolean(res.is_admin);
       isOwner = isAdminUser;
@@ -3303,9 +3672,10 @@
         username: res.username,
         is_admin: isAdminUser,
         market_mode: res.market_mode || '',
-        kotak_connected: Boolean(res.kotak_connected),
+        kotak_connected: kotakUp,
       };
       recordUserActivity();
+      closeAllOverlays();
       if (gateModal) gateModal.classList.add('hidden');
 
       if (!isAdminUser && !res.market_mode) {
@@ -3315,7 +3685,7 @@
       } else {
         const effMode = res.market_mode || 'indian';
         applyMarketModeUI(effMode, true);
-        updateAuthModeUI(isAdminUser, res.username, Boolean(res.kotak_connected));
+        updateAuthModeUI(isAdminUser, res.username, kotakUp);
         fetchPositionsAndOrders();
       }
     }
@@ -3373,10 +3743,11 @@
       try {
         const st = await api('/api/auth/session-status');
         if (st && st.authenticated) {
+          const kotakUp = Boolean(st.broker_authenticated ?? st.kotak_connected);
           isAuthenticated = true;
           isAdminUser = Boolean(st.is_admin);
           isOwner = isAdminUser;
-          currentUser = st;
+          currentUser = { ...st, kotak_connected: kotakUp };
           if (gateModal) gateModal.classList.add('hidden');
 
           if (!isAdminUser && !st.market_mode) {
@@ -3386,7 +3757,7 @@
           } else {
             const effMode = st.market_mode || 'indian';
             applyMarketModeUI(effMode, true);
-            updateAuthModeUI(isAdminUser, st.username, Boolean(st.kotak_connected));
+            updateAuthModeUI(isAdminUser, st.username, kotakUp);
             fetchPositionsAndOrders();
           }
         } else {
@@ -3405,6 +3776,36 @@
         if (gateModal) gateModal.classList.remove('hidden');
       }
     }
+
+    async function lightweightSyncSession() {
+      ownerToken = localStorage.getItem('neo_owner_token') || '';
+      try {
+        const st = await api('/api/auth/session-status');
+        if (!st || !st.authenticated) {
+          if (isAuthenticated) handleLogout('Session signed out. Please sign in to continue.');
+          else checkSession();
+          return;
+        }
+        if (!isAuthenticated || !currentUser || currentUser.username !== st.username) {
+          checkSession();
+          return;
+        }
+        const kotakUp = Boolean(st.broker_authenticated ?? st.kotak_connected);
+        if (currentUser.kotak_connected !== kotakUp) {
+          currentUser.kotak_connected = kotakUp;
+          updateAuthModeUI(isAdminUser, st.username, kotakUp);
+          fetchPositionsAndOrders();
+        }
+      } catch (_) {}
+    }
+
+    // Cross-tab & cross-page session synchronization (/ <-> /chart)
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === 'neo_owner_token') lightweightSyncSession();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') lightweightSyncSession();
+    });
 
     clearInterval(inactivityTimerInterval);
     inactivityTimerInterval = setInterval(() => {
@@ -3434,6 +3835,7 @@
     const closeBtn = $('btn-close-guide');
 
     function openGuide() {
+      closeAllOverlays('modal-setup-guide');
       if (guideModal) guideModal.classList.remove('hidden');
     }
     function closeGuide() {
@@ -3644,6 +4046,7 @@
     if (openBtn) {
       openBtn.addEventListener('click', async () => {
         if (!isAdminUser) { toast('Upstox token setup is Admin-only.'); return; }
+        closeAllOverlays('token-modal');
         modal.classList.remove('hidden');
         const st = await api('/api/chart/upstox-status').catch(() => ({}));
         if (statusPill) {
@@ -3699,6 +4102,7 @@
     async function openKeysModal() {
       if (!isAdminUser) { toast('API key management is restricted to Admin only.'); return; }
       if (!modal) return;
+      closeAllOverlays('modal-api-keys');
       modal.classList.remove('hidden');
       if (inputKotak) inputKotak.value = '';
       if (inputUpstox) inputUpstox.value = '';
@@ -3803,6 +4207,7 @@
     if (openBtn) {
       openBtn.addEventListener('click', () => {
         if (modal) {
+          closeAllOverlays('modal-guest-profile');
           modal.classList.remove('hidden');
           if (nameInput) nameInput.value = localStorage.getItem('neo_guest_handle') || '';
         }
@@ -3853,7 +4258,12 @@
       }
     }
 
-    function switchMobileTab(tabKey) {
+    function switchMobileTab(tabKey, force = false) {
+      if (!isAuthenticated && tabKey !== 'chart' && !force) {
+        if ($('modal-gatekeeper')) $('modal-gatekeeper').classList.remove('hidden');
+        return;
+      }
+      closeAllOverlays(!isAuthenticated ? 'modal-gatekeeper' : null);
       navItems.forEach(item => {
         item.classList.toggle('active', item.dataset.tab === tabKey);
       });
@@ -3900,6 +4310,7 @@
       }
     }
 
+    window._switchMobileTabFn = switchMobileTab;
     navItems.forEach(item => {
       item.addEventListener('click', () => switchMobileTab(item.dataset.tab));
     });
@@ -3924,16 +4335,34 @@
 
     const mAccCog = $('m-btn-acc-settings');
     if (mAccCog) {
-      mAccCog.addEventListener('click', openMobileKeys);
+      mAccCog.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isAdminUser && typeof window._openKotakConnectFn === 'function') {
+          window._openKotakConnectFn();
+        } else {
+          closeAllOverlays('modal-market-choice');
+          const mktModal = $('modal-market-choice');
+          if (mktModal) mktModal.classList.remove('hidden');
+        }
+      });
     }
 
     // Performance screen Start Trading button
     const mPerfTrade = $('m-btn-perf-trade');
     if (mPerfTrade) mPerfTrade.addEventListener('click', () => switchMobileTab('chart'));
 
-    // Modals triggers from mobile
+    // Modals triggers from mobile (single active overlay — never stack!)
     const mBtnGuide = $('m-btn-open-guide');
-    if (mBtnGuide && guideModal) mBtnGuide.addEventListener('click', () => guideModal.classList.remove('hidden'));
+    if (mBtnGuide) {
+      mBtnGuide.addEventListener('click', () => {
+        if (isAdminUser && typeof window._openKotakConnectFn === 'function') {
+          window._openKotakConnectFn();
+        } else if (guideModal) {
+          closeAllOverlays('modal-setup-guide');
+          guideModal.classList.remove('hidden');
+        }
+      });
+    }
 
     const mBtnKeys = $('m-btn-open-keys');
     const mBtnProfKeys = $('m-btn-profile-keys');
@@ -3943,11 +4372,17 @@
     if (mProfCog) mProfCog.addEventListener('click', openMobileKeys);
 
     const mRowPaper = $('m-row-paper-profile');
-    if (mRowPaper && paperModal) mRowPaper.addEventListener('click', () => paperModal.classList.remove('hidden'));
+    if (mRowPaper && paperModal) {
+      mRowPaper.addEventListener('click', () => {
+        closeAllOverlays('modal-guest-profile');
+        paperModal.classList.remove('hidden');
+      });
+    }
 
     const mRowSwitchMkt = $('m-row-switch-market');
     if (mRowSwitchMkt) {
       mRowSwitchMkt.addEventListener('click', () => {
+        closeAllOverlays('modal-market-choice');
         const mktModal = $('modal-market-choice');
         if (mktModal) mktModal.classList.remove('hidden');
       });
@@ -3974,16 +4409,13 @@
       });
     }
 
-    const mBtnGuideKotak = $('m-btn-open-guide');
-    if (mBtnGuideKotak) {
-      mBtnGuideKotak.addEventListener('click', () => {
-        if (isAdminUser && typeof window._openKotakConnectFn === 'function') window._openKotakConnectFn();
-        else if (guideModal) guideModal.classList.remove('hidden');
+    const mRowLocal = $('m-row-run-local');
+    if (mRowLocal && guideModal) {
+      mRowLocal.addEventListener('click', () => {
+        closeAllOverlays('modal-setup-guide');
+        guideModal.classList.remove('hidden');
       });
     }
-
-    const mRowLocal = $('m-row-run-local');
-    if (mRowLocal && guideModal) mRowLocal.addEventListener('click', () => guideModal.classList.remove('hidden'));
 
     const mRowReddit = $('m-row-reddit');
     if (mRowReddit) mRowReddit.addEventListener('click', () => window.open('https://reddit.com/user/thatsaiiff', '_blank'));
@@ -4032,25 +4464,25 @@
             ? `
               <div class="m-quick-card" data-sym="XAUUSD">
                 <div class="m-qc-title">XAU / USD</div>
-                <div class="m-qc-icon">🪙</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('XAUUSD', 32)}</div>
                 <div class="m-qc-price" id="qc-xau-ltp">Live Gold</div>
                 <div class="m-qc-chg pos">24/7 Spot</div>
               </div>
               <div class="m-quick-card" data-sym="BTCUSD">
                 <div class="m-qc-title">BTC / USD</div>
-                <div class="m-qc-icon">₿</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('BTCUSD', 32)}</div>
                 <div class="m-qc-price" id="qc-btc-ltp">Live BTC</div>
                 <div class="m-qc-chg pos">24/7 Crypto</div>
               </div>
               <div class="m-quick-card" data-sym="EURUSD">
                 <div class="m-qc-title">EUR / USD</div>
-                <div class="m-qc-icon">💶</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('EURUSD', 32)}</div>
                 <div class="m-qc-price" id="qc-eur-ltp">Major FX</div>
                 <div class="m-qc-chg pos">1:200 Lev</div>
               </div>
               <div class="m-quick-card" data-sym="USTEC">
                 <div class="m-qc-title">USTEC 100</div>
-                <div class="m-qc-icon">🇺🇸</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('USTEC', 32)}</div>
                 <div class="m-qc-price" id="qc-ndx-ltp">Nasdaq CFD</div>
                 <div class="m-qc-chg pos">Index</div>
               </div>
@@ -4058,25 +4490,25 @@
             : `
               <div class="m-quick-card" data-sym="NIFTY">
                 <div class="m-qc-title">NIFTY 50</div>
-                <div class="m-qc-icon">🇮🇳</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('NIFTY', 32)}</div>
                 <div class="m-qc-price" id="qc-nifty-ltp">NIFTY</div>
                 <div class="m-qc-chg pos">Index</div>
               </div>
               <div class="m-quick-card" data-sym="BANKNIFTY">
                 <div class="m-qc-title">BANK NIFTY</div>
-                <div class="m-qc-icon">🏦</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('BANKNIFTY', 32)}</div>
                 <div class="m-qc-price" id="qc-bank-ltp">BANK</div>
                 <div class="m-qc-chg pos">Index</div>
               </div>
               <div class="m-quick-card" data-sym="SENSEX">
                 <div class="m-qc-title">SENSEX</div>
-                <div class="m-qc-icon">📈</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('SENSEX', 32)}</div>
                 <div class="m-qc-price" id="qc-sensex-ltp">BSE</div>
                 <div class="m-qc-chg pos">Index</div>
               </div>
               <div class="m-quick-card" data-sym="RELIANCE">
                 <div class="m-qc-title">RELIANCE</div>
-                <div class="m-qc-icon">⚡</div>
+                <div class="m-qc-icon">${getInstrumentIconHtml('RELIANCE', 32)}</div>
                 <div class="m-qc-price" id="qc-rel-ltp">NSE EQ</div>
                 <div class="m-qc-chg pos">Equity</div>
               </div>
@@ -4113,7 +4545,7 @@
             card.innerHTML = `
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
-                  <span class="m-card-icon">${isForexSym(sym) ? '🌍' : (sym.includes('BANK') ? '🏦' : (sym.includes('SENSEX') ? '📈' : '🪙'))}</span>
+                  <span class="m-card-icon">${getInstrumentIconHtml(sym, 22)}</span>
                   <span class="m-card-sym">${escapeHtml(sym)}</span>
                   <span class="m-tag-pill tp">TP</span>
                   <span class="m-tag-pill sl">SL</span>
@@ -4172,7 +4604,7 @@
             card.innerHTML = `
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
-                  <span class="m-card-icon">⚡</span>
+                  <span class="m-card-icon">${getInstrumentIconHtml(o.symbol, 22)}</span>
                   <span class="m-card-sym">${escapeHtml(o.symbol)}</span>
                 </div>
                 <div class="m-card-dash">
@@ -4241,7 +4673,7 @@
             card.innerHTML = `
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
-                  <span class="m-card-icon">🪙</span>
+                  <span class="m-card-icon">${getInstrumentIconHtml(sym, 22)}</span>
                   <span class="m-card-sym">${escapeHtml(sym)}</span>
                 </div>
                 <div class="m-card-pnl ${isPos ? 'pos' : 'neg'}">
@@ -4302,7 +4734,7 @@
             card.innerHTML = `
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
-                  <span class="m-card-icon">⚡</span>
+                  <span class="m-card-icon">${getInstrumentIconHtml(sym, 22)}</span>
                   <span class="m-card-sym">${escapeHtml(sym)}</span>
                   <span class="m-exec-badge ${side.toLowerCase()}">${side}</span>
                 </div>
@@ -4476,7 +4908,7 @@
         const row = document.createElement('div');
         row.className = 'm-trade-item';
         const isPos = it.signal === 'BUY';
-        const icon = isForexSym(it.symbol) ? '🌍' : (it.symbol.includes('BANK') ? '🏦' : (it.symbol.includes('NIFTY') ? '🇮🇳' : (it.symbol.includes('SENSEX') ? '📈' : '⚡')));
+        const icon = getInstrumentIconHtml(it.symbol, 32);
         row.innerHTML = `
           <div class="m-ti-left">
             <div class="m-ti-icon">${icon}</div>
@@ -4508,10 +4940,24 @@
       const pillBal = $('m-trade-pill-bal');
       const desktopBal = $('ex-acc-balance');
       const badgeEl = $('m-acc-badge-demo');
+      const kBadgeEl = $('m-acc-badge-kotak');
+      const kConnected = Boolean(currentUser && currentUser.kotak_connected);
 
       if (accIdEl) accIdEl.textContent = `@${uname.toUpperCase()}`;
-      if (badgeEl) badgeEl.textContent = currentMarketMode === 'forex' ? 'Forex Paper' : (isAdminUser && currentUser && currentUser.kotak_connected ? 'Kotak Live' : 'Indian Paper');
-      if (desktopBal && accBalEl) accBalEl.textContent = desktopBal.textContent;
+      if (badgeEl) badgeEl.textContent = currentMarketMode === 'forex' ? 'Forex Paper' : (isAdminUser && kConnected ? 'Kotak Live' : 'Indian Paper');
+      if (kBadgeEl) {
+        kBadgeEl.classList.toggle('hidden', !isAdminUser);
+        if (isAdminUser) {
+          kBadgeEl.textContent = kConnected ? 'Kotak: Authenticated' : 'Kotak: Not Auth';
+          kBadgeEl.className = `m-acc-badge kotak-auth admin-only-ctrl ${kConnected ? 'connected' : ''}`;
+        }
+      }
+      if (desktopBal && accBalEl) {
+        const txt = desktopBal.textContent || '—';
+        accBalEl.textContent = txt;
+        const isMsg = !/^\s*[+-]?[$₹][\d,.]+/.test(txt) && txt !== '—';
+        accBalEl.classList.toggle('is-status-msg', isMsg);
+      }
       if (desktopBal && pillBal) pillBal.textContent = desktopBal.textContent;
     }
 

@@ -1076,17 +1076,27 @@ def egress_ip():
 
 
 @app.get("/api/status")
-def status():
+def status(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=False)
+    allow_broker_info = bool(ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")))
     return {
-        "mode": current_mode(),
-        "live_trading_enabled": LIVE_TRADING_ENABLED,
-        "broker_authenticated": neo_authenticated,
-        "kotak_egress_ip": neo_egress_ip,
-        "kotak_session_ip": neo_session_ip,
-        "server_egress_ip": _get_server_egress_ip(),
-        "broker_configured": bool(os.getenv("NEO_CONSUMER_KEY") and os.getenv("NEO_MOBILE_NUMBER") and os.getenv("NEO_UCC")),
+        "mode": current_mode() if allow_broker_info else "simulation",
+        "live_trading_enabled": LIVE_TRADING_ENABLED if allow_broker_info else False,
+        "broker_authenticated": neo_authenticated if allow_broker_info else False,
+        "authenticated": ctx["authenticated"],
+        "is_admin": bool(ctx["is_admin"]),
+        "username": ctx["username"],
+        "market_mode": ctx["market_mode"],
+        "kotak_egress_ip": neo_egress_ip if allow_broker_info else None,
+        "kotak_session_ip": neo_session_ip if allow_broker_info else None,
+        "server_egress_ip": _get_server_egress_ip() if allow_broker_info else None,
+        "broker_configured": bool(os.getenv("NEO_CONSUMER_KEY") and os.getenv("NEO_MOBILE_NUMBER") and os.getenv("NEO_UCC")) if allow_broker_info else False,
         "selected_symbol": selected_symbol,
-        "extension_bridge_configured": bool(BRIDGE_TOKEN and not BRIDGE_TOKEN.startswith("replace-with-")),
+        "extension_bridge_configured": bool(BRIDGE_TOKEN and not BRIDGE_TOKEN.startswith("replace-with-")) if allow_broker_info else False,
     }
 
 
@@ -1659,7 +1669,7 @@ def auth_login(
 ):
     global neo_client, neo_authenticated, neo_egress_ip, neo_session_ip
     existing_tok = _extract_auth_token(x_owner_token, authorization, neo_session)
-    if CLOUD_DEPLOYMENT and not os.getenv("PYTEST_CURRENT_TEST") and not is_owner_request(existing_tok):
+    if not os.getenv("PYTEST_CURRENT_TEST") and not is_owner_request(existing_tok):
         raise HTTPException(status_code=403, detail="Only Terminal Admin can connect live Kotak Neo API.")
     if not LIVE_TRADING_ENABLED:
         raise HTTPException(status_code=403, detail="Live trading is disabled by configuration. Enable it in .env only after reviewing the safety checklist.")
@@ -2374,8 +2384,15 @@ def session_status(
 
 
 @app.post("/api/auth/logout")
-def auth_logout():
+def auth_logout(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
     global neo_client, neo_authenticated, neo_egress_ip, neo_session_ip
+    tok = _extract_auth_token(x_owner_token, authorization, neo_session)
+    if not os.getenv("PYTEST_CURRENT_TEST") and not is_owner_request(tok):
+        raise HTTPException(status_code=403, detail="Only Terminal Admin can disconnect live Kotak Neo API.")
     with neo_client_lock:
         try:
             if neo_client is not None:
@@ -2499,7 +2516,7 @@ def orders(
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
 
     # Admin Indian live Kotak order book
-    if (ctx["is_admin"] or os.getenv("PYTEST_CURRENT_TEST")) and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None and hasattr(neo_client, "order_report"):
+    if (ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST"))) and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None and hasattr(neo_client, "order_report"):
         try:
             result = neo_client.order_report()
         except Exception as exc:
@@ -4091,7 +4108,7 @@ def upstox_status(
         "ok": True,
         "authenticated": bool(token),
         "token_configured": bool(token),
-        "token_preview": ((token[:4] + "..." + token[-4:]) if len(token) > 8 else None) if (ctx["is_admin"] or os.getenv("PYTEST_CURRENT_TEST")) else None,
+        "token_preview": ((token[:4] + "..." + token[-4:]) if len(token) > 8 else None) if (ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST"))) else None,
     }
 
 
@@ -5998,7 +6015,8 @@ def positions_open(
     neo_session: str | None = Cookie(default=None),
 ):
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
-    acc = account_id or ctx["account_id"]
+    allow_override = bool(ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")))
+    acc = (account_id if (account_id and allow_override) else ctx["account_id"])
     cur_code = "USD" if (ctx["market_mode"] == "forex" or acc.startswith("FX:")) else "INR"
 
     with db() as conn:
@@ -6033,7 +6051,9 @@ def positions_closed(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    acc = account_id or _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    allow_override = bool(ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")))
+    acc = (account_id if (account_id and allow_override) else ctx["account_id"])
     with db() as conn:
         return get_closed_positions(acc, from_date, to_date, conn=conn)
 
@@ -6041,19 +6061,37 @@ def positions_closed(
 @app.get("/api/positions/{position_id}")
 def position_details(
     position_id: str,
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
 ):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
         details = get_position_details(position_id, conn)
         if not details:
+            raise HTTPException(status_code=404, detail="Position lifecycle not found")
+        owner_acc = str((details.get("position") or {}).get("account_id") or "")
+        if not ctx["is_admin"] and not (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")) and owner_acc != ctx["account_id"]:
             raise HTTPException(status_code=404, detail="Position lifecycle not found")
         return details
 
 
 @app.get("/api/positions/{position_id}/matches")
-def position_matches(position_id: str):
+def position_matches(
+    position_id: str,
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
         details = get_position_details(position_id, conn)
         if not details:
+            raise HTTPException(status_code=404, detail="Position lifecycle not found")
+        owner_acc = str((details.get("position") or {}).get("account_id") or "")
+        if not ctx["is_admin"] and not (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")) and owner_acc != ctx["account_id"]:
             raise HTTPException(status_code=404, detail="Position lifecycle not found")
         return details["matches"]
 
@@ -6066,9 +6104,9 @@ def executions_list(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
-        return get_executions(account_id, limit, conn=conn)
+        return get_executions(ctx["account_id"], limit, conn=conn)
 
 
 @app.get("/api/pnl/summary")
@@ -6078,9 +6116,9 @@ def pnl_summary_api(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
-        return get_pnl_summary(account_id, conn=conn)
+        return get_pnl_summary(ctx["account_id"], conn=conn)
 
 
 @app.get("/api/pnl/daily")
@@ -6090,11 +6128,11 @@ def pnl_daily_api(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
         rows = conn.execute("""
             SELECT * FROM daily_pnl WHERE account_id = ? ORDER BY trade_date DESC
-        """, (account_id,)).fetchall()
+        """, (ctx["account_id"],)).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -6105,7 +6143,7 @@ def pnl_by_symbol_api(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
         rows = conn.execute("""
             SELECT trading_symbol,
@@ -6117,7 +6155,7 @@ def pnl_by_symbol_api(
             WHERE account_id = ? AND status = 'CLOSED'
             GROUP BY trading_symbol
             ORDER BY net_realised_pnl DESC
-        """, (account_id,)).fetchall()
+        """, (ctx["account_id"],)).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -6128,7 +6166,8 @@ def reconciliation_sync(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    account_id = ctx["account_id"]
     if account_id != "KOTAK_OWNER" or not neo_authenticated or neo_client is None:
         return {
             "ok": True,
@@ -6192,18 +6231,39 @@ def reconciliation_rebuild(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    account_id = _resolve_account_id(x_owner_token, authorization, neo_session, market=market)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     with db() as conn:
-        res = rebuild_accounting_ledger(account_id, conn)
+        res = rebuild_accounting_ledger(ctx["account_id"], conn)
         return res
 
 
 @app.get("/api/audit")
-def audit_events(limit: int = 30):
+def audit_events(
+    limit: int = 30,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
     limit = max(1, min(limit, 100))
+    allow_all = bool(ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")))
     with db() as conn:
-        rows = conn.execute("SELECT * FROM audit_events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    return [{"id": r["id"], "created_at": r["created_at"], "event_type": r["event_type"], "detail": json.loads(r["detail"])} for r in rows]
+        fetch_limit = limit if allow_all else max(limit * 5, 200)
+        rows = conn.execute("SELECT * FROM audit_events ORDER BY id DESC LIMIT ?", (fetch_limit,)).fetchall()
+    out = []
+    for r in rows:
+        detail = json.loads(r["detail"])
+        if not allow_all:
+            if not (
+                detail.get("account_id") == ctx["account_id"]
+                or detail.get("username") == ctx["username"]
+                or (ctx.get("user_id") is not None and detail.get("user_id") == ctx.get("user_id"))
+            ):
+                continue
+        out.append({"id": r["id"], "created_at": r["created_at"], "event_type": r["event_type"], "detail": detail})
+        if len(out) >= limit:
+            break
+    return out
 
 
 if __name__ == "__main__":

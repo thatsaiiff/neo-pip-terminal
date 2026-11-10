@@ -1107,6 +1107,60 @@ def test_chart_search_forex_and_performance_metrics(client):
     assert m["sharpe_ratio"] > 0
 
 
+def test_unauthenticated_and_non_admin_isolation_on_main_site_endpoints(client, monkeypatch):
+    # Sign up regular trader while PYTEST_CURRENT_TEST is active, also log an owner-like audit event
+    main.audit("broker_login_success", {"account_id": "KOTAK_OWNER", "environment": "prod"})
+    res_up = client.post("/api/auth/signup", json={"username": "sec_trader", "password": "pw_sec_99"})
+    assert res_up.status_code == 200
+    tok = res_up.json()["token"]
+    client.post("/api/user/select-market", json={"market": "indian"}, headers={"Authorization": f"Bearer {tok}"})
+
+    # Seed a closed position directly under KOTAK_OWNER
+    with main.db() as conn:
+        conn.execute("""
+            INSERT INTO positions (id, account_id, instrument_key, trading_symbol, product_type, lifecycle_number, direction, open_quantity, average_entry_price, realised_gross_pnl, realised_net_pnl, total_charges, status, opened_at, closed_at)
+            VALUES ('pos_owner_secret', 'KOTAK_OWNER', 'NSE_FO|NIFTY|NRML', 'NIFTY25000CE', 'NRML', 1, 'LONG', 0, '100.0', '5000.0', '4960.0', '40.0', 'CLOSED', '2026-11-10T09:15:00Z', '2026-11-10T09:20:00Z')
+        """)
+        conn.commit()
+
+    # Simulate production runtime (no PYTEST_CURRENT_TEST override) + globally authenticated Kotak session
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_egress_ip", "1.2.3.4")
+
+    # 1. Unauthenticated caller must get masked /api/status and 401 on all sensitive portfolio/audit routes
+    st_unauth = client.get("/api/status")
+    assert st_unauth.status_code == 200
+    st_json = st_unauth.json()
+    assert st_json["authenticated"] is False
+    assert st_json["broker_authenticated"] is False
+    assert st_json["kotak_egress_ip"] is None
+    assert st_json["mode"] == "simulation"
+
+    for path in ["/api/positions", "/api/positions/closed", "/api/executions", "/api/pnl/summary", "/api/orders", "/api/funds", "/api/sltp", "/api/audit"]:
+        r = client.get(path)
+        assert r.status_code == 401, f"Expected 401 for unauth GET {path}, got {r.status_code}"
+
+    # 2. Signed-in non-admin user must NOT see Admin Kotak status, KOTAK_OWNER closed positions, or owner audit events
+    headers = {"Authorization": f"Bearer {tok}"}
+    st_user = client.get("/api/status", headers=headers).json()
+    assert st_user["authenticated"] is True
+    assert st_user["is_admin"] is False
+    assert st_user["broker_authenticated"] is False
+    assert st_user["kotak_egress_ip"] is None
+
+    closed_override = client.get("/api/positions/closed?account_id=KOTAK_OWNER", headers=headers)
+    assert closed_override.status_code == 200
+    assert closed_override.json()["positions"] == []
+
+    det_override = client.get("/api/positions/pos_owner_secret", headers=headers)
+    assert det_override.status_code == 404
+
+    audit_user = client.get("/api/audit", headers=headers).json()
+    assert all(ev.get("event_type") != "broker_login_success" for ev in audit_user)
+
+
+
 
 
 
