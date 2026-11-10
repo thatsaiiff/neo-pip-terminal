@@ -24,6 +24,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
+from app.accounting import (
+    init_accounting_db,
+    process_execution,
+    get_open_positions,
+    get_closed_positions,
+    get_position_details,
+    get_executions,
+    get_pnl_summary,
+    rebuild_accounting_ledger,
+    calculate_statutory_charges,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -68,6 +79,7 @@ def db() -> sqlite3.Connection:
 
 def init_db() -> None:
     with db() as conn:
+        init_accounting_db(conn)
         conn.execute("""CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -503,6 +515,20 @@ def is_owner_request(token: str | None, allow_test_override: bool = False) -> bo
     return False
 
 
+def _resolve_account_id(
+    x_owner_token: str | None = None,
+    authorization: str | None = None,
+    neo_session: str | None = None,
+) -> str:
+    token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None) or neo_session
+    if is_owner_request(token):
+        return "KOTAK_OWNER"
+    session_info = _get_active_session_info(token)
+    if session_info and session_info.get("email"):
+        return session_info["email"]
+    return "DEMO_ACCOUNT"
+
+
 def _update_guest_position(symbol: str, side: str, product: str, qty: int, price: float) -> None:
     global _GUEST_POSITIONS
     existing = next((p for p in _GUEST_POSITIONS if p["symbol"] == symbol and p["product"] == product), None)
@@ -578,6 +604,26 @@ def _execute_demo_order(payload: OrderPayload) -> dict[str, Any]:
     _GUEST_ORDERS.insert(0, order_rec)
     if status == "completed":
         _update_guest_position(payload.symbol, payload.side, payload.product, qty, fill_price)
+        try:
+            with db() as conn:
+                process_execution({
+                    "account_id": "DEMO_ACCOUNT",
+                    "broker_execution_id": f"EXEC-{order_id}",
+                    "order_id": order_id,
+                    "instrument_key": f"{payload.exchange_segment}|{payload.symbol}|{payload.product}",
+                    "trading_symbol": payload.symbol,
+                    "exchange": payload.exchange_segment.split("_")[0] if "_" in payload.exchange_segment else "NSE",
+                    "segment": payload.exchange_segment,
+                    "product_type": payload.product,
+                    "side": payload.side,
+                    "quantity": qty,
+                    "price": fill_price,
+                    "execution_time": utc_now(),
+                    "source": "SIMULATION",
+                }, conn)
+                conn.commit()
+        except Exception as exc:
+            print(f"[Accounting Error] {exc}")
 
     return {
         "ok": True,
@@ -2228,6 +2274,55 @@ def exit_all_positions(
 
     if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and (not neo_authenticated or LIVE_TRADING_ENABLED):
         cnt = len(_GUEST_POSITIONS)
+        for p in list(_GUEST_POSITIONS):
+            sym = p.get("symbol", "")
+            qty = p.get("quantity", 0)
+            side = p.get("side", "BUY")
+            prod = p.get("product", "NRML")
+            exit_side = "SELL" if side == "BUY" else "BUY"
+            q = _get_live_quote_data(sym)
+            exit_price = float(q.get("last_price") or q.get("ltp") or p.get("average_price", 0))
+            if exit_price <= 0:
+                exit_price = 50.0
+            exec_id = f"EXIT-ALL-{int(time.time()*1000)%1000000}"
+            try:
+                with db() as conn:
+                    process_execution({
+                        "account_id": "DEMO_ACCOUNT",
+                        "broker_execution_id": exec_id,
+                        "order_id": exec_id,
+                        "instrument_key": f"NSE_FO|{sym}|{prod}",
+                        "trading_symbol": sym,
+                        "exchange": "NSE",
+                        "segment": "NSE_FO",
+                        "product_type": prod,
+                        "side": exit_side,
+                        "quantity": qty,
+                        "price": exit_price,
+                        "execution_time": utc_now(),
+                        "source": "EXIT_ALL",
+                    }, conn)
+                    conn.commit()
+            except Exception as e:
+                print(f"[Exit All Accounting Error] {e}")
+
+            _GUEST_ORDERS.insert(0, {
+                "id": exec_id,
+                "broker_order_id": None,
+                "mode": "simulation",
+                "symbol": sym,
+                "side": exit_side,
+                "quantity": qty,
+                "lots": 1,
+                "lot_size": qty,
+                "product": prod,
+                "order_type": "MKT",
+                "price": round(exit_price, 2),
+                "status": "completed",
+                "created_at": utc_now(),
+                "message": f"Closed position {sym} @ ₹{exit_price:.2f}",
+                "cancel_allowed": False,
+            })
         _GUEST_POSITIONS.clear()
         for o in _GUEST_ORDERS:
             if o.get("status") == "pending":
@@ -2416,6 +2511,139 @@ def exit_partial_position(payload: ExitPartialPayload):
         "errors": errors,
         "message": f"Exit {payload.percentage}% complete: {closed_positions} positions partially closed.",
     }
+
+
+class PositionExitReqPayload(BaseModel):
+    percentage: int = 100
+
+
+@app.post("/api/positions/{symbol:path}/exit")
+def exit_single_position(
+    symbol: str,
+    payload: PositionExitReqPayload | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    pct = (payload.percentage if payload else 100) / 100.0
+    sym = symbol.strip()
+
+    q = _get_live_quote_data(sym)
+    exit_price = float(q.get("last_price") or q.get("ltp") or 0.0)
+    if exit_price <= 0:
+        exit_price = 50.0
+
+    # 1. Check guest positions
+    guest_target = next((p for p in _GUEST_POSITIONS if p["symbol"].upper() == sym.upper()), None)
+    if guest_target:
+        orig_qty = guest_target["quantity"]
+        exit_qty = max(1, int(orig_qty * pct))
+        exit_side = "SELL" if guest_target["side"] == "BUY" else "BUY"
+        product = guest_target.get("product", "NRML")
+
+        exec_id = f"EXIT-{int(time.time()*1000)%1000000}"
+        try:
+            with db() as conn:
+                process_execution({
+                    "account_id": "DEMO_ACCOUNT",
+                    "broker_execution_id": exec_id,
+                    "order_id": exec_id,
+                    "instrument_key": f"NSE_FO|{sym}|{product}",
+                    "trading_symbol": sym,
+                    "exchange": "NSE",
+                    "segment": "NSE_FO",
+                    "product_type": product,
+                    "side": exit_side,
+                    "quantity": exit_qty,
+                    "price": exit_price,
+                    "execution_time": utc_now(),
+                    "source": "MANUAL_EXIT",
+                }, conn)
+                conn.commit()
+        except Exception as e:
+            print(f"[Exit Error] {e}")
+
+        if exit_qty >= orig_qty:
+            _GUEST_POSITIONS.remove(guest_target)
+        else:
+            guest_target["quantity"] -= exit_qty
+
+        _GUEST_ORDERS.insert(0, {
+            "id": exec_id,
+            "broker_order_id": None,
+            "mode": "simulation",
+            "symbol": sym,
+            "side": exit_side,
+            "quantity": exit_qty,
+            "lots": 1,
+            "lot_size": exit_qty,
+            "product": product,
+            "order_type": "MKT",
+            "price": round(exit_price, 2),
+            "status": "completed",
+            "created_at": utc_now(),
+            "message": f"Closed position {sym} @ ₹{exit_price:.2f}",
+            "cancel_allowed": False,
+        })
+        return {"ok": True, "message": f"Position {sym} exited @ ₹{exit_price:.2f}"}
+
+    # 2. Check accounting database open positions
+    with db() as conn:
+        open_positions = get_open_positions(account_id, conn)
+        target = next((p for p in open_positions if p["trading_symbol"].upper() == sym.upper() or p["instrument_key"].upper() == sym.upper()), None)
+        if target:
+            orig_qty = target["quantity"]
+            exit_qty = max(1, int(orig_qty * pct))
+            exit_side = "SELL" if target["direction"] == "LONG" else "BUY"
+            exec_id = f"EXIT-{int(time.time()*1000)%1000000}"
+            res = process_execution({
+                "account_id": account_id,
+                "broker_execution_id": exec_id,
+                "order_id": exec_id,
+                "instrument_key": target["instrument_key"],
+                "trading_symbol": target["trading_symbol"],
+                "exchange": "NSE",
+                "segment": "NSE_FO",
+                "product_type": target["product_type"],
+                "side": exit_side,
+                "quantity": exit_qty,
+                "price": exit_price,
+                "execution_time": utc_now(),
+                "source": "MANUAL_EXIT",
+            }, conn)
+            conn.commit()
+            return {"ok": True, "message": f"Position {sym} exited @ ₹{exit_price:.2f}", "result": res}
+
+    # 3. Live Kotak Neo session exit
+    if neo_authenticated and neo_client is not None and hasattr(neo_client, "positions"):
+        try:
+            pos_data = neo_client.positions()
+            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
+            live_target = next((p for p in raw_pos if str(p.get("trdSym") or p.get("sym") or "").upper() == sym.upper()), None)
+            if live_target:
+                net_qty = int(live_target.get("flQty") or live_target.get("netQty") or 0)
+                if net_qty != 0:
+                    exit_side = "SELL" if net_qty > 0 else "BUY"
+                    exit_qty = max(1, int(abs(net_qty) * pct))
+                    prod = live_target.get("prod") or "NRML"
+                    ex_seg = live_target.get("exSeg") or "nse_fo"
+                    neo_client.place_order(
+                        exchange_segment=ex_seg,
+                        product=prod,
+                        price="0",
+                        order_type="MKT",
+                        quantity=str(exit_qty),
+                        validity="DAY",
+                        trading_symbol=sym,
+                        transaction_type=exit_side,
+                        tag="manual_exit",
+                    )
+                    return {"ok": True, "message": f"Live order submitted to exit {sym}"}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to exit position {sym} on Kotak Neo: {e}")
+
+    return {"ok": True, "message": f"Position {sym} closed."}
 
 
 class TrailCostPayload(BaseModel):
@@ -3825,8 +4053,25 @@ def positions(
     token = x_owner_token or (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else None)
     is_owner = is_owner_request(token)
 
+    active_tab = (tab or ("closed" if closed else "open")).lower()
+
     # In public/live deployment without owner authentication, safely return isolated guest demo positions
     if not is_owner and not os.getenv("PYTEST_CURRENT_TEST") and (not neo_authenticated or LIVE_TRADING_ENABLED):
+        if active_tab == "closed":
+            with db() as conn:
+                closed_data = get_closed_positions("DEMO_ACCOUNT", conn=conn)
+                return {
+                    "positions": closed_data["positions"],
+                    "all_positions": closed_data["positions"],
+                    "summary": closed_data["summary"],
+                    "total_realized_pnl": float(closed_data["summary"]["net_realised_pnl"]),
+                    "total_net_pnl": float(closed_data["summary"]["net_realised_pnl"]),
+                    "gross_pnl": float(closed_data["summary"]["gross_realised_pnl"]),
+                    "total_charges": float(closed_data["summary"]["total_charges"]),
+                    "is_demo": True,
+                    "mode": "guest",
+                }
+
         res_positions = []
         tot_mtm = 0.0
         tot_pos_pnl = 0.0
@@ -3842,15 +4087,21 @@ def positions(
             tot_pos_pnl += m2m + float(p.get("realized_pnl", 0))
             res_positions.append(p)
 
+        with db() as conn:
+            closed_data = get_closed_positions("DEMO_ACCOUNT", conn=conn)
+            closed_cnt = len(closed_data.get("positions", []))
+
         return {
             "positions": res_positions,
             "total_mtm": round(tot_mtm, 2),
             "total_position_pnl": round(tot_pos_pnl, 2),
-            "total_realized_pnl": round(sum(float(p.get("realized_pnl", 0)) for p in _GUEST_POSITIONS), 2),
+            "total_realized_pnl": float(closed_data["summary"]["net_realised_pnl"]),
             "total_unrealized_pnl": round(tot_mtm, 2),
             "gross_pnl": round(tot_pos_pnl, 2),
-            "estimated_charges": 0.0,
+            "estimated_charges": float(closed_data["summary"]["total_charges"]),
             "net_pnl": round(tot_pos_pnl, 2),
+            "open_count": len(res_positions),
+            "closed_count": closed_cnt,
             "is_demo": True,
             "mode": "guest",
         }
@@ -3994,6 +4245,226 @@ def positions(
         "pnl_complete": True,
         "updated_at": utc_now(),
     }
+
+
+# ==================== DEDICATED POSITION ACCOUNTING API ENDPOINTS ====================
+
+@app.get("/api/positions/open")
+def positions_open(
+    account_id: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    acc = account_id or _resolve_account_id(x_owner_token, authorization, neo_session)
+    if acc == "DEMO_ACCOUNT" or (not neo_authenticated or LIVE_TRADING_ENABLED):
+        res_positions = []
+        tot_mtm = 0.0
+        for p in _GUEST_POSITIONS:
+            sym = p.get("symbol", "")
+            q = _get_live_quote_data(sym)
+            ltp = float(q.get("last_price") or q.get("ltp") or p.get("average_price", 0))
+            p["ltp"] = ltp
+            mult = 1 if p.get("side") == "BUY" else -1
+            m2m = round((ltp - float(p.get("average_price", 0))) * int(p.get("quantity", 0)) * mult, 2)
+            p["m2m"] = m2m
+            tot_mtm += m2m
+            res_positions.append(p)
+        return {
+            "account_id": acc,
+            "currency": "INR",
+            "positions": res_positions,
+            "total_unrealized_pnl": round(tot_mtm, 2),
+            "total_mtm": round(tot_mtm, 2),
+        }
+
+    with db() as conn:
+        open_list = get_open_positions(acc, conn)
+        tot_mtm = 0.0
+        for p in open_list:
+            sym = p.get("trading_symbol", "")
+            q = _get_live_quote_data(sym)
+            ltp = float(q.get("last_price") or q.get("ltp") or p.get("avg_price", 0))
+            p["ltp"] = ltp
+            mult = 1 if p.get("direction") == "LONG" else -1
+            m2m = round((ltp - float(p.get("avg_price", 0))) * int(p.get("quantity", 0)) * mult, 2)
+            p["m2m"] = m2m
+            tot_mtm += m2m
+        return {
+            "account_id": acc,
+            "currency": "INR",
+            "positions": open_list,
+            "total_unrealized_pnl": round(tot_mtm, 2),
+            "total_mtm": round(tot_mtm, 2),
+        }
+
+
+@app.get("/api/positions/closed")
+def positions_closed(
+    account_id: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    acc = account_id or _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        return get_closed_positions(acc, from_date, to_date, conn=conn)
+
+
+@app.get("/api/positions/{position_id}")
+def position_details(
+    position_id: str,
+):
+    with db() as conn:
+        details = get_position_details(position_id, conn)
+        if not details:
+            raise HTTPException(status_code=404, detail="Position lifecycle not found")
+        return details
+
+
+@app.get("/api/positions/{position_id}/matches")
+def position_matches(position_id: str):
+    with db() as conn:
+        details = get_position_details(position_id, conn)
+        if not details:
+            raise HTTPException(status_code=404, detail="Position lifecycle not found")
+        return details["matches"]
+
+
+@app.get("/api/executions")
+def executions_list(
+    limit: int = 100,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        return get_executions(account_id, limit, conn=conn)
+
+
+@app.get("/api/pnl/summary")
+def pnl_summary_api(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        return get_pnl_summary(account_id, conn=conn)
+
+
+@app.get("/api/pnl/daily")
+def pnl_daily_api(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM daily_pnl WHERE account_id = ? ORDER BY trade_date DESC
+        """, (account_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/pnl/by-symbol")
+def pnl_by_symbol_api(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT trading_symbol,
+                   COUNT(*) as lifecycles_count,
+                   COALESCE(SUM(CAST(realised_gross_pnl AS REAL)), 0) as gross_realised_pnl,
+                   COALESCE(SUM(CAST(total_charges AS REAL)), 0) as total_charges,
+                   COALESCE(SUM(CAST(realised_net_pnl AS REAL)), 0) as net_realised_pnl
+            FROM positions
+            WHERE account_id = ? AND status = 'CLOSED'
+            GROUP BY trading_symbol
+            ORDER BY net_realised_pnl DESC
+        """, (account_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/reconciliation/sync")
+def reconciliation_sync(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    if not neo_authenticated or neo_client is None:
+        return {
+            "ok": True,
+            "status": "reconciled",
+            "mode": "simulation",
+            "message": "Local accounting ledger in sync with demo executions.",
+            "mismatches": [],
+        }
+
+    synced = 0
+    mismatches = []
+    try:
+        if hasattr(neo_client, "trade_report"):
+            report = neo_client.trade_report()
+            trades = _rows_from_sdk_result(report) if (isinstance(report, dict) and not _kotak_response_error(report)) else []
+            with db() as conn:
+                for trd in trades:
+                    trade_id = str(trd.get("nTrdNo") or trd.get("trade_id") or "")
+                    if not trade_id:
+                        continue
+                    sym = str(trd.get("trdSym") or trd.get("sym") or "")
+                    qty = int(trd.get("qty") or trd.get("flQty") or 0)
+                    prc = float(trd.get("avgPrc") or trd.get("trdPrc") or 0)
+                    side = "BUY" if str(trd.get("trnsTp", "")).upper() in {"B", "BUY"} else "SELL"
+                    prod = str(trd.get("prod") or "NRML")
+                    ex_time = str(trd.get("trdDtTm") or trd.get("trade_timestamp") or utc_now())
+                    res = process_execution({
+                        "account_id": account_id,
+                        "broker_execution_id": trade_id,
+                        "order_id": str(trd.get("nOrdNo") or ""),
+                        "instrument_key": f"{trd.get('exSeg', 'NSE_FO')}|{sym}|{prod}",
+                        "trading_symbol": sym,
+                        "exchange": "NSE",
+                        "segment": str(trd.get("exSeg") or "NSE_FO"),
+                        "product_type": prod,
+                        "side": side,
+                        "quantity": qty,
+                        "price": prc,
+                        "execution_time": ex_time,
+                        "source": "KOTAK_TRADEBOOK",
+                    }, conn)
+                    if not res.get("duplicate"):
+                        synced += 1
+                conn.commit()
+    except Exception as e:
+        mismatches.append(f"Reconciliation fetch failed: {e}")
+
+    return {
+        "ok": True,
+        "status": "reconciled" if not mismatches else "pending_review",
+        "synced_executions": synced,
+        "mismatches": mismatches,
+        "message": f"Reconciliation complete: {synced} new executions matched.",
+    }
+
+
+@app.post("/api/reconciliation/rebuild")
+def reconciliation_rebuild(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    account_id = _resolve_account_id(x_owner_token, authorization, neo_session)
+    with db() as conn:
+        res = rebuild_accounting_ledger(account_id, conn)
+        return res
 
 
 @app.get("/api/audit")

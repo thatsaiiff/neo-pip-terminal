@@ -212,9 +212,9 @@
 
           <!-- Technical Indicators Dropdown -->
           <div class="indicators-wrap">
-            <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn" title="TradingView Indicators">
-              <span class="fx-icon">ƒx</span> Indicators
-              <span class="caret">▼</span>
+            <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn compact-fx-btn" title="TradingView Technical Indicators">
+              <span class="fx-icon">ƒx</span>
+              <span class="fx-lbl">Ind</span>
             </button>
             <div id="indicators-menu" class="indicators-menu hidden">
               <div class="ind-menu-header">TradingView Technical Indicators</div>
@@ -271,10 +271,9 @@
         <div class="tb-right">
           <!-- Auto Layout Selector (1, 2, 3 Charts) -->
           <div class="layout-selector-wrap">
-            <button id="layout-toggle-btn" class="ex-toolbar-btn" type="button" title="Select Multi-Chart Layout">
+            <button id="layout-toggle-btn" class="ex-toolbar-btn" type="button" title="Click to cycle 1, 2, 3 Charts">
               <span class="layout-icon">◫</span>
               <span id="current-layout-label">1 CHART</span>
-              <span class="caret">▼</span>
             </button>
             <div id="layout-dropdown" class="layout-dropdown hidden">
               <div class="layout-opt active" data-layout="1">
@@ -401,6 +400,9 @@
             <button type="button" class="ex-panel-tab" data-tab="closed" id="tab-btn-closed">
               Closed <span class="tab-badge" id="closed-trades-count">0</span>
             </button>
+            <button type="button" class="ex-panel-tab" data-tab="history" id="tab-btn-history">
+              Trade History <span class="tab-badge" id="trade-history-count">0</span>
+            </button>
           </div>
 
           <div class="panel-header-actions">
@@ -455,22 +457,67 @@
             </table>
           </div>
 
-          <!-- Closed Positions / History Tab Content -->
+          <!-- Closed Positions / History Tab Content (FIFO Accounting Lifecycles) -->
           <div class="panel-view hidden" id="view-closed-trades">
-            <table class="ex-data-table">
+            <div class="closed-summary-bar" id="closed-summary-bar">
+              <div class="cs-metric-pill">
+                <span class="cs-label">Realised Gross P&amp;L</span>
+                <span class="cs-value" id="cs-gross-pnl">₹0.00</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Statutory Charges</span>
+                <span class="cs-value text-dim" id="cs-charges">₹0.00</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Realised Net P&amp;L</span>
+                <span class="cs-value" id="cs-net-pnl">₹0.00</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Win / Loss</span>
+                <span class="cs-value" id="cs-win-ratio">0W / 0L</span>
+              </div>
+            </div>
+            <table class="ex-data-table" id="closed-positions-table">
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th>Product</th>
                   <th>Side</th>
-                  <th>Quantity</th>
-                  <th>Open Price</th>
-                  <th>Close Price</th>
-                  <th>Realized P&amp;L</th>
-                  <th>Execution Time</th>
+                  <th>Total Qty</th>
+                  <th>Avg Entry</th>
+                  <th>Avg Exit</th>
+                  <th>Gross P&amp;L</th>
+                  <th>Charges</th>
+                  <th>Net P&amp;L</th>
+                  <th>Closed Time</th>
+                  <th>Details</th>
                 </tr>
               </thead>
               <tbody id="closed-trades-tbody">
-                <tr><td colspan="7" class="empty-row">Showing closed trades for today.</td></tr>
+                <tr><td colspan="11" class="empty-row">Showing closed trades for today.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Trade History Tab Content (Immutable Executions Audit Trail) -->
+          <div class="panel-view hidden" id="view-trade-history">
+            <table class="ex-data-table" id="trade-history-table">
+              <thead>
+                <tr>
+                  <th>Time (IST)</th>
+                  <th>Fill ID</th>
+                  <th>Order ID</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Turnover</th>
+                  <th>Charges</th>
+                  <th>Product</th>
+                </tr>
+              </thead>
+              <tbody id="trade-history-tbody">
+                <tr><td colspan="10" class="empty-row">No trade executions yet.</td></tr>
               </tbody>
             </table>
           </div>
@@ -734,6 +781,7 @@
             <button type="button" class="m-otab active" data-otab="open" id="m-otab-open">Open</button>
             <button type="button" class="m-otab" data-otab="pending" id="m-otab-pending">Pending</button>
             <button type="button" class="m-otab" data-otab="closed" id="m-otab-closed">Closed</button>
+            <button type="button" class="m-otab" data-otab="history" id="m-otab-history">Trade History</button>
           </div>
 
           <div class="m-orders-content" id="m-orders-list">

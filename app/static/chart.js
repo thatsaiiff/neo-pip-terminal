@@ -36,6 +36,9 @@
   let updateLotDisplayFn = null;
   let cachedPositions = [];
   let cachedOrders = [];
+  let cachedClosedPositions = [];
+  let cachedExecutions = [];
+  let cachedPnlSummary = {};
   let updateMobileOrdersFn = null;
 
   // Open Symbol Tabs
@@ -1361,14 +1364,16 @@
     const btnOpen = $('tab-btn-open');
     const btnPending = $('tab-btn-pending');
     const btnClosed = $('tab-btn-closed');
+    const btnHistory = $('tab-btn-history');
 
     const vOpen = $('view-open-positions');
     const vPending = $('view-pending-orders');
     const vClosed = $('view-closed-trades');
+    const vHistory = $('view-trade-history');
 
     function switchDockTab(tab) {
-      [btnOpen, btnPending, btnClosed].forEach(b => b && b.classList.remove('active'));
-      [vOpen, vPending, vClosed].forEach(v => v && v.classList.add('hidden'));
+      [btnOpen, btnPending, btnClosed, btnHistory].forEach(b => b && b.classList.remove('active'));
+      [vOpen, vPending, vClosed, vHistory].forEach(v => v && v.classList.add('hidden'));
 
       if (tab === 'open') {
         if (btnOpen) btnOpen.classList.add('active');
@@ -1379,12 +1384,16 @@
       } else if (tab === 'closed') {
         if (btnClosed) btnClosed.classList.add('active');
         if (vClosed) vClosed.classList.remove('hidden');
+      } else if (tab === 'history') {
+        if (btnHistory) btnHistory.classList.add('active');
+        if (vHistory) vHistory.classList.remove('hidden');
       }
     }
 
     if (btnOpen) btnOpen.addEventListener('click', () => switchDockTab('open'));
     if (btnPending) btnPending.addEventListener('click', () => switchDockTab('pending'));
     if (btnClosed) btnClosed.addEventListener('click', () => switchDockTab('closed'));
+    if (btnHistory) btnHistory.addEventListener('click', () => switchDockTab('history'));
 
     // Toggle minimize
     const toggleDockBtn = $('btn-toggle-dock');
@@ -1417,6 +1426,7 @@
 
   async function fetchPositionsAndOrders() {
     try {
+      // 1. Open Positions
       const posData = await api('/api/positions?tab=open');
       const openTbody = $('open-positions-tbody');
       const openCountBadge = $('open-pos-count');
@@ -1430,10 +1440,10 @@
         } else {
           openTbody.innerHTML = '';
           positions.forEach(p => {
-            const sym = p.symbol || p.trdSym || '—';
-            const side = (p.side || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+            const sym = p.symbol || p.trading_symbol || p.trdSym || '—';
+            const side = (p.side || p.direction || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
             const qty = Math.abs(Number(p.quantity || p.qty || 0));
-            const avg = Number(p.average_price || p.avgPrc || 0);
+            const avg = Number(p.average_price || p.avg_price || p.avgPrc || 0);
             const ltp = Number(p.ltp || avg);
             const m2m = Number(p.m2m || (side === 'BUY' ? (ltp - avg) * qty : (avg - ltp) * qty));
             const isPos = m2m >= 0;
@@ -1475,7 +1485,7 @@
         }
       }
 
-      // Update Footer Equity & PnL
+      // 2. Funds & Equity
       const fundsData = await api('/api/funds').catch(() => ({}));
       const eqEl = $('f-equity');
       const fmEl = $('f-free-margin');
@@ -1483,7 +1493,6 @@
       const accBal = $('ex-acc-balance');
 
       if (fundsData && fundsData.funds_error) {
-        // Live Kotak funds failed to report
         const errText = 'Error: Failed to fetch';
         const errStyle = 'color: #ff4757 !important; font-weight: 700;';
         if (accBal) { accBal.textContent = errText; accBal.setAttribute('style', errStyle); }
@@ -1491,7 +1500,6 @@
         if (fmEl) { fmEl.textContent = errText; fmEl.setAttribute('style', errStyle); }
         if (muEl) { muEl.textContent = '₹0.00'; }
       } else if (fundsData && fundsData.is_demo) {
-        // Guest Demo Mode
         const avail = Number(fundsData.available_margin !== undefined ? fundsData.available_margin : 1000000);
         const used = Number(fundsData.used_margin || 0);
         const equity = Number(fundsData.total_equity || avail);
@@ -1501,7 +1509,6 @@
         if (fmEl) { fmEl.textContent = `₹${avail.toLocaleString('en-IN', { minimumFractionDigits: 2 })}${demoTag}`; fmEl.removeAttribute('style'); }
         if (muEl) { muEl.textContent = `₹${used.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`; }
       } else if (fundsData && fundsData.available_margin !== undefined) {
-        // Live Kotak exact reported funds
         const avail = Number(fundsData.available_margin);
         const used = Number(fundsData.used_margin || 0);
         const equity = Number(fundsData.total_equity || avail);
@@ -1517,19 +1524,13 @@
         if (fmEl) { fmEl.textContent = errText; fmEl.setAttribute('style', errStyle); }
       }
 
-      // Orders report
+      // 3. Orders report (Pending)
       const ordersData = await api('/api/orders').catch(() => []);
       const pendingTbody = $('pending-orders-tbody');
       const pendingCount = $('pending-orders-count');
-      const closedTbody = $('closed-trades-tbody');
-      const closedCount = $('closed-trades-count');
-
       const allOrders = Array.isArray(ordersData) ? ordersData : [];
       const pendingList = allOrders.filter(o => o.status === 'pending');
-      const closedList = allOrders.filter(o => o.status === 'completed' || o.status === 'simulated');
-
       if (pendingCount) pendingCount.textContent = pendingList.length;
-      if (closedCount) closedCount.textContent = closedList.length;
 
       if (pendingTbody) {
         if (!pendingList.length) {
@@ -1546,36 +1547,175 @@
               <td>${o.quantity}</td>
               <td>₹${Number(o.price || 0).toFixed(2)}</td>
               <td><span class="tag-pending">Pending</span></td>
-              <td><button type="button" class="pos-action-btn danger">Cancel</button></td>
+              <td><button type="button" class="pos-action-btn danger btn-cancel-order" data-id="${o.id}">Cancel</button></td>
             `;
+            tr.querySelector('.btn-cancel-order').addEventListener('click', async () => {
+              try {
+                toast(`Cancelling order #${o.id}...`);
+                await api(`/api/orders/${o.id}/cancel`, { method: 'POST' });
+                toast(`✅ Order cancelled`);
+                fetchPositionsAndOrders();
+              } catch (e) {
+                toast(`❌ ${e.message}`);
+              }
+            });
             pendingTbody.appendChild(tr);
           });
         }
       }
 
+      // 4. Closed Positions (Accounting Lifecycles) & Summary
+      const closedData = await api('/api/positions/closed').catch(() => ({ positions: [], summary: {} }));
+      const pnlSummaryData = await api('/api/pnl/summary').catch(() => ({}));
+      const closedTbody = $('closed-trades-tbody');
+      const closedCount = $('closed-trades-count');
+
+      const closedPositions = Array.isArray(closedData) ? closedData : (closedData.positions || []);
+      const closedSummary = (!Array.isArray(closedData) && closedData.summary) ? closedData.summary : {};
+      if (closedCount) closedCount.textContent = closedPositions.length;
+
+      // Update Desktop Closed Summary Bar
+      const grossEl = $('cs-gross-pnl');
+      const chargesEl = $('cs-charges');
+      const netEl = $('cs-net-pnl');
+      const winRatioEl = $('cs-win-ratio');
+
+      const gross = Number(closedSummary.gross_realised_pnl !== undefined ? closedSummary.gross_realised_pnl : (pnlSummaryData.total_realised_gross_pnl || 0));
+      const charges = Number(closedSummary.total_charges !== undefined ? closedSummary.total_charges : (pnlSummaryData.total_charges || 0));
+      const net = Number(closedSummary.net_realised_pnl !== undefined ? closedSummary.net_realised_pnl : (pnlSummaryData.total_realised_net_pnl || 0));
+      const wins = Number(closedSummary.winning_positions !== undefined ? closedSummary.winning_positions : (pnlSummaryData.winning_trades || 0));
+      const losses = Number(closedSummary.losing_positions !== undefined ? closedSummary.losing_positions : (pnlSummaryData.losing_trades || 0));
+
+      if (grossEl) {
+        grossEl.textContent = `${gross >= 0 ? '+' : ''}₹${gross.toFixed(2)}`;
+        grossEl.className = `cs-value ${gross >= 0 ? 'pos' : 'neg'}`;
+      }
+      if (chargesEl) {
+        chargesEl.textContent = `₹${charges.toFixed(2)}`;
+      }
+      if (netEl) {
+        netEl.textContent = `${net >= 0 ? '+' : ''}₹${net.toFixed(2)}`;
+        netEl.className = `cs-value ${net >= 0 ? 'pos' : 'neg'}`;
+      }
+      if (winRatioEl) {
+        winRatioEl.textContent = `${wins}W / ${losses}L`;
+      }
+
       if (closedTbody) {
-        if (!closedList.length) {
-          closedTbody.innerHTML = '<tr><td colspan="7" class="empty-row">Showing closed trades for today.</td></tr>';
+        if (!closedPositions.length) {
+          closedTbody.innerHTML = '<tr><td colspan="11" class="empty-row">No closed positions recorded.</td></tr>';
         } else {
           closedTbody.innerHTML = '';
-          closedList.forEach(o => {
+          closedPositions.forEach((cp, idx) => {
+            const sym = cp.symbol || cp.trading_symbol || '—';
+            const netPnl = Number(cp.realised_net_pnl !== undefined ? cp.realised_net_pnl : (cp.realised_gross_pnl || 0));
+            const grossPnl = Number(cp.realised_gross_pnl || 0);
+            const cpCharges = Number(cp.total_charges || 0);
+            const avgBuy = Number(cp.avg_buy_price || 0);
+            const avgSell = Number(cp.avg_sell_price || 0);
+            const qty = Math.max(Number(cp.total_buy_quantity || 0), Number(cp.total_sell_quantity || 0));
+            const side = (cp.total_buy_quantity >= cp.total_sell_quantity ? 'BUY' : 'SELL');
+            const isPos = netPnl >= 0;
+            const closedTime = cp.closed_at ? (cp.closed_at.split('T')[1]?.slice(0, 8) || cp.closed_at) : 'Today';
+
             const tr = document.createElement('tr');
             tr.innerHTML = `
-              <td><b>${o.symbol}</b></td>
-              <td><span class="side-badge ${(o.side || 'BUY').toLowerCase()}">${o.side}</span></td>
-              <td>${o.quantity}</td>
-              <td>₹${Number(o.price || 0).toFixed(2)}</td>
-              <td>₹${Number(o.price || 0).toFixed(2)}</td>
-              <td class="text-green">+₹0.00</td>
-              <td>${o.created_at ? o.created_at.split('T')[1] || o.created_at : 'Today'}</td>
+              <td><b>${sym}</b></td>
+              <td>${cp.product || 'NRML'}</td>
+              <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
+              <td>${qty}</td>
+              <td>₹${avgBuy.toFixed(2)}</td>
+              <td>₹${avgSell.toFixed(2)}</td>
+              <td style="color: ${grossPnl >= 0 ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">
+                ${grossPnl >= 0 ? '+' : ''}₹${grossPnl.toFixed(2)}
+              </td>
+              <td class="text-dim">₹${cpCharges.toFixed(2)}</td>
+              <td style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:800;">
+                ${isPos ? '+' : ''}₹${netPnl.toFixed(2)}
+              </td>
+              <td>${closedTime}</td>
+              <td>
+                <button type="button" class="btn-toggle-matches" data-match-idx="${idx}">FIFO Fills ▾</button>
+              </td>
             `;
+
+            // Nested detail row for FIFO lot matches
+            const detailTr = document.createElement('tr');
+            detailTr.className = 'matches-details-row hidden';
+            detailTr.id = `matches-row-${idx}`;
+            const matches = cp.matches || [];
+            let matchesHtml = '<div class="matches-nested-wrap"><h4>FIFO Execution Lot Matches:</h4>';
+            if (!matches.length) {
+              matchesHtml += '<p style="color:var(--text-dim);font-size:11px;margin:0;">Single lot match executed directly.</p>';
+            } else {
+              matchesHtml += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><thead><tr style="color:var(--text-dim);text-align:left;"><th>Matched Qty</th><th>Buy Price</th><th>Sell Price</th><th>Gross P&amp;L</th><th>Matched At</th></tr></thead><tbody>';
+              matches.forEach(m => {
+                const mPnl = Number(m.gross_pnl || 0);
+                matchesHtml += `<tr><td>${m.quantity}</td><td>₹${Number(m.buy_price).toFixed(2)}</td><td>₹${Number(m.sell_price).toFixed(2)}</td><td style="color:${mPnl >= 0 ? 'var(--bull)' : 'var(--bear)'};font-weight:700;">${mPnl >= 0 ? '+' : ''}₹${mPnl.toFixed(2)}</td><td>${m.matched_at ? m.matched_at.split('T')[1]?.slice(0, 8) || m.matched_at : 'Today'}</td></tr>`;
+              });
+              matchesHtml += '</tbody></table>';
+            }
+            matchesHtml += '</div>';
+            detailTr.innerHTML = `<td colspan="11">${matchesHtml}</td>`;
+
+            tr.querySelector('.btn-toggle-matches').addEventListener('click', (e) => {
+              e.stopPropagation();
+              const isHidden = detailTr.classList.contains('hidden');
+              detailTr.classList.toggle('hidden', !isHidden);
+              e.currentTarget.textContent = isHidden ? 'FIFO Fills ▴' : 'FIFO Fills ▾';
+            });
+
             closedTbody.appendChild(tr);
+            closedTbody.appendChild(detailTr);
+          });
+        }
+      }
+
+      // 5. Executions Ledger (Trade History)
+      const executionsData = await api('/api/executions').catch(() => []);
+      const execList = Array.isArray(executionsData) ? executionsData : [];
+      const historyTbody = $('trade-history-tbody');
+      const historyCount = $('trade-history-count');
+      if (historyCount) historyCount.textContent = execList.length;
+
+      if (historyTbody) {
+        if (!execList.length) {
+          historyTbody.innerHTML = '<tr><td colspan="10" class="empty-row">No trade executions yet.</td></tr>';
+        } else {
+          historyTbody.innerHTML = '';
+          execList.forEach(e => {
+            const sym = e.symbol || e.trading_symbol || '—';
+            const side = (e.side || 'BUY').toUpperCase();
+            const qty = Number(e.quantity || 0);
+            const price = Number(e.price || 0);
+            const turnover = (qty * price);
+            const totalChg = Number(e.charges?.total_charges || 0);
+            const time = e.executed_at ? (e.executed_at.split('T')[1]?.slice(0, 8) || e.executed_at) : 'Today';
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>${time}</td>
+              <td style="font-family:var(--font-mono);font-size:11px;">#${e.id || e.broker_execution_id}</td>
+              <td style="font-family:var(--font-mono);font-size:11px;">${e.order_id || '—'}</td>
+              <td><b>${sym}</b></td>
+              <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
+              <td>${qty}</td>
+              <td>₹${price.toFixed(2)}</td>
+              <td>₹${turnover.toFixed(2)}</td>
+              <td class="text-dim" title="STT: ₹${Number(e.charges?.stt||0).toFixed(2)}, Turnover: ₹${Number(e.charges?.turnover_charges||0).toFixed(2)}, GST: ₹${Number(e.charges?.gst||0).toFixed(2)}">₹${totalChg.toFixed(2)}</td>
+              <td>${e.product || 'NRML'}</td>
+            `;
+            historyTbody.appendChild(tr);
           });
         }
       }
 
       cachedPositions = positions;
       cachedOrders = allOrders;
+      cachedClosedPositions = closedPositions;
+      cachedExecutions = execList;
+      cachedPnlSummary = pnlSummaryData;
+
       if (typeof updateMobileOrdersFn === 'function') {
         updateMobileOrdersFn();
       }
@@ -2058,27 +2198,6 @@
       }
     }
 
-      if (ownerActive) {
-        if (pill) { pill.className = 'ex-acc-pill live'; pill.textContent = 'Live'; }
-        if (idEl) idEl.textContent = '#KOTAK-LIVE';
-        if (modeBadge) { modeBadge.textContent = 'Kotak Live (0 Brokerage)'; modeBadge.className = 'text-green'; }
-        if (btnLogoutEl) btnLogoutEl.classList.remove('hidden');
-        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.add('hidden');
-        if (menuTitle) menuTitle.textContent = 'Kotak Live Account';
-        if (menuSub) menuSub.textContent = '0 Brokerage F&O Enabled';
-        if (sessionBadge) sessionBadge.classList.remove('hidden');
-      } else {
-        if (pill) { pill.className = 'ex-acc-pill demo'; pill.textContent = 'Demo'; }
-        if (idEl) idEl.textContent = '#GUEST-8842';
-        if (modeBadge) { modeBadge.textContent = 'Demo Paper Trading'; modeBadge.className = 'mode-badge-demo'; }
-        if (btnLogoutEl) btnLogoutEl.classList.add('hidden');
-        if (btnOwnerLoginEl) btnOwnerLoginEl.classList.remove('hidden');
-        if (menuTitle) menuTitle.textContent = 'Guest Demo Mode';
-        if (menuSub) menuSub.textContent = 'Virtual paper trading active';
-        if (sessionBadge) sessionBadge.classList.add('hidden');
-      }
-    }
-
     // 5-minute Inactivity Timer Interval
     clearInterval(inactivityTimerInterval);
     inactivityTimerInterval = setInterval(() => {
@@ -2132,16 +2251,44 @@
     const railBtn = $('rail-btn-indicators');
     const menu = $('indicators-menu');
 
+    function positionIndicatorsMenu(triggerEl) {
+      if (!menu) return;
+      const rect = (triggerEl || btn || railBtn).getBoundingClientRect();
+      const menuWidth = 270;
+      const left = Math.max(10, Math.min(rect.left, window.innerWidth - menuWidth - 10));
+      const top = Math.min(rect.bottom + 6, window.innerHeight - 340);
+      menu.style.position = 'fixed';
+      menu.style.top = `${top}px`;
+      menu.style.left = `${left}px`;
+      menu.style.zIndex = '99999';
+    }
+
     function toggleMenu(e) {
-      if (e) e.stopPropagation();
-      menu.classList.toggle('hidden');
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      const triggerEl = (e && e.currentTarget) ? e.currentTarget : btn;
+      const isHidden = menu.classList.contains('hidden');
+      if (isHidden) {
+        positionIndicatorsMenu(triggerEl);
+        menu.classList.remove('hidden');
+      } else {
+        menu.classList.add('hidden');
+      }
     }
 
     if (btn && menu) btn.addEventListener('click', toggleMenu);
     if (railBtn && menu) railBtn.addEventListener('click', toggleMenu);
 
+    window.addEventListener('resize', () => {
+      if (menu && !menu.classList.contains('hidden')) {
+        positionIndicatorsMenu();
+      }
+    });
+
     document.addEventListener('click', e => {
-      if (menu && !menu.contains(e.target) && e.target !== btn && e.target !== railBtn) {
+      if (menu && !menu.contains(e.target) && e.target !== btn && !btn?.contains(e.target) && e.target !== railBtn && !railBtn?.contains(e.target)) {
         menu.classList.add('hidden');
       }
     });
@@ -2179,41 +2326,62 @@
       });
     });
 
-    // Layout Dropdown
+    // Layout Toggle Button (Direct Cycle: 1 -> 2 -> 3 -> 1 on single tap)
     const lBtn = $('layout-toggle-btn');
     const lDrop = $('layout-dropdown');
     const lLbl = $('current-layout-label');
     const stage = $('chart-stage');
 
-    if (lBtn && lDrop) {
-      lBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        lDrop.classList.toggle('hidden');
-      });
-      document.addEventListener('click', () => lDrop.classList.add('hidden'));
+    function applyLayout(lay) {
+      activeLayout = lay;
+      stage.className = `ex-chart-stage layout-${lay}`;
+      if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
 
       document.querySelectorAll('.layout-opt').forEach(opt => {
-        opt.addEventListener('click', () => {
-          document.querySelectorAll('.layout-opt').forEach(o => o.classList.remove('active'));
-          opt.classList.add('active');
+        opt.classList.toggle('active', parseInt(opt.dataset.layout) === lay);
+      });
+
+      // Initialize pane charts if not yet done
+      if (lay >= 2 && !panes[1].chart) {
+        initChartPane(panes[1]);
+        loadCandles(panes[1]);
+      }
+      if (lay === 3 && !panes[2].chart) {
+        initChartPane(panes[2]);
+        loadCandles(panes[2]);
+      }
+
+      // Resize all active pane charts so they fill container seamlessly
+      setTimeout(() => {
+        panes.forEach(p => {
+          if (p.chart) {
+            if (p.container) {
+              const w = p.container.clientWidth;
+              const h = p.container.clientHeight;
+              if (w > 0 && h > 0) p.chart.resize(w, h);
+            }
+            p.chart.timeScale().fitContent();
+          }
+        });
+      }, 60);
+    }
+
+    if (lBtn) {
+      lBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextLayout = (activeLayout % 3) + 1;
+        applyLayout(nextLayout);
+      });
+    }
+
+    if (lDrop) {
+      document.querySelectorAll('.layout-opt').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
           const lay = parseInt(opt.dataset.layout) || 1;
-          activeLayout = lay;
-          stage.className = `ex-chart-stage layout-${lay}`;
-          if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
-
-          // Initialize pane charts if not yet done
-          if (lay >= 2 && !panes[1].chart) {
-            initChartPane(panes[1]);
-            loadCandles(panes[1]);
-          }
-          if (lay === 3 && !panes[2].chart) {
-            initChartPane(panes[2]);
-            loadCandles(panes[2]);
-          }
-
-          panes.forEach(p => {
-            if (p.chart) p.chart.timeScale().fitContent();
-          });
+          applyLayout(lay);
+          lDrop.classList.add('hidden');
         });
       });
     }
@@ -2535,9 +2703,9 @@
       const mOpenTab = $('m-otab-open');
       const mPendingTab = $('m-otab-pending');
       const mClosedTab = $('m-otab-closed');
+      const mHistoryTab = $('m-otab-history');
 
       const pendingList = cachedOrders.filter(o => o.status === 'pending');
-      const closedList = cachedOrders.filter(o => o.status === 'completed' || o.status === 'simulated');
 
       if (mOpenTab) {
         mOpenTab.innerHTML = 'Open' + (cachedPositions.length ? ` <span class="m-tab-badge">${cachedPositions.length}</span>` : '');
@@ -2546,7 +2714,10 @@
         mPendingTab.innerHTML = 'Pending' + (pendingList.length ? ` <span class="m-tab-badge">${pendingList.length}</span>` : '');
       }
       if (mClosedTab) {
-        mClosedTab.innerHTML = 'Closed' + (closedList.length ? ` <span class="m-tab-badge">${closedList.length}</span>` : '');
+        mClosedTab.innerHTML = 'Closed' + (cachedClosedPositions.length ? ` <span class="m-tab-badge">${cachedClosedPositions.length}</span>` : '');
+      }
+      if (mHistoryTab) {
+        mHistoryTab.innerHTML = 'Trade History' + (cachedExecutions.length ? ` <span class="m-tab-badge">${cachedExecutions.length}</span>` : '');
       }
 
       container.innerHTML = '';
@@ -2593,10 +2764,10 @@
           });
         } else {
           cachedPositions.forEach(p => {
-            const sym = p.symbol || p.trdSym || '—';
-            const side = (p.side || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+            const sym = p.symbol || p.trading_symbol || p.trdSym || '—';
+            const side = (p.side || p.direction || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
             const qty = Math.abs(Number(p.quantity || p.qty || 0));
-            const avg = Number(p.average_price || p.avgPrc || 0);
+            const avg = Number(p.average_price || p.avg_price || p.avgPrc || 0);
             const ltp = Number(p.ltp || avg);
             const m2m = Number(p.m2m || (side === 'BUY' ? (ltp - avg) * qty : (avg - ltp) * qty));
             const isPos = m2m >= 0;
@@ -2693,12 +2864,12 @@
           });
         }
       } else if (tab === 'closed') {
-        if (!closedList.length) {
-          container.innerHTML = '<div class="m-orders-empty-msg">No closed trades today.</div>';
+        if (!cachedClosedPositions.length) {
+          container.innerHTML = '<div class="m-orders-empty-msg">No closed positions recorded.</div>';
         } else {
           let totalDayPnl = 0;
-          closedList.forEach(c => {
-            const pnl = Number(c.realized_pnl || c.pnl || 0);
+          cachedClosedPositions.forEach(c => {
+            const pnl = Number(c.realised_net_pnl !== undefined ? c.realised_net_pnl : (c.realised_gross_pnl || 0));
             totalDayPnl += pnl;
           });
 
@@ -2712,12 +2883,17 @@
           `;
           container.appendChild(dateHdr);
 
-          closedList.forEach(c => {
-            const side = (c.side || 'BUY').toUpperCase();
-            const pnl = Number(c.realized_pnl || c.pnl || 0);
-            const isPos = pnl >= 0;
-            const openPrc = Number(c.open_price || c.average_price || c.price || 0);
-            const closePrc = Number(c.close_price || c.exit_price || c.price || 0);
+          cachedClosedPositions.forEach((c, idx) => {
+            const sym = c.symbol || c.trading_symbol || '—';
+            const netPnl = Number(c.realised_net_pnl !== undefined ? c.realised_net_pnl : (c.realised_gross_pnl || 0));
+            const grossPnl = Number(c.realised_gross_pnl || 0);
+            const cpCharges = Number(c.total_charges || 0);
+            const isPos = netPnl >= 0;
+            const openPrc = Number(c.avg_buy_price || 0);
+            const closePrc = Number(c.avg_sell_price || 0);
+            const qty = Math.max(Number(c.total_buy_quantity || 0), Number(c.total_sell_quantity || 0));
+            const side = (c.total_buy_quantity >= c.total_sell_quantity ? 'BUY' : 'SELL');
+            const matches = c.matches || [];
 
             const card = document.createElement('div');
             card.className = 'm-order-card closed';
@@ -2725,17 +2901,81 @@
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
                   <span class="m-card-icon">🪙</span>
-                  <span class="m-card-sym">${c.symbol}</span>
+                  <span class="m-card-sym">${sym}</span>
                   <span class="m-tag-pill tp">TP</span>
                   <span class="m-tag-pill sl">SL</span>
                 </div>
                 <div class="m-card-pnl ${isPos ? 'pos' : 'neg'}">
-                  ${isPos ? '+' : ''}₹${pnl.toFixed(2)}
+                  ${isPos ? '+' : ''}₹${netPnl.toFixed(2)}
                 </div>
               </div>
               <div class="m-card-bot">
-                <div class="m-card-sub ${side.toLowerCase()}">${side} ${c.quantity || 1} lot at ₹${openPrc.toFixed(2)}</div>
-                <div class="m-card-ltp">₹${closePrc.toFixed(2)}</div>
+                <div class="m-card-sub ${side.toLowerCase()}">Bought ${qty} @ ₹${openPrc.toFixed(2)}</div>
+                <div class="m-card-ltp">Sold @ ₹${closePrc.toFixed(2)}</div>
+              </div>
+              <div class="m-card-meta-row">
+                <span>Gross: ${grossPnl >= 0 ? '+' : ''}₹${grossPnl.toFixed(2)} | Chg: ₹${cpCharges.toFixed(2)}</span>
+                <span class="m-card-expand-toggle" data-idx="${idx}">FIFO Fills ▾</span>
+              </div>
+              <div class="m-card-fifo-drawer hidden" id="m-fifo-drawer-${idx}">
+                ${matches.length ? matches.map(m => `
+                  <div class="m-fifo-item">
+                    <span>${m.quantity} qty @ ₹${Number(m.buy_price).toFixed(2)} ➔ ₹${Number(m.sell_price).toFixed(2)}</span>
+                    <span style="color:${Number(m.gross_pnl||0)>=0?'var(--bull)':'var(--bear)'};font-weight:700;">
+                      ${Number(m.gross_pnl||0)>=0?'+':''}₹${Number(m.gross_pnl||0).toFixed(2)}
+                    </span>
+                  </div>
+                `).join('') : '<div class="m-fifo-item">Single execution lot closed</div>'}
+              </div>
+            `;
+
+            const toggleBtn = card.querySelector('.m-card-expand-toggle');
+            const drawer = card.querySelector(`#m-fifo-drawer-${idx}`);
+            if (toggleBtn && drawer) {
+              toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isHidden = drawer.classList.contains('hidden');
+                drawer.classList.toggle('hidden', !isHidden);
+                toggleBtn.textContent = isHidden ? 'FIFO Fills ▴' : 'FIFO Fills ▾';
+              });
+            }
+
+            container.appendChild(card);
+          });
+        }
+      } else if (tab === 'history') {
+        if (!cachedExecutions.length) {
+          container.innerHTML = '<div class="m-orders-empty-msg">No executed trades recorded yet.</div>';
+        } else {
+          cachedExecutions.forEach(e => {
+            const sym = e.symbol || e.trading_symbol || '—';
+            const side = (e.side || 'BUY').toUpperCase();
+            const qty = Number(e.quantity || 0);
+            const price = Number(e.price || 0);
+            const turnover = (qty * price);
+            const totalChg = Number(e.charges?.total_charges || 0);
+            const time = e.executed_at ? (e.executed_at.split('T')[1]?.slice(0, 8) || e.executed_at) : 'Today';
+
+            const card = document.createElement('div');
+            card.className = 'm-order-card history';
+            card.innerHTML = `
+              <div class="m-card-top">
+                <div class="m-card-sym-wrap">
+                  <span class="m-card-icon">⚡</span>
+                  <span class="m-card-sym">${sym}</span>
+                  <span class="m-exec-badge ${side.toLowerCase()}">${side}</span>
+                </div>
+                <div class="m-card-pnl" style="color:var(--text-main);font-size:13px;">
+                  ₹${turnover.toFixed(2)}
+                </div>
+              </div>
+              <div class="m-card-bot">
+                <div class="m-card-sub">${qty} qty at ₹${price.toFixed(2)}</div>
+                <div class="m-card-ltp" style="font-size:11px;color:var(--text-dim);">${time}</div>
+              </div>
+              <div class="m-card-meta-row">
+                <span>Charges: ₹${totalChg.toFixed(2)} (STT: ₹${Number(e.charges?.stt||0).toFixed(2)})</span>
+                <span style="font-family:var(--font-mono);font-size:10.5px;">#${e.id || e.broker_execution_id}</span>
               </div>
             `;
             container.appendChild(card);

@@ -745,6 +745,87 @@ def test_option_strike_candle_derivation_fallback(client):
     assert len(data.get("candles", [])) > 0
 
 
+def test_accounting_fifo_lifecycle_and_closed_pnl(client):
+    from app.main import db
+    from app.accounting import process_execution
+
+    acc = "FIFO_TEST_ACC"
+    sym = "NIFTY26NOV25000CE"
+
+    with db() as conn:
+        # Golden test: Buy 50 @ 100, Buy 50 @ 110, Sell 40 @ 120, Sell 30 @ 115, Sell 30 @ 90
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_1", "instrument_key": sym, "trading_symbol": sym, "side": "BUY", "quantity": 50, "price": "100", "execution_time": "2026-11-10T03:50:00Z"}, conn)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_2", "instrument_key": sym, "trading_symbol": sym, "side": "BUY", "quantity": 50, "price": "110", "execution_time": "2026-11-10T03:55:00Z"}, conn)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_3", "instrument_key": sym, "trading_symbol": sym, "side": "SELL", "quantity": 40, "price": "120", "execution_time": "2026-11-10T04:05:00Z"}, conn)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_4", "instrument_key": sym, "trading_symbol": sym, "side": "SELL", "quantity": 30, "price": "115", "execution_time": "2026-11-10T04:15:00Z"}, conn)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_5", "instrument_key": sym, "trading_symbol": sym, "side": "SELL", "quantity": 30, "price": "90", "execution_time": "2026-11-10T04:30:00Z"}, conn)
+        conn.commit()
+
+    res = client.get(f"/api/positions/closed?account_id={acc}", headers={"X-Owner-Token": "TEST_TOKEN"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "positions" in data
+    assert len(data["positions"]) >= 1
+    target = next((p for p in data["positions"] if p["account_id"] == acc and p["trading_symbol"] == sym), None)
+    assert target is not None
+    assert target["gross_realised_pnl"] == "450.00"
+    assert target["status"] == "CLOSED"
+    assert len(target["matches"]) == 4
+
+
+def test_accounting_position_reversal(client):
+    from app.main import db
+    from app.accounting import process_execution, get_open_positions
+
+    acc = "REV_TEST_ACC"
+    sym = "BANKNIFTY26NOV52000CE"
+
+    with db() as conn:
+        # Buy 50 @ 100, Sell 80 @ 120 -> Long closes (+1000), Short opens (30 @ 120)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_1", "instrument_key": sym, "trading_symbol": sym, "side": "BUY", "quantity": 50, "price": "100", "execution_time": "2026-11-10T05:00:00Z"}, conn)
+        process_execution({"account_id": acc, "broker_execution_id": f"{acc}_2", "instrument_key": sym, "trading_symbol": sym, "side": "SELL", "quantity": 80, "price": "120", "execution_time": "2026-11-10T05:10:00Z"}, conn)
+        conn.commit()
+
+        open_p = get_open_positions(acc, conn)
+        assert len(open_p) == 1
+        assert open_p[0]["direction"] == "SHORT"
+        assert open_p[0]["quantity"] == 30
+        assert open_p[0]["average_entry_price"] == "120.0000"
+
+
+def test_executions_and_pnl_summary_endpoints(client):
+    res_exec = client.get("/api/executions")
+    assert res_exec.status_code == 200
+    assert isinstance(res_exec.json(), list)
+
+    res_sum = client.get("/api/pnl/summary")
+    assert res_sum.status_code == 200
+    data = res_sum.json()
+    assert "all_time" in data
+    assert "today" in data
+
+
+def test_position_exit_single_endpoint(client):
+    # Place a simulated order first
+    client.post("/api/orders", json={
+        "symbol": "NIFTY25000PE",
+        "exchange_segment": "nse_fo",
+        "product": "NRML",
+        "side": "BUY",
+        "order_type": "MKT",
+        "lots": 1,
+        "lot_size": 25,
+        "price": 50.0,
+        "user_confirmed": True,
+    })
+
+    # Call exit endpoint
+    res = client.post("/api/positions/NIFTY25000PE/exit", json={"percentage": 100})
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+
+
+
 
 
 
