@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness4">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness5">
 </head>
 <body class="ex-theme-dark">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -40,68 +40,79 @@
     </div>
 
     <div class="ex-header-right">
+      <!-- Market Switcher Pill (Forex $ vs Indian ₹) -->
+      <button type="button" id="btn-market-switcher" class="ex-market-pill hidden" title="Switch Trading Market (Forex vs Indian)">
+        <span id="mkt-pill-flag">🌍</span>
+        <span id="mkt-pill-label">FOREX</span>
+      </button>
+
+      <!-- Admin Users & Trading Analytics Button (Admin Only) -->
+      <button type="button" id="btn-admin-users" class="ex-admin-pill admin-only-ctrl hidden" title="Admin: View Users &amp; Analytics">
+        <span>🛡️</span>
+        <span>Admin Users</span>
+      </button>
+
       <!-- Real-Time Option Chain Button directly in Header beside Funds -->
       <button type="button" id="btn-header-opt-chain" class="ex-header-opt-chain-btn" title="Open Real-time Option Chain">
         <span class="chain-icon">📊</span>
         <span>Option Chain</span>
       </button>
 
-      <!-- Account Badge (Guest Demo vs Live Kotak) -->
+      <!-- Account Badge -->
       <div class="ex-account-badge-wrap">
         <button type="button" id="ex-account-btn" class="ex-account-btn" title="Click to view Account Mode / Switch">
-          <span class="ex-acc-pill demo" id="ex-acc-pill">Demo</span>
-          <span class="ex-acc-id" id="ex-acc-id">#GUEST-8842</span>
-          <span class="ex-acc-balance" id="ex-acc-balance">₹10,00,000.00 (Demo)</span>
+          <span class="ex-acc-pill demo" id="ex-acc-pill">Paper</span>
+          <span class="ex-acc-id" id="ex-acc-id">#TRADER</span>
+          <span class="ex-acc-balance" id="ex-acc-balance">₹10,00,000.00</span>
           <span class="ex-acc-caret">▼</span>
         </button>
         <div id="ex-account-menu" class="ex-account-menu hidden">
           <div class="acc-menu-header">Trading Account</div>
           <div class="acc-menu-mode-info">
-            <span id="menu-mode-title">Guest Demo Mode</span>
-            <small id="menu-mode-sub">Virtual paper trading active</small>
+            <span id="menu-mode-title">Paper Trading Account</span>
+            <small id="menu-mode-sub">Isolated virtual portfolio active</small>
           </div>
           <div class="acc-menu-divider"></div>
-          <button type="button" id="btn-open-owner-login" class="acc-menu-item">
-            <span class="acc-item-icon">🔐</span>
-            <span>Owner Login (TOTP &amp; MPIN)</span>
+          <button type="button" id="btn-switch-market-menu" class="acc-menu-item">
+            <span class="acc-item-icon">🔄</span>
+            <span>Switch Market (Forex / Indian)</span>
           </button>
-          <button type="button" id="btn-open-change-keys" class="acc-menu-item">
+          <button type="button" id="btn-open-owner-login" class="acc-menu-item admin-only-ctrl hidden">
+            <span class="acc-item-icon">🔐</span>
+            <span>Connect Kotak Neo (TOTP &amp; MPIN)</span>
+          </button>
+          <button type="button" id="btn-open-change-keys" class="acc-menu-item admin-only-ctrl hidden">
             <span class="acc-item-icon">🔑</span>
-            <span>Change API Keys (Kotak &amp; Upstox)</span>
+            <span>API Keys (Kotak &amp; Upstox)</span>
+          </button>
+          <button type="button" id="btn-open-admin-analytics-menu" class="acc-menu-item admin-only-ctrl hidden">
+            <span class="acc-item-icon">📈</span>
+            <span>Admin Users &amp; Analytics</span>
           </button>
           <button type="button" id="btn-open-guest-profile" class="acc-menu-item">
             <span class="acc-item-icon">👤</span>
-            <span>Paper Trading Profile</span>
-          </button>
-          <button type="button" id="btn-reset-demo" class="acc-menu-item">
-            <span class="acc-item-icon">🔄</span>
-            <span>Reset Demo Balance (₹10L)</span>
+            <span>Trader Profile</span>
           </button>
           <button type="button" id="btn-open-guide-from-menu" class="acc-menu-item">
             <span class="acc-item-icon">📖</span>
             <span>Setup Guide (Run on Your System)</span>
           </button>
           <div class="acc-menu-divider"></div>
-          <div class="acc-menu-promo">
-            <p>🚀 <b>Wanted to trade with your own Kotak API key?</b></p>
-            <p>Direct broker connector coming soon!</p>
-            <small>Feedback welcome @thatsaiiff on Reddit</small>
-          </div>
           <button type="button" id="btn-logout" class="acc-menu-item hidden">
             <span class="acc-item-icon">🚪</span>
-            <span>Logout Session</span>
+            <span>Sign Out</span>
           </button>
         </div>
       </div>
 
       <!-- Run on Your System Guide Button -->
-      <button type="button" id="btn-setup-guide" class="ex-btn-guide" title="How to run on your system with Kotak Neo & Upstox">
+      <button type="button" id="btn-setup-guide" class="ex-btn-guide" title="How to run on your system with Kotak Neo &amp; Upstox">
         <span class="guide-icon">🚀</span>
         <span>Run on Your System</span>
       </button>
 
-      <!-- Upstox Token Setup Button -->
-      <button id="chart-token-btn" class="ex-icon-btn" type="button" title="Configure Upstox Token">
+      <!-- Upstox Token Setup Button (Admin Only) -->
+      <button id="chart-token-btn" class="ex-icon-btn admin-only-ctrl hidden" type="button" title="Configure Upstox Token">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
       </button>
 
@@ -229,22 +240,22 @@
                 <span>EMA 21 (Pullback Trend)</span>
               </label>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-vwap" checked>
+                <input type="checkbox" id="chk-ind-vwap">
                 <span class="dot-ind purple"></span>
                 <span>VWAP (Volume Weighted Avg)</span>
               </label>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-supertrend" checked>
+                <input type="checkbox" id="chk-ind-supertrend">
                 <span class="dot-ind green"></span>
                 <span>Supertrend (10, 3)</span>
               </label>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-vpvr" checked>
+                <input type="checkbox" id="chk-ind-vpvr">
                 <span class="dot-ind yellow"></span>
                 <span>VPVR (Volume Profile POC)</span>
               </label>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-vol" checked>
+                <input type="checkbox" id="chk-ind-vol">
                 <span class="dot-ind gray"></span>
                 <span>Volume Histogram</span>
               </label>
@@ -308,9 +319,9 @@
         <section class="chart-pane active" id="pane-1" data-pane-idx="0">
           <div class="pane-header">
             <div class="pane-title-wrap">
-              <span class="pane-sym" id="p1-sym">NIFTY 25000 CE</span>
+              <span class="pane-sym" id="p1-sym">NIFTY</span>
               <span class="pane-tf" id="p1-tf">1m</span>
-              <span class="pane-seg">NSE F&O</span>
+              <span class="pane-seg" id="p1-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p1-quote-pill">
                 O: <b id="p1-o">—</b> H: <b id="p1-h">—</b> L: <b id="p1-l">—</b> C: <b id="p1-c">—</b>
               </span>
@@ -323,6 +334,8 @@
           <div class="pane-chart-wrap" id="p1-canvas-wrap">
             <div id="p1-chart-container" class="chart-canvas-view"></div>
             <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+            <div id="p1-trade-overlay" class="pane-trade-overlay"></div>
+            <button type="button" id="p1-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
           </div>
         </section>
 
@@ -332,7 +345,7 @@
             <div class="pane-title-wrap">
               <span class="pane-sym" id="p2-sym">NIFTY 25000 PE</span>
               <span class="pane-tf" id="p2-tf">1m</span>
-              <span class="pane-seg">NSE F&O</span>
+              <span class="pane-seg" id="p2-seg">NSE F&amp;O</span>
               <span class="pane-quote-pill" id="p2-quote-pill">
                 O: <b id="p2-o">—</b> H: <b id="p2-h">—</b> L: <b id="p2-l">—</b> C: <b id="p2-c">—</b>
               </span>
@@ -345,6 +358,8 @@
           <div class="pane-chart-wrap" id="p2-canvas-wrap">
             <div id="p2-chart-container" class="chart-canvas-view"></div>
             <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+            <div id="p2-trade-overlay" class="pane-trade-overlay"></div>
+            <button type="button" id="p2-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
           </div>
         </section>
 
@@ -354,7 +369,7 @@
             <div class="pane-title-wrap">
               <span class="pane-sym" id="p3-sym">NIFTY</span>
               <span class="pane-tf" id="p3-tf">5m</span>
-              <span class="pane-seg">NSE INDEX</span>
+              <span class="pane-seg" id="p3-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p3-quote-pill">
                 O: <b id="p3-o">—</b> H: <b id="p3-h">—</b> L: <b id="p3-l">—</b> C: <b id="p3-c">—</b>
               </span>
@@ -367,8 +382,23 @@
           <div class="pane-chart-wrap" id="p3-canvas-wrap">
             <div id="p3-chart-container" class="chart-canvas-view"></div>
             <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
+            <div id="p3-trade-overlay" class="pane-trade-overlay"></div>
+            <button type="button" id="p3-yaxis-plus" class="yaxis-plus-btn hidden" title="Quick Order at hovered price">+</button>
           </div>
         </section>
+
+        <!-- Floating Y-Axis '+' Quick Order Menu -->
+        <div id="chart-plus-order-menu" class="chart-plus-order-menu hidden">
+          <div class="cp-menu-hdr">
+            <span id="cp-menu-sym">NIFTY</span>
+            <strong id="cp-menu-price">0.00</strong>
+          </div>
+          <button type="button" id="cp-btn-mkt-buy" class="cp-menu-btn buy">Place <span class="cp-lot-lbl">1</span> Lot Buy at Market</button>
+          <button type="button" id="cp-btn-mkt-sell" class="cp-menu-btn sell">Place <span class="cp-lot-lbl">1</span> Lot Sell at Market</button>
+          <div class="cp-menu-sep"></div>
+          <button type="button" id="cp-btn-pend-buy" class="cp-menu-btn limit">Buy Limit @ <span class="cp-price-txt">0.00</span></button>
+          <button type="button" id="cp-btn-pend-sell" class="cp-menu-btn limit">Sell Limit @ <span class="cp-price-txt">0.00</span></button>
+        </div>
       </div>
 
       <!-- Bottom Chart Timeframe Bar (Exness bottom) -->
@@ -410,7 +440,7 @@
             <button type="button" id="btn-dock-exit-all" class="ex-btn-exit-all" title="Square off ALL active positions immediately">
               🚨 EXIT ALL
             </button>
-            <button type="button" id="btn-toggle-dock" class="dock-toggle-btn" title="Minimize / Expand Positions Panel">_</button>
+            <button type="button" id="btn-toggle-dock" class="dock-toggle-btn" title="Minimize / Expand Positions Panel">−</button>
           </div>
         </div>
 
@@ -426,7 +456,7 @@
                   <th>Lots / Qty</th>
                   <th>Avg Price</th>
                   <th>Current LTP</th>
-                  <th>P&amp;L (₹ / %)</th>
+                  <th>P&amp;L (<span id="th-open-cur">₹</span> / %)</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -475,6 +505,18 @@
               <div class="cs-metric-pill">
                 <span class="cs-label">Win / Loss</span>
                 <span class="cs-value" id="cs-win-ratio">0W / 0L</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Win Rate</span>
+                <span class="cs-value" id="cs-win-rate">0.0%</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Avg R-Mult</span>
+                <span class="cs-value" id="cs-r-mult">0.00R</span>
+              </div>
+              <div class="cs-metric-pill">
+                <span class="cs-label">Sharpe Ratio</span>
+                <span class="cs-value" id="cs-sharpe">0.00</span>
               </div>
             </div>
             <table class="ex-data-table" id="closed-positions-table">
@@ -560,11 +602,11 @@
         <div class="op-field hidden" id="field-limit-price">
           <div class="op-field-header">
             <span>Open Price</span>
-            <span class="field-sub">INR (₹)</span>
+            <span class="field-sub" id="lbl-limit-cur">INR (₹)</span>
           </div>
           <div class="op-numeric-stepper">
             <button type="button" class="stepper-btn" id="btn-price-minus">-</button>
-            <input type="number" id="input-limit-price" step="0.05" value="44.50">
+            <input type="number" id="input-limit-price" step="any" value="44.50">
             <button type="button" class="stepper-btn" id="btn-price-plus">+</button>
           </div>
         </div>
@@ -573,11 +615,11 @@
         <div class="op-field hidden" id="field-trigger-price">
           <div class="op-field-header">
             <span>Trigger Price</span>
-            <span class="field-sub">INR (₹)</span>
+            <span class="field-sub" id="lbl-trigger-cur">INR (₹)</span>
           </div>
           <div class="op-numeric-stepper">
             <button type="button" class="stepper-btn" id="btn-trigger-minus">-</button>
-            <input type="number" id="input-trigger-price" step="0.05" value="44.00">
+            <input type="number" id="input-trigger-price" step="any" value="44.00">
             <button type="button" class="stepper-btn" id="btn-trigger-plus">+</button>
           </div>
         </div>
@@ -586,12 +628,30 @@
         <div class="op-field">
           <div class="op-field-header">
             <span>Volume (Lots)</span>
-            <span class="field-sub" id="op-units-sub">25 units (1 Lot)</span>
+            <span class="field-sub" id="op-units-sub">65 units (1 Lot)</span>
           </div>
           <div class="op-numeric-stepper">
             <button type="button" class="stepper-btn" id="btn-lots-minus">-</button>
-            <input type="number" id="input-lots" min="1" max="100" value="1">
+            <input type="number" id="input-lots" min="0.01" max="500" step="1" value="1">
             <button type="button" class="stepper-btn" id="btn-lots-plus">+</button>
+          </div>
+        </div>
+
+        <!-- Optional Take Profit / Stop Loss Protection -->
+        <div class="op-sltp-card">
+          <label class="op-sltp-toggle">
+            <input type="checkbox" id="chk-ticket-sltp">
+            <span>Auto Stop Loss / Take Profit</span>
+          </label>
+          <div id="op-sltp-inputs" class="op-sltp-inputs hidden">
+            <div class="op-sltp-row">
+              <label for="op-tp-input" class="tp-lbl">TP Price</label>
+              <input type="number" id="op-tp-input" step="any" placeholder="Optional TP">
+            </div>
+            <div class="op-sltp-row">
+              <label for="op-sl-input" class="sl-lbl">SL Price</label>
+              <input type="number" id="op-sl-input" step="any" placeholder="Optional SL">
+            </div>
           </div>
         </div>
 
@@ -623,7 +683,7 @@
         <div class="op-summary-card">
           <div class="summary-row">
             <span>Brokerage:</span>
-            <b class="text-green">₹0.00 (Kotak Neo Free F&amp;O)</b>
+            <b class="text-green" id="op-brokerage-val">₹0.00 (Kotak Neo Free F&amp;O)</b>
           </div>
           <div class="summary-row">
             <span>Required Margin:</span>
@@ -715,17 +775,17 @@
       </div>
 
       <div class="m-screen-scrollable">
-        <!-- Top Yellow Prompt Banner -->
-        <div class="m-banner-yellow">
+        <!-- Top Prompt Banner (Admin Only) -->
+        <div class="m-banner-yellow admin-only-ctrl hidden" id="m-acc-keys-banner">
           <div class="m-banner-icon">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
           </div>
-          <div class="m-banner-text">
-            <b>Ready to trade live?</b> Connect your Kotak Neo credentials or practice with ₹10,00,000 Demo virtual funds.
+          <div class="m-banner-text" id="m-banner-text-acc">
+            <b>Broker &amp; Live Data</b>: Connect Kotak TOTP &amp; MPIN or update Upstox feed keys.
           </div>
           <div class="m-banner-actions">
-            <button type="button" class="m-btn-learn" id="m-btn-open-guide">Learn more</button>
-            <button type="button" class="m-btn-complete" id="m-btn-open-keys">Complete</button>
+            <button type="button" class="m-btn-learn" id="m-btn-open-guide">Kotak Connect</button>
+            <button type="button" class="m-btn-complete" id="m-btn-open-keys">API Keys</button>
           </div>
         </div>
 
@@ -879,8 +939,20 @@
             <span class="m-metric-val pos" id="m-perf-net">+₹0.00</span>
           </div>
           <div class="m-perf-metric">
-            <span class="m-metric-label">Total Execution Brokerage</span>
-            <span class="m-metric-val text-green">₹0.00 (Zero)</span>
+            <span class="m-metric-label">Win Rate</span>
+            <span class="m-metric-val" id="m-perf-winrate">0.0%</span>
+          </div>
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Avg R-Multiple</span>
+            <span class="m-metric-val" id="m-perf-rmult">0.00R</span>
+          </div>
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Sharpe Ratio</span>
+            <span class="m-metric-val" id="m-perf-sharpe">0.00</span>
+          </div>
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Execution Brokerage</span>
+            <span class="m-metric-val text-green" id="m-perf-brokerage">₹0.00 (Zero)</span>
           </div>
         </div>
 
@@ -925,21 +997,36 @@
           </div>
         </div>
 
-        <!-- Yellow Action Prompt -->
-        <div class="m-banner-yellow">
+        <!-- Admin API Banner (Admin Only) -->
+        <div class="m-banner-yellow admin-only-ctrl hidden" id="m-profile-keys-banner">
           <div class="m-banner-icon">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
           </div>
           <div class="m-banner-text">
-            <b>API Keys &amp; Upstox Feed</b>: Manage your Kotak Consumer Key and 1-Year Upstox sub-30ms quote feed.
+            <b>Admin Controls</b>: Configure API keys, Kotak TOTP/MPIN, or inspect user analytics.
           </div>
           <div class="m-banner-actions">
-            <button type="button" class="m-btn-complete" id="m-btn-profile-keys">Configure Keys</button>
+            <button type="button" class="m-btn-complete" id="m-btn-profile-keys">API Keys</button>
           </div>
         </div>
 
         <div class="m-profile-section-title">Preferences &amp; Tools</div>
         <div class="m-profile-card">
+          <div class="m-profile-clickable-row" id="m-row-switch-market">
+            <span class="m-prow-icon">🌍</span>
+            <span class="m-prow-label">Switch Market (Forex / Indian)</span>
+            <span class="m-prow-arrow">›</span>
+          </div>
+          <div class="m-profile-clickable-row admin-only-ctrl hidden" id="m-row-kotak-connect">
+            <span class="m-prow-icon">🔐</span>
+            <span class="m-prow-label">Connect Kotak Neo (TOTP &amp; MPIN)</span>
+            <span class="m-prow-arrow">›</span>
+          </div>
+          <div class="m-profile-clickable-row admin-only-ctrl hidden" id="m-row-admin-users">
+            <span class="m-prow-icon">🛡️</span>
+            <span class="m-prow-label">Admin Users &amp; Analytics</span>
+            <span class="m-prow-arrow">›</span>
+          </div>
           <div class="m-profile-clickable-row" id="m-row-paper-profile">
             <span class="m-prow-icon">📝</span>
             <span class="m-prow-label">Paper Trader Handle</span>
@@ -954,6 +1041,11 @@
             <span class="m-prow-icon">💬</span>
             <span class="m-prow-label">Feedback @thatsaiiff on Reddit</span>
             <span class="m-prow-arrow">↗</span>
+          </div>
+          <div class="m-profile-clickable-row" id="m-row-logout">
+            <span class="m-prow-icon">🚪</span>
+            <span class="m-prow-label">Sign Out</span>
+            <span class="m-prow-arrow">›</span>
           </div>
         </div>
 
@@ -1012,7 +1104,7 @@
 
   <!-- ==================== MODALS ==================== -->
 
-  <!-- 1. AUTHENTICATION & SIGN-IN MODAL (Admin Password & User OTP) -->
+  <!-- 1. AUTHENTICATION & SIGN-IN / SIGN-UP MODAL (Strict User ID + Password, Isolated Per-User Accounts) -->
   <div id="modal-gatekeeper" class="ex-modal-backdrop hidden">
     <div class="ex-modal-card auth-modal-card">
       <div class="modal-brand">
@@ -1020,94 +1112,160 @@
         <h2>Neo PIP Terminal</h2>
       </div>
       <p class="modal-tagline">
-        Zero-brokerage Kotak Neo F&amp;O terminal with real-time Upstox streaming charts.
+        Sign in or create a free trader account with isolated virtual capital for Forex &amp; Indian markets.
       </p>
 
-      <!-- Step 1: Email Form -->
-      <form id="auth-email-step" class="auth-step-form">
+      <!-- Mode Switch Tabs: Sign In | Create Account -->
+      <div class="auth-mode-tabs">
+        <button type="button" id="tab-auth-signin" class="auth-mode-tab active">Sign In</button>
+        <button type="button" id="tab-auth-signup" class="auth-mode-tab">Create Account</button>
+      </div>
+
+      <!-- Sign In Form -->
+      <form id="auth-signin-form" class="auth-step-form">
         <div class="auth-input-group">
-          <label for="auth-email-input" class="auth-label">Sign in or Create Account</label>
-          <div class="auth-input-wrap">
-            <svg class="auth-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            <input type="email" id="auth-email-input" class="auth-text-input" placeholder="Enter your email address" required autocomplete="email">
-          </div>
-          <small class="auth-hint">Enter your email. Admins sign in directly; other traders receive a 1-time code.</small>
+          <label for="signin-userid" class="auth-label">User ID</label>
+          <input type="text" id="signin-userid" class="auth-text-input" placeholder="Enter your User ID" required autocomplete="username" minlength="3" maxlength="32">
         </div>
-
-        <button type="submit" id="btn-auth-continue" class="btn-auth-primary">
-          <span>Continue</span>
+        <div class="auth-input-group">
+          <label for="signin-password" class="auth-label">Password</label>
+          <input type="password" id="signin-password" class="auth-text-input" placeholder="Enter your password" required autocomplete="current-password" minlength="4">
+        </div>
+        <div id="signin-error-msg" class="auth-error-msg hidden"></div>
+        <button type="submit" id="btn-signin-submit" class="btn-auth-primary">
+          <span>Sign In to Terminal</span>
           <span class="btn-arrow">&rarr;</span>
-        </button>
-
-        <div class="auth-divider"><span>OR</span></div>
-
-        <button type="button" id="btn-enter-guest" class="btn-auth-guest">
-          <span>⚡ Instant Demo (Skip Login &amp; Trade)</span>
         </button>
       </form>
 
-      <!-- Step 2A: Admin Password Form (osaifala@gmail.com) -->
-      <form id="auth-admin-step" class="auth-step-form hidden">
-        <div class="admin-welcome-pill">
-          <span class="admin-shield">🛡️</span>
-          <span>Admin / Terminal Owner Detected</span>
-        </div>
-
+      <!-- Sign Up Form -->
+      <form id="auth-signup-form" class="auth-step-form hidden">
         <div class="auth-input-group">
-          <label for="auth-admin-pwd" class="auth-label">Enter Admin Password</label>
-          <div class="auth-input-wrap">
-            <svg class="auth-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            <input type="password" id="auth-admin-pwd" class="auth-text-input" placeholder="Password" required autocomplete="current-password">
-          </div>
+          <label for="signup-userid" class="auth-label">Choose User ID</label>
+          <input type="text" id="signup-userid" class="auth-text-input" placeholder="Letters, numbers, underscores (e.g. alex_fx)" required autocomplete="username" minlength="3" maxlength="28">
         </div>
-
-        <button type="submit" id="btn-admin-submit" class="btn-auth-primary">
-          <span>Unlock Admin Terminal</span>
+        <div class="auth-input-group">
+          <label for="signup-password" class="auth-label">Password</label>
+          <input type="password" id="signup-password" class="auth-text-input" placeholder="Minimum 6 characters" required autocomplete="new-password" minlength="6">
+        </div>
+        <div class="auth-input-group">
+          <label for="signup-email" class="auth-label">Email (Optional)</label>
+          <input type="email" id="signup-email" class="auth-text-input" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div id="signup-error-msg" class="auth-error-msg hidden"></div>
+        <button type="submit" id="btn-signup-submit" class="btn-auth-primary">
+          <span>Create Account &amp; Start</span>
           <span class="btn-arrow">&rarr;</span>
         </button>
-
-        <button type="button" class="btn-auth-back auth-back-to-email">
-          &larr; Use another email
-        </button>
-      </form>
-
-      <!-- Step 2B: OTP Verification Form (Other Users) -->
-      <form id="auth-otp-step" class="auth-step-form hidden">
-        <div class="otp-instruction-box">
-          <span class="otp-mail-icon">📬</span>
-          <div>
-            <div class="otp-dest-text">Verification code sent to:</div>
-            <strong id="auth-otp-email-label" class="otp-email-strong">user@example.com</strong>
-          </div>
-        </div>
-
-        <div class="auth-input-group">
-          <label for="auth-otp-input" class="auth-label">6-Digit Verification Code</label>
-          <input type="text" id="auth-otp-input" class="auth-text-input auth-otp-box" placeholder="123456" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required autocomplete="one-time-code">
-        </div>
-
-        <div class="auth-input-group">
-          <label for="auth-username-input" class="auth-label">Display Name / Trader Handle (Optional)</label>
-          <input type="text" id="auth-username-input" class="auth-text-input" placeholder="e.g. BullRider_99" maxlength="30">
-          <small class="auth-hint">Generated automatically or customize your handle.</small>
-        </div>
-
-        <button type="submit" id="btn-otp-verify-submit" class="btn-auth-primary">
-          <span>Verify &amp; Start Paper Trading</span>
-          <span class="btn-arrow">&rarr;</span>
-        </button>
-
-        <div class="otp-actions-row">
-          <button type="button" id="btn-auth-resend-otp" class="btn-link-action">Resend Code</button>
-          <span class="sep-dot">•</span>
-          <button type="button" class="btn-link-action auth-back-to-email">Change Email</button>
-        </div>
       </form>
 
       <!-- Security note footer -->
       <div class="auth-card-footer">
         <span class="security-lock">🔒</span>
-        <span>Secure cookie session &bull; Auto-logout after 5 mins of inactivity</span>
+        <span>Per-user isolated ledger &bull; PBKDF2 password security &bull; HttpOnly session</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1B. POST-LOGIN MARKET SELECTION MODAL ("What do you want to trade?") -->
+  <div id="modal-market-choice" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card market-choice-card">
+      <div class="modal-brand">
+        <span class="ex-logo-mark">neo</span>
+        <h2>What do you want to trade?</h2>
+      </div>
+      <p class="modal-tagline">
+        Choose your market environment. You can switch between Forex and Indian markets anytime from the top bar.
+      </p>
+
+      <div class="market-cards-grid">
+        <button type="button" id="btn-choose-forex" class="market-choice-card-btn">
+          <div class="mkt-icon">🌍</div>
+          <div class="mkt-title">Forex &amp; Crypto (24/7 Live)</div>
+          <div class="mkt-sub">XAUUSD, BTCUSD, ETHUSD, EURUSD, GBPUSD, USOIL, USTEC</div>
+          <div class="mkt-badge usd">Virtual Balance: $10,000.00 USD &bull; 0.01 Lots</div>
+        </button>
+
+        <button type="button" id="btn-choose-indian" class="market-choice-card-btn">
+          <div class="mkt-icon">🇮🇳</div>
+          <div class="mkt-title">Indian Equities &amp; F&amp;O</div>
+          <div class="mkt-sub">NIFTY, BANKNIFTY, SENSEX &amp; NSE Options (09:15–15:30 IST)</div>
+          <div class="mkt-badge inr">Virtual Balance: ₹10,00,000.00 INR</div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1C. ADMIN KOTAK TOTP & MPIN CONNECT MODAL (Admin Only) -->
+  <div id="modal-kotak-connect" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card keys-card">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge">Kotak Live</span>
+          <h3>Connect Kotak Neo (TOTP &amp; MPIN)</h3>
+        </div>
+        <button type="button" id="btn-close-kotak-modal" class="modal-close-btn">✕</button>
+      </div>
+      <form id="kotak-connect-form" class="keys-modal-body">
+        <p class="keys-prompt-text">
+          Enter your Kotak Neo 6-digit authenticator TOTP and MPIN to unlock real live order execution &amp; portfolio reporting.
+        </p>
+        <div class="keys-inputs-wrap">
+          <div class="keys-field-group">
+            <label for="input-kotak-totp">Kotak 6-Digit TOTP</label>
+            <input type="text" id="input-kotak-totp" inputmode="numeric" maxlength="6" placeholder="000000" required>
+          </div>
+          <div class="keys-field-group">
+            <label for="input-kotak-mpin-login">Kotak MPIN</label>
+            <input type="password" id="input-kotak-mpin-login" maxlength="8" placeholder="6-digit MPIN" required>
+          </div>
+        </div>
+        <div id="kotak-connect-error" class="auth-error-msg hidden"></div>
+        <div class="keys-modal-actions">
+          <button type="button" id="btn-cancel-kotak" class="btn-secondary-choice">Cancel</button>
+          <button type="submit" id="btn-submit-kotak-login" class="btn-owner-submit">Connect Live Kotak Session</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 1D. ADMIN USERS & TRADING ANALYTICS MODAL (Admin Only) -->
+  <div id="modal-admin-analytics" class="ex-modal-backdrop hidden">
+    <div class="ex-modal-card guide-card" style="max-width: 960px;">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge">Admin</span>
+          <h3>Signed-Up Traders &amp; Performance Analytics</h3>
+        </div>
+        <button type="button" id="btn-close-admin-analytics" class="modal-close-btn">✕</button>
+      </div>
+      <div class="admin-analytics-body">
+        <div class="admin-stats-strip" id="admin-stats-strip">
+          <div class="admin-stat-box"><span>Total Users</span><b id="adm-total-users">0</b></div>
+          <div class="admin-stat-box"><span>Total Trades</span><b id="adm-total-trades">0</b></div>
+          <div class="admin-stat-box"><span>Win Rate</span><b id="adm-win-rate">0.0%</b></div>
+          <div class="admin-stat-box"><span>Avg R-Multiple</span><b id="adm-r-mult">0.00R</b></div>
+          <div class="admin-stat-box"><span>Sharpe Ratio</span><b id="adm-sharpe">0.00</b></div>
+        </div>
+        <div class="admin-table-wrap">
+          <table class="ex-data-table">
+            <thead>
+              <tr>
+                <th>User ID</th>
+                <th>Role</th>
+                <th>Market</th>
+                <th>Trades (Closed)</th>
+                <th>Total Orders</th>
+                <th>Win Rate</th>
+                <th>Net P&amp;L</th>
+                <th>Last Login</th>
+              </tr>
+            </thead>
+            <tbody id="admin-users-tbody">
+              <tr><td colspan="8" class="empty-row">Loading user analytics…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -1401,6 +1559,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-exness4"></script>
+  <script src="/static/chart.js?v=20261110-exness5"></script>
 </body>
 </html>

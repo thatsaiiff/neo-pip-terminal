@@ -11,6 +11,7 @@ Implements:
 - Full ledger replay and reconciliation recovery
 """
 
+import math
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -77,8 +78,17 @@ def init_accounting_db(conn: sqlite3.Connection) -> None:
         opened_at TEXT NOT NULL,
         closed_at TEXT,
         exit_reason TEXT,
+        multiplier TEXT NOT NULL DEFAULT '1',
         UNIQUE(account_id, instrument_key, product_type, lifecycle_number)
     )""")
+
+    # Safe schema migration for existing SQLite databases
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
+        if "multiplier" not in cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN multiplier TEXT NOT NULL DEFAULT '1'")
+    except Exception:
+        pass
 
     conn.execute("""
     CREATE TABLE IF NOT EXISTS position_lots (
@@ -165,6 +175,18 @@ def calculate_statutory_charges(
     turnover = (Decimal(quantity) * price * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     zero = Decimal("0.00")
     two_places = Decimal("0.01")
+
+    seg_u = (segment or "").upper()
+    if "FOREX" in seg_u or seg_u.startswith("FX") or "CRYPTO" in seg_u:
+        return {
+            "brokerage": zero,
+            "stt": zero,
+            "exchange_charges": zero,
+            "sebi_charges": zero,
+            "stamp_duty": zero,
+            "gst": zero,
+            "total": zero,
+        }
 
     # Kotak Zero Brokerage
     brokerage = zero
@@ -294,11 +316,11 @@ def process_execution(
                 id, account_id, instrument_key, trading_symbol, product_type,
                 lifecycle_number, direction, open_quantity, average_entry_price,
                 realised_gross_pnl, realised_net_pnl, total_charges,
-                status, opened_at, closed_at, exit_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', '0', '0', 'OPEN', ?, NULL, NULL)
+                status, opened_at, closed_at, exit_reason, multiplier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', '0', '0', 'OPEN', ?, NULL, NULL, ?)
         """, (
             pos_id, account_id, instrument_key, trading_symbol, product_type,
-            new_lifecycle, pos_direction, quantity, str(price), execution_time
+            new_lifecycle, pos_direction, quantity, str(price), execution_time, str(multiplier)
         ))
 
         # Insert initial entry lot
@@ -477,11 +499,11 @@ def process_execution(
                 id, account_id, instrument_key, trading_symbol, product_type,
                 lifecycle_number, direction, open_quantity, average_entry_price,
                 realised_gross_pnl, realised_net_pnl, total_charges,
-                status, opened_at, closed_at, exit_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', '0', '0', 'OPEN', ?, NULL, NULL)
+                status, opened_at, closed_at, exit_reason, multiplier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '0', '0', '0', 'OPEN', ?, NULL, NULL, ?)
         """, (
             new_pos_id, account_id, instrument_key, trading_symbol, product_type,
-            new_life, new_rev_dir, remaining_exit, str(price), execution_time
+            new_life, new_rev_dir, remaining_exit, str(price), execution_time, str(multiplier)
         ))
 
         new_lot_id = str(uuid.uuid4())
@@ -553,6 +575,49 @@ def _update_daily_pnl(account_id: str, trade_date: str, cursor: sqlite3.Cursor) 
         """, (str(uuid.uuid4()), account_id, trade_date, gross_val, charges_val, net_val, wins, losses, now_str))
 
 
+def compute_trade_metrics(closed_pnls: list[float], base_capital: float = 1000000.0) -> dict[str, Any]:
+    """Compute win rate (%), average R-multiple, and Sharpe ratio across closed trade P&Ls."""
+    total = len(closed_pnls)
+    wins = [x for x in closed_pnls if x > 0]
+    losses = [x for x in closed_pnls if x < 0]
+    win_rate = round((len(wins) / total) * 100.0, 2) if total > 0 else 0.0
+
+    gross_win = sum(wins)
+    gross_loss = sum(abs(x) for x in losses)
+    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else (round(gross_win / max(1.0, base_capital * 0.01), 2) if gross_win > 0 else 0.0)
+
+    if losses:
+        avg_loss_abs = gross_loss / len(losses)
+        r_vals = [x / avg_loss_abs for x in closed_pnls]
+        avg_r_multiple = round(sum(r_vals) / len(r_vals), 2)
+    elif wins:
+        risk_unit = max(1.0, base_capital * 0.01)
+        avg_r_multiple = round((gross_win / len(wins)) / risk_unit, 2)
+    else:
+        avg_r_multiple = 0.0
+
+    sharpe_ratio = 0.0
+    if total >= 2:
+        mean_ret = sum(closed_pnls) / total
+        variance = sum((x - mean_ret) ** 2 for x in closed_pnls) / (total - 1)
+        std_dev = math.sqrt(variance)
+        if std_dev > 1e-9:
+            sharpe_ratio = round(mean_ret / std_dev, 2)
+        elif mean_ret > 0:
+            sharpe_ratio = 3.0
+        elif mean_ret < 0:
+            sharpe_ratio = -3.0
+
+    expectancy = round(sum(closed_pnls) / total, 2) if total > 0 else 0.0
+    return {
+        "win_rate": win_rate,
+        "avg_r_multiple": avg_r_multiple,
+        "sharpe_ratio": sharpe_ratio,
+        "profit_factor": profit_factor,
+        "expectancy": expectancy,
+    }
+
+
 def get_open_positions(account_id: str, conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Retrieve all open and partially closed positions for an account."""
     cursor = conn.cursor()
@@ -564,6 +629,7 @@ def get_open_positions(account_id: str, conn: sqlite3.Connection) -> list[dict[s
 
     results = []
     for r in rows:
+        mult_val = float(r["multiplier"]) if "multiplier" in r.keys() and r["multiplier"] else 1.0
         results.append({
             "position_id": r["id"],
             "account_id": r["account_id"],
@@ -576,8 +642,10 @@ def get_open_positions(account_id: str, conn: sqlite3.Connection) -> list[dict[s
             "direction": r["direction"],
             "side": "BUY" if r["direction"] == "LONG" else "SELL",
             "quantity": r["open_quantity"],
+            "multiplier": mult_val,
             "average_entry_price": r["average_entry_price"],
             "avg_price": float(r["average_entry_price"]),
+            "average_price": float(r["average_entry_price"]),
             "realised_gross_pnl": r["realised_gross_pnl"],
             "realised_net_pnl": r["realised_net_pnl"],
             "total_charges": r["total_charges"],
@@ -645,9 +713,13 @@ def get_closed_positions(
         match_list = [{
             "id": m["id"],
             "matched_quantity": m["matched_quantity"],
+            "quantity": m["matched_quantity"],
             "entry_price": m["entry_price"],
+            "buy_price": float(m["entry_price"]),
             "exit_price": m["exit_price"],
+            "sell_price": float(m["exit_price"]),
             "gross_realised_pnl": m["gross_realised_pnl"],
+            "gross_pnl": float(m["gross_realised_pnl"]),
             "allocated_entry_charges": m["allocated_entry_charges"],
             "allocated_exit_charges": m["allocated_exit_charges"],
             "net_realised_pnl": m["net_realised_pnl"],
@@ -666,32 +738,48 @@ def get_closed_positions(
             "trading_symbol": r["trading_symbol"],
             "symbol": r["trading_symbol"],
             "product_type": r["product_type"],
+            "product": r["product_type"],
             "lifecycle_number": r["lifecycle_number"],
             "direction": r["direction"],
             "side": "BUY" if r["direction"] == "LONG" else "SELL",
             "executed_quantity": tot_exit_qty,
+            "total_buy_quantity": tot_exit_qty if r["direction"] == "LONG" else 0,
+            "total_sell_quantity": tot_exit_qty if r["direction"] == "SHORT" else 0,
             "quantity": 0,
             "average_entry_price": r["average_entry_price"],
             "average_exit_price": str(avg_exit_prc),
+            "avg_buy_price": float(r["average_entry_price"]) if r["direction"] == "LONG" else float(avg_exit_prc),
+            "avg_sell_price": float(avg_exit_prc) if r["direction"] == "LONG" else float(r["average_entry_price"]),
             "gross_realised_pnl": str(gross),
+            "realised_gross_pnl": str(gross),
             "total_charges": str(charges),
             "net_realised_pnl": str(net),
+            "realised_net_pnl": str(net),
             "opened_at": r["opened_at"],
             "closed_at": r["closed_at"],
             "status": "CLOSED",
             "matches": match_list,
         })
 
+    closed_pnls = [float(p["net_realised_pnl"]) for p in positions]
+    base_cap = 10000.0 if account_id.startswith("FX:") else 1000000.0
+    metrics = compute_trade_metrics(closed_pnls, base_capital=base_cap)
+    currency = "USD" if account_id.startswith("FX:") else "INR"
+
     return {
         "account_id": account_id,
-        "currency": "INR",
+        "currency": currency,
         "summary": {
             "gross_realised_pnl": str(total_gross.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
             "total_charges": str(total_charges.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
             "net_realised_pnl": str(total_net.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
             "winning_lifecycles": winning_count,
             "losing_lifecycles": losing_count,
+            "winning_positions": winning_count,
+            "losing_positions": losing_count,
+            "total_positions": len(positions),
             "total_closed_lifecycles": len(positions),
+            **metrics,
         },
         "positions": positions,
     }
@@ -723,16 +811,25 @@ def get_executions(account_id: str, limit: int = 100, conn: sqlite3.Connection |
     """Retrieve immutable execution history (Trade History)."""
     cursor = conn.cursor()
     rows = cursor.execute("""
-        SELECT * FROM executions
-        WHERE account_id = ?
-        ORDER BY execution_time DESC, received_at DESC
+        SELECT e.*,
+               COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM charges WHERE execution_id = e.id), 0) as total_charges
+        FROM executions e
+        WHERE e.account_id = ?
+        ORDER BY e.execution_time DESC, e.received_at DESC
         LIMIT ?
     """, (account_id, limit)).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["symbol"] = d.get("trading_symbol")
+        d["executed_at"] = d.get("execution_time")
+        d["charges"] = {"total_charges": round(float(d.get("total_charges") or 0), 2)}
+        out.append(d)
+    return out
 
 
 def get_pnl_summary(account_id: str, conn: sqlite3.Connection) -> dict[str, Any]:
-    """Retrieve overall gross and net realized P&L and daily aggregates."""
+    """Retrieve overall gross and net realized P&L, Win Rate, Avg R-Multiple, Sharpe Ratio, and daily aggregates."""
     cursor = conn.cursor()
     agg = cursor.execute("""
         SELECT
@@ -743,14 +840,19 @@ def get_pnl_summary(account_id: str, conn: sqlite3.Connection) -> dict[str, Any]
         WHERE account_id = ? AND status = 'CLOSED'
     """, (account_id,)).fetchone()
 
-    wins_losses = cursor.execute("""
-        SELECT
-            COUNT(CASE WHEN CAST(realised_net_pnl AS REAL) > 0 THEN 1 END) as wins,
-            COUNT(CASE WHEN CAST(realised_net_pnl AS REAL) < 0 THEN 1 END) as losses,
-            COUNT(*) as total
+    closed_rows = cursor.execute("""
+        SELECT CAST(realised_net_pnl AS REAL) as net_pnl
         FROM positions
         WHERE account_id = ? AND status = 'CLOSED'
-    """, (account_id,)).fetchone()
+        ORDER BY closed_at ASC
+    """, (account_id,)).fetchall()
+    closed_pnls = [float(r["net_pnl"] or 0.0) for r in closed_rows]
+    wins = sum(1 for x in closed_pnls if x > 0)
+    losses = sum(1 for x in closed_pnls if x < 0)
+    total = len(closed_pnls)
+    base_cap = 10000.0 if account_id.startswith("FX:") else 1000000.0
+    metrics = compute_trade_metrics(closed_pnls, base_capital=base_cap)
+    currency = "USD" if account_id.startswith("FX:") else "INR"
 
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     today_row = cursor.execute("""
@@ -759,15 +861,22 @@ def get_pnl_summary(account_id: str, conn: sqlite3.Connection) -> dict[str, Any]
 
     return {
         "account_id": account_id,
-        "currency": "INR",
+        "currency": currency,
+        "total_realised_gross_pnl": round(float(agg["gross"]), 2),
+        "total_realised_net_pnl": round(float(agg["net"]), 2),
+        "total_charges": round(float(agg["charges"]), 2),
+        "winning_trades": wins,
+        "losing_trades": losses,
         "all_time": {
             "gross_realised_pnl": str(round(agg["gross"], 2)),
             "total_charges": str(round(agg["charges"], 2)),
             "net_realised_pnl": str(round(agg["net"], 2)),
-            "winning_lifecycles": int(wins_losses["wins"] or 0),
-            "losing_lifecycles": int(wins_losses["losses"] or 0),
-            "total_closed_lifecycles": int(wins_losses["total"] or 0),
+            "winning_lifecycles": wins,
+            "losing_lifecycles": losses,
+            "total_closed_lifecycles": total,
+            **metrics,
         },
+        "metrics": metrics,
         "today": {
             "trade_date": today_str,
             "gross_realised_pnl": today_row["gross_realised_pnl"] if today_row else "0.00",

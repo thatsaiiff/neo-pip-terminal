@@ -948,6 +948,166 @@ def test_parse_upstox_market_quote_recovers_prev_close_from_net_change():
     assert q["change_percent"] == 0.23
 
 
+def test_signup_signin_and_per_user_isolation(client, monkeypatch):
+    monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 2650.0, "prev_close": 2640.0, "change": 10.0, "change_percent": 0.38})
+
+    r1 = client.post("/api/auth/signup", json={"username": "pune_trader", "password": "secret123", "email": "pune@example.com"})
+    assert r1.status_code == 200
+    tok1 = r1.json()["token"]
+    assert r1.json()["is_admin"] is False
+
+    r2 = client.post("/api/auth/signup", json={"username": "mumbai_trader", "password": "secret456"})
+    assert r2.status_code == 200
+    tok2 = r2.json()["token"]
+
+    # Wrong password rejected
+    bad_signin = client.post("/api/auth/signin", json={"username": "pune_trader", "password": "wrong"})
+    assert bad_signin.status_code == 401
+
+    # Pune selects forex and opens a fractional XAUUSD position
+    client.post("/api/user/select-market", json={"market": "forex"}, headers={"Authorization": f"Bearer {tok1}"})
+    client.post("/api/user/select-market", json={"market": "forex"}, headers={"Authorization": f"Bearer {tok2}"})
+
+    ord_res = client.post(
+        "/api/orders?market=forex",
+        headers={"Authorization": f"Bearer {tok1}"},
+        json={
+            "symbol": "XAUUSD",
+            "exchange_segment": "forex",
+            "product": "NRML",
+            "side": "BUY",
+            "lots": 0.25,
+            "lot_size": 100,
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    assert ord_res.status_code == 200
+    assert ord_res.json()["ok"] is True
+
+    pos1 = client.get("/api/positions?market=forex", headers={"Authorization": f"Bearer {tok1}"}).json()
+    pos2 = client.get("/api/positions?market=forex", headers={"Authorization": f"Bearer {tok2}"}).json()
+    assert pos1["open_count"] == 1
+    assert pos2["open_count"] == 0
+    assert len(client.get("/api/orders?market=forex", headers={"Authorization": f"Bearer {tok1}"}).json()) == 1
+    assert len(client.get("/api/orders?market=forex", headers={"Authorization": f"Bearer {tok2}"}).json()) == 0
+
+
+def test_admin_signin_and_users_analytics(client, monkeypatch):
+    # Static chart HTML must NEVER expose admin username or password
+    html = client.get("/chart").text
+    assert "S@if7246" not in html
+    assert "osaifala" not in html
+
+    # Sign up normal trader first
+    u_res = client.post("/api/auth/signup", json={"username": "alice_fx", "password": "alice_pwd"})
+    assert u_res.status_code == 200
+    u_tok = u_res.json()["token"]
+
+    # Non-admin denied access to admin analytics
+    denied = client.get("/api/admin/users-analytics", headers={"Authorization": f"Bearer {u_tok}"})
+    assert denied.status_code == 403
+
+    # Admin login with configured credentials
+    adm = client.post("/api/auth/signin", json={"username": main.ADMIN_USERNAME, "password": main.ADMIN_PASSWORD})
+    assert adm.status_code == 200
+    adm_body = adm.json()
+    assert adm_body["is_admin"] is True
+    adm_tok = adm_body["token"]
+
+    analytics = client.get("/api/admin/users-analytics", headers={"Authorization": f"Bearer {adm_tok}"})
+    assert analytics.status_code == 200
+    data = analytics.json()
+    assert data["ok"] is True
+    assert data["total_users"] >= 1
+    assert any(u["username"] == "alice_fx" for u in data["users"])
+
+
+def test_forex_sltp_drag_patch_trigger_and_metrics(client, monkeypatch):
+    monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 90000.0, "prev_close": 89000.0, "change": 1000.0, "change_percent": 1.12})
+    tok = client.post("/api/auth/signup", json={"username": "fx_scalper", "password": "pw_fx_99"}).json()["token"]
+    client.post("/api/user/select-market", json={"market": "forex"}, headers={"Authorization": f"Bearer {tok}"})
+
+    # Place 0.10 lot BTCUSD
+    o = client.post(
+        "/api/orders?market=forex",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"symbol": "BTCUSD", "exchange_segment": "forex", "product": "NRML", "side": "BUY", "lots": 0.10, "lot_size": 100, "order_type": "MKT", "user_confirmed": True},
+    )
+    assert o.status_code == 200
+
+    # Attach SL/TP rule
+    rule = client.post(
+        "/api/sltp?market=forex",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"symbol": "BTCUSD", "exchange_segment": "forex", "product": "NRML", "side": "BUY", "quantity": 10, "entry_price": 90000.0, "sl_price": 88000.0, "tp_price": 92000.0},
+    )
+    assert rule.status_code == 200
+    rule_id = rule.json()["rule_id"]
+
+    # Simulate dragging TP line to 91500
+    patched = client.patch(f"/api/sltp/{rule_id}?market=forex", headers={"Authorization": f"Bearer {tok}"}, json={"tp_price": 91500.0})
+    assert patched.status_code == 200
+    assert patched.json()["tp_price"] == 91500.0
+
+    # Simulate price reaching TP (91600)
+    trig = client.post("/api/sltp/check?market=forex", headers={"Authorization": f"Bearer {tok}"}, json={"symbol": "BTCUSD", "ltp": 91600.0})
+    assert trig.status_code == 200
+    assert trig.json()["triggered_count"] == 1
+    assert trig.json()["triggered"][0]["trigger_type"] == "TP"
+
+    closed = client.get("/api/positions?tab=closed&market=forex", headers={"Authorization": f"Bearer {tok}"}).json()
+    assert closed["summary"]["total_positions"] == 1
+    assert closed["total_charges"] == 0.0
+    assert closed["total_net_pnl"] > 0
+    assert closed["win_rate"] == 100.0
+
+
+def test_pending_limit_order_fills_and_indian_market_hours_guard(client, monkeypatch):
+    monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 2650.0, "prev_close": 2645.0, "change": 5.0, "change_percent": 0.19})
+    monkeypatch.setattr(main, "_is_indian_market_open", lambda: False)
+
+    tok = client.post("/api/auth/signup", json={"username": "hours_tester", "password": "pw_hrs_99"}).json()["token"]
+    client.post("/api/user/select-market", json={"market": "indian"}, headers={"Authorization": f"Bearer {tok}"})
+
+    # Indian order rejected outside NSE hours
+    ind_ord = client.post(
+        "/api/orders?market=indian",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"symbol": "NIFTY", "exchange_segment": "nse_fo", "product": "MIS", "side": "BUY", "lots": 1, "lot_size": 65, "order_type": "MKT", "user_confirmed": True},
+    )
+    assert ind_ord.status_code == 400
+    assert "09:15" in ind_ord.json()["detail"]
+
+    # Switch to Forex: 24/7 pending Limit Buy triggers automatically on dip
+    client.post("/api/user/select-market", json={"market": "forex"}, headers={"Authorization": f"Bearer {tok}"})
+    pend = client.post(
+        "/api/orders?market=forex",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"symbol": "XAUUSD", "exchange_segment": "forex", "product": "NRML", "side": "BUY", "lots": 0.05, "lot_size": 100, "order_type": "L", "price": 2640.0, "user_confirmed": True},
+    )
+    assert pend.status_code == 200
+    assert pend.json()["status"] == "pending"
+
+    fill_res = client.post("/api/sltp/check?market=forex", headers={"Authorization": f"Bearer {tok}"}, json={"symbol": "XAUUSD", "ltp": 2639.5}).json()
+    assert fill_res["filled_pending_count"] == 1
+    assert client.get("/api/positions?market=forex", headers={"Authorization": f"Bearer {tok}"}).json()["open_count"] == 1
+
+
+def test_chart_search_forex_and_performance_metrics(client):
+    from app import accounting
+    res = client.get("/api/chart/search?q=XAU&market=forex")
+    assert res.status_code == 200
+    syms = [r["symbol"] for r in res.json()["results"]]
+    assert "XAUUSD" in syms
+
+    m = accounting.compute_trade_metrics([300.0, -100.0, 200.0], base_capital=10000.0)
+    assert m["win_rate"] == 66.67
+    assert m["avg_r_multiple"] > 0
+    assert m["sharpe_ratio"] > 0
+
+
+
 
 
 

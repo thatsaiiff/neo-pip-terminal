@@ -3924,3 +3924,396 @@ body.ex-theme-dark {
     letter-spacing: 0.02em;
   }
 }
+
+/* ==================== MULTI-USER AUTH, MARKET CHOICE, ADMIN & CHART OVERLAYS ==================== */
+.admin-only-ctrl.hidden,
+.ex-market-pill.hidden,
+.auth-error-msg.hidden,
+.op-sltp-inputs.hidden,
+.yaxis-plus-btn.hidden,
+.chart-plus-order-menu.hidden {
+  display: none !important;
+}
+
+.ex-market-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #1c222e;
+  border: 1px solid #303a4f;
+  color: #f3c623;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ex-market-pill:hover {
+  border-color: #f3c623;
+  background: #232b3a;
+}
+
+.ex-admin-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(41, 98, 255, 0.16);
+  border: 1px solid rgba(41, 98, 255, 0.45);
+  color: #8ab4ff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ex-admin-pill:hover {
+  background: rgba(41, 98, 255, 0.28);
+}
+
+.auth-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: #0d1118;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #202735;
+  margin-bottom: 16px;
+}
+
+.auth-mode-tab {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #848e9c;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.auth-mode-tab.active {
+  background: #f3c623;
+  color: #0b0e14;
+}
+
+.auth-error-msg {
+  background: rgba(242, 54, 69, 0.14);
+  border: 1px solid rgba(242, 54, 69, 0.45);
+  color: #ff6b78;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 11px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.market-choice-card {
+  max-width: 600px !important;
+  width: 94%;
+}
+
+.market-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .market-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.market-choice-card-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 8px;
+  background: #181d27;
+  border: 1px solid #2a3244;
+  border-radius: 12px;
+  padding: 18px 16px;
+  color: #eaecef;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.market-choice-card-btn:hover {
+  transform: translateY(-2px);
+  border-color: #f3c623;
+  background: #1f2634;
+}
+
+.mkt-icon {
+  font-size: 28px;
+}
+.mkt-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #fff;
+}
+.mkt-sub {
+  font-size: 12px;
+  color: #9ba5b7;
+  line-height: 1.4;
+}
+.mkt-badge {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+.mkt-badge.usd {
+  background: rgba(8, 153, 129, 0.18);
+  color: #26d9b3;
+}
+.mkt-badge.inr {
+  background: rgba(243, 198, 35, 0.16);
+  color: #f3c623;
+}
+
+.admin-stats-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+@media (max-width: 720px) {
+  .admin-stats-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.admin-stat-box {
+  background: #11151d;
+  border: 1px solid #232b3a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.admin-stat-box span {
+  font-size: 11px;
+  color: #848e9c;
+}
+.admin-stat-box b {
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: #fff;
+}
+.admin-table-wrap {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid #202735;
+  border-radius: 8px;
+}
+
+/* Order Ticket Auto SL / TP Card */
+.op-sltp-card {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  background: #131722;
+  border: 1px solid #222938;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.op-sltp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #d1d4dc;
+  cursor: pointer;
+}
+.op-sltp-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.op-sltp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.op-sltp-row label {
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.op-sltp-row label.tp-lbl { color: #089981; }
+.op-sltp-row label.sl-lbl { color: #f23645; }
+.op-sltp-row input {
+  width: 100%;
+  background: #0d1118;
+  border: 1px solid #2a3142;
+  border-radius: 5px;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 5px 7px;
+}
+
+/* Floating Y-axis '+' Quick Order Button & Menu */
+.yaxis-plus-btn {
+  position: absolute;
+  right: 54px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #2962ff;
+  color: #fff;
+  border: 1.5px solid #fff;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 25;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+.yaxis-plus-btn:hover {
+  transform: translateY(-50%) scale(1.12);
+  background: #1e53e5;
+}
+
+.chart-plus-order-menu {
+  position: absolute;
+  z-index: 45;
+  width: 220px;
+  background: #181d27;
+  border: 1px solid #2e374b;
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cp-menu-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #9ba5b7;
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid #252d3d;
+}
+.cp-menu-hdr strong {
+  color: #f3c623;
+  font-family: var(--font-mono);
+}
+.cp-menu-btn {
+  text-align: left;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #1f2634;
+  color: #eaecef;
+}
+.cp-menu-btn:hover { background: #293245; }
+.cp-menu-btn.buy { color: #4db8ff; }
+.cp-menu-btn.sell { color: #ff6b78; }
+.cp-menu-btn.limit { color: #eaecef; }
+.cp-menu-sep { height: 1px; background: #252d3d; margin: 2px 0; }
+
+/* Draggable Entry / SL / TP Overlay Lines on Chart */
+.pane-trade-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 54px;
+  bottom: 24px;
+  pointer-events: none;
+  z-index: 18;
+  overflow: hidden;
+}
+
+.trade-price-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  margin-top: -9px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.trade-price-line .tpl-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0;
+  border-top: 1.5px dashed #3b82f6;
+}
+.trade-price-line.tpl-entry .tpl-line {
+  border-top: 1.5px solid #2962ff;
+}
+.trade-price-line.tpl-sl .tpl-line {
+  border-top: 1.5px dashed #f23645;
+}
+.trade-price-line.tpl-tp .tpl-line {
+  border-top: 1.5px dashed #089981;
+}
+
+.tpl-badge-group {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-right: 10px;
+  border-radius: 4px;
+  overflow: hidden;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  touch-action: none;
+}
+
+.tpl-drag-handle {
+  padding: 2px 7px;
+  cursor: ns-resize;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  user-select: none;
+}
+.trade-price-line.tpl-entry .tpl-drag-handle { background: #2962ff; cursor: default; }
+.trade-price-line.tpl-sl .tpl-drag-handle { background: #d92d3a; }
+.trade-price-line.tpl-tp .tpl-drag-handle { background: #089981; }
+
+.tpl-action-chip {
+  background: #1c222e;
+  color: #eaecef;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.tpl-action-chip:hover { background: #2e374b; color: #fff; }
+.tpl-action-chip.close-x { color: #ff8a93; }
+
