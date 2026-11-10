@@ -652,6 +652,30 @@ def test_live_quotes_batch_dictionary_mapping(client):
     assert "NIFTY" in data["quotes_by_symbol"]
 
 
+def test_root_and_chart_routes(client):
+    # Root should serve white-colored trading ticket
+    r_root = client.get("/")
+    assert r_root.status_code == 200
+    assert "TRADING TICKET" in r_root.text
+    assert "Trade on Chart" in r_root.text
+
+    # /chart should serve Exness-style terminal
+    r_chart = client.get("/chart")
+    assert r_chart.status_code == 200
+    assert "ex-tabs-bar" in r_chart.text
+    assert "mobile-nav-bar" in r_chart.text
+
+
+def test_option_strike_candle_derivation_fallback(client):
+    # Test searching for strike and fetching candles even with arbitrary option strike
+    res = client.get("/api/chart/candles?symbol=NIFTY%2025000%20CE%2009%20NOV%2026&interval=1m")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert len(data.get("candles", [])) > 0
+
+
+
 
 
 

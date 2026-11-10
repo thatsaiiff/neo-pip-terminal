@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness2">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-exness3">
 </head>
 <body class="ex-theme-dark">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -210,14 +210,6 @@
             <button type="button" class="ex-tf-btn" data-tf="1d">1D</button>
           </div>
 
-          <div class="v-sep"></div>
-
-          <!-- Option Chain Modal Trigger -->
-          <button type="button" id="btn-chart-opt-chain" class="ex-toolbar-btn" title="Real-Time Option Chain">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-            <span>Option Chain</span>
-          </button>
-
           <!-- Technical Indicators Dropdown -->
           <div class="indicators-wrap">
             <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn" title="TradingView Indicators">
@@ -300,9 +292,13 @@
             </div>
           </div>
 
-          <!-- Quick Toggle for Order Panel -->
-          <button type="button" id="btn-toggle-order-panel" class="ex-toolbar-btn" title="Toggle Order Panel">
-            <span>Ticket</span>
+          <!-- Quick Toggle for Order Panel (Menu 3-lines symbol right beside layout selector) -->
+          <button type="button" id="btn-toggle-order-panel" class="ex-toolbar-btn btn-ticket-menu" title="Toggle Order Ticket Panel" aria-label="Toggle Order Ticket Panel">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
           </button>
         </div>
       </div>
@@ -626,6 +622,346 @@
     </div>
   </footer>
 
+  <!-- ==================== MOBILE EXNESS APP FLOW ==================== -->
+
+  <!-- Mobile Bottom Trade Dock (Shown when Chart tab is active on mobile) -->
+  <div class="mobile-trade-dock" id="mobile-trade-dock">
+    <div class="m-dock-main">
+      <button type="button" id="m-btn-sell" class="m-dock-btn m-btn-sell">
+        <span class="m-btn-title">Sell</span>
+        <span class="m-btn-price" id="m-sell-price">25,023.70</span>
+      </button>
+
+      <div class="m-dock-lots">
+        <span class="m-lots-label">Lots</span>
+        <div class="m-lots-ctrl">
+          <button type="button" id="m-lots-minus" class="m-lots-btn" title="Decrease Lot">−</button>
+          <span id="m-lots-val" class="m-lots-val">1</span>
+          <button type="button" id="m-lots-plus" class="m-lots-btn" title="Increase Lot">+</button>
+        </div>
+      </div>
+
+      <button type="button" id="m-btn-buy" class="m-dock-btn m-btn-buy">
+        <span class="m-btn-title">Buy</span>
+        <span class="m-btn-price" id="m-buy-price">25,025.20</span>
+      </button>
+    </div>
+    <div class="m-dock-info" id="m-dock-info">
+      <span>Spread: <b id="m-spread-val">0.15</b></span>
+      <span>•</span>
+      <span>Margin: <b id="m-margin-val">₹625.00</b></span>
+      <span>•</span>
+      <span class="m-tag-free">Zero Brokerage</span>
+    </div>
+  </div>
+
+  <!-- Mobile Screens Container (Accounts, Trade, Performance, Profile) -->
+  <div class="mobile-views-wrapper" id="mobile-views-wrapper">
+    <!-- 1. ACCOUNTS VIEW (Matches Screenshot 1) -->
+    <div class="mobile-screen-view hidden" id="mview-accounts">
+      <div class="m-screen-header">
+        <div class="m-header-title">Accounts</div>
+        <div class="m-header-actions">
+          <button type="button" class="m-hdr-icon-btn" id="m-hdr-bell" title="Notifications">🔔</button>
+          <button type="button" class="m-hdr-icon-btn" id="m-hdr-menu" title="Menu">⋮</button>
+        </div>
+      </div>
+
+      <div class="m-screen-scrollable">
+        <!-- Top Yellow Prompt Banner -->
+        <div class="m-banner-yellow">
+          <div class="m-banner-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
+          </div>
+          <div class="m-banner-text">
+            <b>Ready to trade live?</b> Connect your Kotak Neo credentials or practice with ₹10,00,000 Demo virtual funds.
+          </div>
+          <div class="m-banner-actions">
+            <button type="button" class="m-btn-learn" id="m-btn-open-guide">Learn more</button>
+            <button type="button" class="m-btn-complete" id="m-btn-open-keys">Complete</button>
+          </div>
+        </div>
+
+        <!-- Main Account Card -->
+        <div class="m-account-card">
+          <div class="m-acc-header">
+            <div class="m-acc-name-wrap">
+              <span class="m-acc-name">STANDARD</span>
+              <span class="m-acc-id" id="m-acc-id"># 472963350</span>
+            </div>
+            <button type="button" class="m-acc-cog" id="m-btn-acc-settings" title="Settings">⚙</button>
+          </div>
+
+          <div class="m-acc-badges">
+            <span class="m-acc-badge demo" id="m-acc-badge-demo">Demo</span>
+            <span class="m-acc-badge">Kotak Neo</span>
+            <span class="m-acc-badge">Standard</span>
+          </div>
+
+          <div class="m-acc-balance-display">
+            <span class="m-acc-balance-val" id="m-acc-balance">₹10,00,000.00</span>
+            <span class="m-acc-balance-cur">INR</span>
+          </div>
+
+          <!-- 3 Circular Action Buttons (Trade, Deposit, Withdraw) -->
+          <div class="m-acc-actions-row">
+            <button type="button" class="m-action-circle-btn yellow" id="m-action-trade">
+              <div class="m-circle-icon">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 3v3H5v5h2v10h2V11h2V6H9V3H7zm8 0v7h-2v4h2v7h2v-7h2v-4h-2V3h-2z"/></svg>
+              </div>
+              <span class="m-action-text">Trade</span>
+            </button>
+
+            <button type="button" class="m-action-circle-btn dark" id="m-action-deposit">
+              <div class="m-circle-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12l4 4 4-4"/></svg>
+              </div>
+              <span class="m-action-text">Deposit</span>
+            </button>
+
+            <button type="button" class="m-action-circle-btn dark" id="m-action-withdraw">
+              <div class="m-circle-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 16V8M8 12l4-4 4 4"/></svg>
+              </div>
+              <span class="m-action-text">Withdraw</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Orders Section -->
+        <div class="m-orders-section">
+          <div class="m-orders-tabs">
+            <button type="button" class="m-otab active" data-otab="open" id="m-otab-open">Open</button>
+            <button type="button" class="m-otab" data-otab="pending" id="m-otab-pending">Pending</button>
+            <button type="button" class="m-otab" data-otab="closed" id="m-otab-closed">Closed</button>
+          </div>
+
+          <div class="m-orders-content" id="m-orders-list">
+            <div class="m-orders-empty-msg">No open orders. Find your next trade:</div>
+            <!-- Quick trade horizontal carousel -->
+            <div class="m-quick-carousel" id="m-quick-carousel">
+              <div class="m-quick-card" data-sym="NIFTY">
+                <div class="m-qc-title">NIFTY 50</div>
+                <div class="m-qc-icon">🇮🇳</div>
+                <div class="m-qc-price" id="qc-nifty-ltp">25,023.70</div>
+                <div class="m-qc-chg neg" id="qc-nifty-chg">▼ 0.28%</div>
+              </div>
+
+              <div class="m-quick-card" data-sym="BANKNIFTY">
+                <div class="m-qc-title">BANK NIFTY</div>
+                <div class="m-qc-icon">🏦</div>
+                <div class="m-qc-price" id="qc-bank-ltp">52,100.00</div>
+                <div class="m-qc-chg pos" id="qc-bank-chg">▲ 0.45%</div>
+              </div>
+
+              <div class="m-quick-card" data-sym="SENSEX">
+                <div class="m-qc-title">SENSEX</div>
+                <div class="m-qc-icon">📈</div>
+                <div class="m-qc-price" id="qc-sensex-ltp">81,200.00</div>
+                <div class="m-qc-chg pos" id="qc-sensex-chg">▲ 0.35%</div>
+              </div>
+
+              <div class="m-quick-card" data-sym="RELIANCE">
+                <div class="m-qc-title">RELIANCE</div>
+                <div class="m-qc-icon">⚡</div>
+                <div class="m-qc-price" id="qc-rel-ltp">1,340.00</div>
+                <div class="m-qc-chg pos" id="qc-rel-chg">▲ 0.80%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. TRADE VIEW (Watchlist & Search, Matches Screenshot 2) -->
+    <div class="mobile-screen-view hidden" id="mview-trade">
+      <div class="m-screen-header">
+        <div class="m-header-title">Trade</div>
+        <div class="m-header-pill" id="m-trade-acc-pill">
+          <span class="m-pill-demo">Demo</span>
+          <span id="m-trade-pill-bal">₹10,00,000.00</span>
+          <span>⋮</span>
+        </div>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="m-trade-search-bar">
+        <input type="text" id="m-trade-search-input" placeholder="Search scrip or strike (e.g. 25000 CE)">
+      </div>
+
+      <!-- Category Filter Tabs -->
+      <div class="m-trade-categories" id="m-trade-cats">
+        <button type="button" class="m-cat-chip active" data-cat="favorites">Favorites ⭐</button>
+        <button type="button" class="m-cat-chip" data-cat="indices">Indices</button>
+        <button type="button" class="m-cat-chip" data-cat="options">F&amp;O Options</button>
+        <button type="button" class="m-cat-chip" data-cat="stocks">Stocks</button>
+      </div>
+
+      <!-- Scrips List -->
+      <div class="m-trade-list" id="m-trade-list">
+        <!-- Dynamically rendered via JS -->
+      </div>
+    </div>
+
+    <!-- 3. PERFORMANCE VIEW (Matches Screenshot 3) -->
+    <div class="mobile-screen-view hidden" id="mview-perf">
+      <div class="m-screen-header">
+        <div class="m-header-title">Performance</div>
+      </div>
+
+      <div class="m-screen-scrollable">
+        <div class="m-perf-info-box">
+          <span class="info-icon">ℹ️</span>
+          <span>All times on this page use IST (UTC+5:30) and match Indian market settlement.</span>
+        </div>
+
+        <div class="m-perf-filters-row">
+          <div class="m-perf-pill">All accounts ⌵</div>
+          <div class="m-perf-pill">Today / 7 days 📅</div>
+        </div>
+
+        <!-- Performance Summary Card -->
+        <div class="m-perf-summary-card">
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Today's Realized P&amp;L</span>
+            <span class="m-metric-val pos" id="m-perf-realized">+₹0.00</span>
+          </div>
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Net P&amp;L After Charges</span>
+            <span class="m-metric-val pos" id="m-perf-net">+₹0.00</span>
+          </div>
+          <div class="m-perf-metric">
+            <span class="m-metric-label">Total Execution Brokerage</span>
+            <span class="m-metric-val text-green">₹0.00 (Zero)</span>
+          </div>
+        </div>
+
+        <div class="m-perf-empty-state">
+          <div class="m-empty-warn-icon">⚠</div>
+          <div class="m-empty-warn-title">Ready to execute trades</div>
+          <div class="m-empty-warn-sub">Use Scalper Mode or Order Ticket on chart to place trades.</div>
+          <button type="button" class="m-btn-start-trading" id="m-btn-perf-trade">Start Trading</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. PROFILE VIEW (Matches Screenshot 4) -->
+    <div class="mobile-screen-view hidden" id="mview-profile">
+      <div class="m-screen-header">
+        <div class="m-header-title">Profile</div>
+        <button type="button" class="m-hdr-icon-btn" id="m-profile-cog">⚙</button>
+      </div>
+
+      <div class="m-screen-scrollable">
+        <div class="m-profile-section-title">Account</div>
+        <div class="m-profile-card">
+          <div class="m-profile-row">
+            <div class="m-prow-left">
+              <span class="m-prow-icon">@</span>
+              <div class="m-prow-texts">
+                <span class="m-prow-title">Login</span>
+                <span class="m-prow-sub" id="m-profile-login">guest@pip-terminal</span>
+              </div>
+            </div>
+            <span class="m-prow-eye">👁</span>
+          </div>
+
+          <div class="m-profile-row" id="m-row-verification">
+            <div class="m-prow-left">
+              <span class="m-prow-icon">👤</span>
+              <div class="m-prow-texts">
+                <span class="m-prow-title">Verification progress</span>
+              </div>
+            </div>
+            <span class="m-prow-badge verified">Active</span>
+          </div>
+        </div>
+
+        <!-- Yellow Action Prompt -->
+        <div class="m-banner-yellow">
+          <div class="m-banner-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
+          </div>
+          <div class="m-banner-text">
+            <b>API Keys &amp; Upstox Feed</b>: Manage your Kotak Consumer Key and 1-Year Upstox sub-30ms quote feed.
+          </div>
+          <div class="m-banner-actions">
+            <button type="button" class="m-btn-complete" id="m-btn-profile-keys">Configure Keys</button>
+          </div>
+        </div>
+
+        <div class="m-profile-section-title">Preferences &amp; Tools</div>
+        <div class="m-profile-card">
+          <div class="m-profile-clickable-row" id="m-row-paper-profile">
+            <span class="m-prow-icon">📝</span>
+            <span class="m-prow-label">Paper Trader Handle</span>
+            <span class="m-prow-arrow">›</span>
+          </div>
+          <div class="m-profile-clickable-row" id="m-row-run-local">
+            <span class="m-prow-icon">💻</span>
+            <span class="m-prow-label">Run on Your System (GitHub)</span>
+            <span class="m-prow-arrow">›</span>
+          </div>
+          <div class="m-profile-clickable-row" id="m-row-reddit">
+            <span class="m-prow-icon">💬</span>
+            <span class="m-prow-label">Feedback @thatsaiiff on Reddit</span>
+            <span class="m-prow-arrow">↗</span>
+          </div>
+        </div>
+
+        <div class="m-profile-section-title">Zero Brokerage Benefits</div>
+        <div class="m-profile-card benefits">
+          <div class="m-benefit-item">
+            <span class="m-benefit-dot"></span>
+            <span>Free Intraday &amp; Delivery F&amp;O Trades on Kotak Neo</span>
+          </div>
+          <div class="m-benefit-item">
+            <span class="m-benefit-dot"></span>
+            <span>Sub-30ms Real-Time Upstox Candlestick Engine</span>
+          </div>
+          <div class="m-benefit-item">
+            <span class="m-benefit-dot"></span>
+            <span>Auto SL/TP Trailing &amp; Emergency Exit All</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Bottom 5-Tab Navigation Bar -->
+  <nav class="mobile-nav-bar" id="mobile-nav-bar" aria-label="Mobile Navigation">
+    <button type="button" class="mobile-nav-item active" data-tab="chart" id="mnav-chart">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-4 4 4 5-6"/></svg>
+      </span>
+      <span class="mnav-label">Chart</span>
+    </button>
+    <button type="button" class="mobile-nav-item" data-tab="accounts" id="mnav-accounts">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+      </span>
+      <span class="mnav-label">Accounts</span>
+    </button>
+    <button type="button" class="mobile-nav-item" data-tab="trade" id="mnav-trade">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v18M18 3v18M3 8h6M15 14h6"/></svg>
+      </span>
+      <span class="mnav-label">Trade</span>
+    </button>
+    <button type="button" class="mobile-nav-item" data-tab="performance" id="mnav-perf">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      </span>
+      <span class="mnav-label">Performance</span>
+    </button>
+    <button type="button" class="mobile-nav-item" data-tab="profile" id="mnav-profile">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/></svg>
+      </span>
+      <span class="mnav-label">Profile</span>
+    </button>
+  </nav>
+
   <!-- ==================== MODALS ==================== -->
 
   <!-- 1. GATEKEEPER / AUTH MODAL (Guest vs Owner Login) -->
@@ -941,6 +1277,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-exness2"></script>
+  <script src="/static/chart.js?v=20261110-exness3"></script>
 </body>
 </html>

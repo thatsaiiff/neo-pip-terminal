@@ -33,11 +33,12 @@
   let selectedProduct = 'NRML'; // Default NRML (Carry Forward) as requested
   let selectedOrderType = 'MKT'; // MKT, L, SL
   let selectedLots = 1;
+  let updateLotDisplayFn = null;
 
   // Open Symbol Tabs
   let openTabs = [
-    { symbol: 'NIFTY 25000 CE', token: 'NSE_FO|40037', interval: '1m', isOption: true },
-    { symbol: 'NIFTY 25000 PE', token: 'NSE_FO|40038', interval: '1m', isOption: true },
+    { symbol: 'NIFTY 25000 CE', token: '', interval: '1m', isOption: true },
+    { symbol: 'NIFTY 25000 PE', token: '', interval: '1m', isOption: true },
     { symbol: 'NIFTY', token: 'NSE_INDEX|Nifty 50', interval: '5m', isOption: false },
     { symbol: 'BANKNIFTY', token: 'NSE_INDEX|Nifty Bank', interval: '5m', isOption: false },
   ];
@@ -46,8 +47,8 @@
   // Watchlist Favorites & Category lists
   const WATCHLIST_PRESETS = {
     favorites: [
-      { symbol: 'NIFTY 25000 CE', name: 'Nifty 50 25000 Call', token: 'NSE_FO|40037', signal: 'BUY' },
-      { symbol: 'NIFTY 25000 PE', name: 'Nifty 50 25000 Put', token: 'NSE_FO|40038', signal: 'SELL' },
+      { symbol: 'NIFTY 25000 CE', name: 'Nifty 50 25000 Call', token: '', signal: 'BUY' },
+      { symbol: 'NIFTY 25000 PE', name: 'Nifty 50 25000 Put', token: '', signal: 'SELL' },
       { symbol: 'NIFTY', name: 'Nifty 50 Index', token: 'NSE_INDEX|Nifty 50', signal: 'BUY' },
       { symbol: 'BANKNIFTY', name: 'Bank Nifty Index', token: 'NSE_INDEX|Nifty Bank', signal: 'SELL' },
       { symbol: 'RELIANCE', name: 'Reliance Industries', token: 'NSE_EQ|INE002A01018', signal: 'BUY' },
@@ -60,15 +61,15 @@
       { symbol: 'SENSEX', name: 'BSE Sensex Spot', token: 'BSE_INDEX|SENSEX', signal: 'BUY' },
     ],
     nifty_options: [
-      { symbol: 'NIFTY 25000 CE', name: 'ATM 25000 Call', token: 'NSE_FO|40037', signal: 'BUY' },
-      { symbol: 'NIFTY 25000 PE', name: 'ATM 25000 Put', token: 'NSE_FO|40038', signal: 'SELL' },
-      { symbol: 'NIFTY 25050 CE', name: 'OTM 25050 Call', token: 'NSE_FO|40039', signal: 'BUY' },
-      { symbol: 'NIFTY 24950 PE', name: 'OTM 24950 Put', token: 'NSE_FO|40036', signal: 'SELL' },
+      { symbol: 'NIFTY 25000 CE', name: 'ATM 25000 Call', token: '', signal: 'BUY' },
+      { symbol: 'NIFTY 25000 PE', name: 'ATM 25000 Put', token: '', signal: 'SELL' },
+      { symbol: 'NIFTY 25050 CE', name: 'OTM 25050 Call', token: '', signal: 'BUY' },
+      { symbol: 'NIFTY 24950 PE', name: 'OTM 24950 Put', token: '', signal: 'SELL' },
     ],
     bank_options: [
-      { symbol: 'BANKNIFTY 59200 CE', name: 'Bank 59200 Call', token: '', signal: 'BUY' },
-      { symbol: 'BANKNIFTY 59200 PE', name: 'Bank 59200 Put', token: '', signal: 'SELL' },
-      { symbol: 'BANKNIFTY 59000 PE', name: 'Bank 59000 Put', token: '', signal: 'SELL' },
+      { symbol: 'BANKNIFTY 52000 CE', name: 'Bank 52000 Call', token: '', signal: 'BUY' },
+      { symbol: 'BANKNIFTY 52000 PE', name: 'Bank 52000 Put', token: '', signal: 'SELL' },
+      { symbol: 'BANKNIFTY 52200 CE', name: 'Bank 52200 Call', token: '', signal: 'BUY' },
     ],
     stocks: [
       { symbol: 'RELIANCE', name: 'Reliance Industries', token: 'NSE_EQ|INE002A01018', signal: 'BUY' },
@@ -84,7 +85,7 @@
       idx: 0,
       id: 'pane-1',
       sym: 'NIFTY 25000 CE',
-      token: 'NSE_FO|40037',
+      token: '',
       tf: '1m',
       isOption: true,
       candles: [],
@@ -755,18 +756,21 @@
       } catch (e) {
         // quiet error
       }
-      setTimeout(tick, 500); // 500ms ultra-fast quote refresh
+      setTimeout(tick, 100); // 100ms ultra-fast quote refresh for real-time ticket & chart
     }
     tick();
   }
 
   // --- Exness Order Ticket Controls ---
   function getIndexLotSize(symbol) {
-    const s = symbol.toUpperCase();
+    const s = (symbol || '').toUpperCase();
     if (s.includes('BANKNIFTY')) return 15;
+    if (s.includes('MIDCPNIFTY')) return 50;
     if (s.includes('FINNIFTY')) return 25;
     if (s.includes('SENSEX')) return 10;
-    return 25; // Default Nifty lot size
+    if (s.includes('BANKEX')) return 15;
+    if (s.includes('NIFTY')) return 25;
+    return 1; // Equities (e.g. RELIANCE, TCS)
   }
 
   function updateOrderFormPrices(ltp) {
@@ -795,6 +799,16 @@
     if (limitInput && (!limitInput.value || limitInput.dataset.manual !== 'true')) {
       limitInput.value = ltp.toFixed(2);
     }
+
+    // Update Mobile Trade Dock (Screenshot 5)
+    const mSell = $('m-sell-price');
+    const mBuy = $('m-buy-price');
+    const mSpread = $('m-spread-val');
+    const mMargin = $('m-margin-val');
+    if (mSell) mSell.textContent = bidPrice.toFixed(2);
+    if (mBuy) mBuy.textContent = askPrice.toFixed(2);
+    if (mSpread) mSpread.textContent = spread.toFixed(2);
+    if (mMargin) mMargin.textContent = `₹${Number(estMargin).toLocaleString('en-IN')}`;
   }
 
   function setupOrderPanelInteractions() {
@@ -851,13 +865,22 @@
     const unitsSub = $('op-units-sub');
 
     function updateLotDisplay() {
-      selectedLots = Math.max(1, parseInt(inputLots.value) || 1);
-      inputLots.value = selectedLots;
+      selectedLots = Math.max(1, parseInt(inputLots ? inputLots.value : selectedLots) || 1);
+      if (inputLots) inputLots.value = selectedLots;
       const lotSize = getIndexLotSize(panes[0].sym);
       const units = selectedLots * lotSize;
-      if (unitsSub) unitsSub.textContent = `${units} units (${selectedLots} Lot${selectedLots > 1 ? 's' : ''})`;
+      if (unitsSub) {
+        if (lotSize === 1) {
+          unitsSub.textContent = `${units} share${units > 1 ? 's' : ''}`;
+        } else {
+          unitsSub.textContent = `${units} units (${selectedLots} Lot${selectedLots > 1 ? 's' : ''} × ${lotSize})`;
+        }
+      }
+      const mLotsVal = $('m-lots-val');
+      if (mLotsVal) mLotsVal.textContent = selectedLots;
       if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
     }
+    updateLotDisplayFn = updateLotDisplay;
 
     if (btnLotsMinus && btnLotsPlus && inputLots) {
       btnLotsMinus.addEventListener('click', () => {
@@ -872,6 +895,27 @@
       });
       inputLots.addEventListener('change', updateLotDisplay);
     }
+
+    // Mobile Trade Dock Buttons
+    const mBtnBuy = $('m-btn-buy');
+    const mBtnSell = $('m-btn-sell');
+    if (mBtnBuy) mBtnBuy.addEventListener('click', () => submitOrder('BUY'));
+    if (mBtnSell) mBtnSell.addEventListener('click', () => submitOrder('SELL'));
+
+    const mLotsMinus = $('m-lots-minus');
+    const mLotsPlus = $('m-lots-plus');
+    if (mLotsMinus) mLotsMinus.addEventListener('click', () => {
+      if (selectedLots > 1) {
+        selectedLots--;
+        if (inputLots) inputLots.value = selectedLots;
+        updateLotDisplay();
+      }
+    });
+    if (mLotsPlus) mLotsPlus.addEventListener('click', () => {
+      selectedLots++;
+      if (inputLots) inputLots.value = selectedLots;
+      updateLotDisplay();
+    });
 
     // 4. Steppers for Limit Price & Trigger Price
     const btnPriceMinus = $('btn-price-minus');
@@ -1011,6 +1055,26 @@
 
     const opSym = $('op-sym-name');
     if (opSym) opSym.textContent = selected.symbol;
+
+    // Immediately update order ticket lot sizing & values for the selected symbol!
+    if (typeof updateLotDisplayFn === 'function') {
+      updateLotDisplayFn();
+    }
+    if (panes[0].lastLtp) {
+      updateOrderFormPrices(panes[0].lastLtp);
+    }
+
+    // Instantly fetch live quote for order ticket
+    api(`/api/chart/live-quote?symbol=${encodeURIComponent(selected.symbol)}&token=${encodeURIComponent(selected.token || '')}`)
+      .then(q => {
+        if (q && q.ok && q.ltp) {
+          panes[0].lastLtp = Number(q.ltp);
+          if (q.prev_close) panes[0].prevClose = Number(q.prev_close);
+          updateOrderFormPrices(panes[0].lastLtp);
+          updatePaneQuote(panes[0], q);
+        }
+      })
+      .catch(() => {});
 
     loadCandles(panes[0]);
   }
@@ -2116,6 +2180,198 @@
     }
   }
 
+  // --- Mobile Exness App Flow Setup ---
+  function setupMobileFlow() {
+    const navItems = document.querySelectorAll('.mobile-nav-item');
+    const views = {
+      chart: null,
+      accounts: $('mview-accounts'),
+      trade: $('mview-trade'),
+      performance: $('mview-perf'),
+      profile: $('mview-profile'),
+    };
+
+    function switchMobileTab(tabKey) {
+      navItems.forEach(item => {
+        item.classList.toggle('active', item.dataset.tab === tabKey);
+      });
+
+      if (tabKey === 'chart') {
+        document.body.classList.remove('mobile-view-active');
+        Object.values(views).forEach(v => v && v.classList.add('hidden'));
+
+        // Trigger chart canvas resize and fit
+        setTimeout(() => {
+          const canvasWrap = $(`${panes[0].id}-canvas-wrap`);
+          if (canvasWrap && panes[0].chart) {
+            const cr = canvasWrap.getBoundingClientRect();
+            if (cr.width > 50 && cr.height > 50) {
+              panes[0].chart.applyOptions({ width: Math.floor(cr.width), height: Math.floor(cr.height) });
+              panes[0].chart.timeScale().fitContent();
+            }
+          }
+        }, 50);
+      } else {
+        document.body.classList.add('mobile-view-active');
+        Object.entries(views).forEach(([k, v]) => {
+          if (v) v.classList.toggle('hidden', k !== tabKey);
+        });
+
+        if (tabKey === 'trade') {
+          renderMobileTradeList();
+        } else if (tabKey === 'accounts') {
+          updateMobileAccountsView();
+        } else if (tabKey === 'performance') {
+          updateMobilePerformanceView();
+        } else if (tabKey === 'profile') {
+          updateMobileProfileView();
+        }
+      }
+    }
+
+    navItems.forEach(item => {
+      item.addEventListener('click', () => switchMobileTab(item.dataset.tab));
+    });
+
+    // Accounts screen Trade button
+    const mTradeBtn = $('m-action-trade');
+    if (mTradeBtn) mTradeBtn.addEventListener('click', () => switchMobileTab('chart'));
+
+    // Performance screen Start Trading button
+    const mPerfTrade = $('m-btn-perf-trade');
+    if (mPerfTrade) mPerfTrade.addEventListener('click', () => switchMobileTab('chart'));
+
+    // Modals triggers from mobile
+    const mBtnGuide = $('m-btn-open-guide');
+    const guideModal = $('modal-setup-guide');
+    if (mBtnGuide && guideModal) mBtnGuide.addEventListener('click', () => guideModal.classList.remove('hidden'));
+
+    const mBtnKeys = $('m-btn-open-keys');
+    const mBtnProfKeys = $('m-btn-profile-keys');
+    const keysModal = $('modal-api-keys');
+    if (mBtnKeys && keysModal) mBtnKeys.addEventListener('click', () => keysModal.classList.remove('hidden'));
+    if (mBtnProfKeys && keysModal) mBtnProfKeys.addEventListener('click', () => keysModal.classList.remove('hidden'));
+
+    const mRowPaper = $('m-row-paper-profile');
+    const paperModal = $('modal-guest-profile');
+    if (mRowPaper && paperModal) mRowPaper.addEventListener('click', () => paperModal.classList.remove('hidden'));
+
+    const mRowLocal = $('m-row-run-local');
+    if (mRowLocal && guideModal) mRowLocal.addEventListener('click', () => guideModal.classList.remove('hidden'));
+
+    const mRowReddit = $('m-row-reddit');
+    if (mRowReddit) mRowReddit.addEventListener('click', () => window.open('https://reddit.com/user/thatsaiiff', '_blank'));
+
+    // Quick trade carousel items
+    document.querySelectorAll('.m-quick-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const sym = card.dataset.sym;
+        if (sym) {
+          addSymbolTab(sym, '');
+          switchMobileTab('chart');
+        }
+      });
+    });
+
+    // Mobile Watchlist Category Chips
+    const catChips = document.querySelectorAll('.m-cat-chip');
+    let currentCat = 'favorites';
+    catChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        catChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentCat = chip.dataset.cat;
+        renderMobileTradeList(currentCat);
+      });
+    });
+
+    // Mobile Watchlist Search Input
+    const mSearchInput = $('m-trade-search-input');
+    if (mSearchInput) {
+      let mDebounce = null;
+      mSearchInput.addEventListener('input', () => {
+        clearTimeout(mDebounce);
+        mDebounce = setTimeout(() => {
+          renderMobileTradeList(currentCat, mSearchInput.value.trim());
+        }, 150);
+      });
+    }
+
+    function renderMobileTradeList(category = 'favorites', query = '') {
+      const container = $('m-trade-list');
+      if (!container) return;
+      container.innerHTML = '';
+
+      let items = WATCHLIST_PRESETS[category] || WATCHLIST_PRESETS.favorites;
+      if (category === 'options') {
+        items = [...WATCHLIST_PRESETS.nifty_options, ...WATCHLIST_PRESETS.bank_options];
+      }
+      if (query) {
+        const qUpper = query.toUpperCase();
+        items = items.filter(it => it.symbol.toUpperCase().includes(qUpper) || it.name.toUpperCase().includes(qUpper));
+      }
+
+      items.forEach(it => {
+        const row = document.createElement('div');
+        row.className = 'm-trade-item';
+        const isPos = it.signal === 'BUY';
+        row.innerHTML = `
+          <div class="m-ti-left">
+            <div class="m-ti-icon">${it.symbol.includes('BANK') ? '🏦' : (it.symbol.includes('NIFTY') ? '🇮🇳' : (it.symbol.includes('SENSEX') ? '📈' : '⚡'))}</div>
+            <div class="m-ti-names">
+              <span class="m-ti-sym">${it.symbol}</span>
+              <span class="m-ti-sub">${it.name}</span>
+            </div>
+          </div>
+          <div class="m-ti-right">
+            <span class="m-ti-price" id="m-price-${it.symbol.replace(/\s+/g, '_')}">—</span>
+            <span class="m-ti-chg ${isPos ? 'pos' : 'neg'}">${isPos ? '▲ +0.45%' : '▼ -0.32%'}</span>
+          </div>
+        `;
+        row.addEventListener('click', () => {
+          addSymbolTab(it.symbol, it.token || '');
+          switchMobileTab('chart');
+        });
+        container.appendChild(row);
+      });
+    }
+
+    function updateMobileAccountsView() {
+      const storedHandle = localStorage.getItem('neo_guest_handle');
+      const accIdEl = $('m-acc-id');
+      const accBalEl = $('m-acc-balance');
+      const pillBal = $('m-trade-pill-bal');
+      const desktopBal = $('ex-acc-balance');
+
+      if (accIdEl) {
+        accIdEl.textContent = storedHandle ? `#${storedHandle.toUpperCase()}` : '# 472963350';
+      }
+      if (desktopBal && accBalEl) {
+        accBalEl.textContent = desktopBal.textContent.replace(' (Demo)', '');
+      }
+      if (desktopBal && pillBal) {
+        pillBal.textContent = desktopBal.textContent.replace(' (Demo)', '');
+      }
+    }
+
+    function updateMobilePerformanceView() {
+      const grossPnl = $('pnl-gross-val');
+      const netPnl = $('pnl-net-val');
+      const mRealized = $('m-perf-realized');
+      const mNet = $('m-perf-net');
+      if (grossPnl && mRealized) mRealized.textContent = grossPnl.textContent;
+      if (netPnl && mNet) mNet.textContent = netPnl.textContent;
+    }
+
+    function updateMobileProfileView() {
+      const storedHandle = localStorage.getItem('neo_guest_handle');
+      const loginEl = $('m-profile-login');
+      if (loginEl) {
+        loginEl.textContent = storedHandle ? `${storedHandle.toLowerCase()}@pip-terminal` : 'guest@pip-terminal';
+      }
+    }
+  }
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
     initChartPane(panes[0]);
@@ -2131,6 +2387,7 @@
     setupTokenModal();
     setupKeysModal();
     setupGuestProfileModal();
+    setupMobileFlow();
 
     loadCandles(panes[0]);
     startQuotesPolling();

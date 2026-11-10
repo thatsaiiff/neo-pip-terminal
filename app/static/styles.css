@@ -3009,3 +3009,61 @@ body.pip-mode .primary-order {
 body.pip-mode .footer {
   padding-top: 6px;
 }
+
+/* Exness-styled "Trade on Chart" Action Button */
+.trade-on-chart-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, #131722 0%, #1e222d 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 183, 3, 0.4);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.trade-on-chart-btn svg {
+  color: #ffb703;
+  transition: transform 0.2s ease;
+}
+
+.trade-on-chart-btn .chart-btn-badge {
+  background: #ffb703;
+  color: #0e1117;
+  font-size: 8.5px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+}
+
+.trade-on-chart-btn:hover {
+  background: linear-gradient(135deg, #1e222d 0%, #2a2e39 100%);
+  border-color: #ffb703;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(255, 183, 3, 0.25);
+  transform: translateY(-1px);
+}
+
+.trade-on-chart-btn:hover svg {
+  transform: scale(1.1);
+}
+
+@media (max-width: 600px) {
+  .trade-on-chart-btn span:not(.chart-btn-badge) {
+    display: inline-block;
+  }
+  .trade-on-chart-btn {
+    padding: 4px 8px;
+    font-size: 10.5px;
+  }
+}

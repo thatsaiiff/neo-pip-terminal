@@ -672,6 +672,26 @@ body.ex-theme-dark {
   flex-shrink: 0;
 }
 
+.tb-left, .tb-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-ticket-menu {
+  padding: 4px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.btn-ticket-menu:hover, .btn-ticket-menu.active {
+  color: var(--accent-gold);
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
 .chart-active-sym-wrap {
   display: flex;
   align-items: center;
@@ -2285,4 +2305,975 @@ body.ex-theme-dark {
 
 .hidden {
   display: none !important;
+}
+
+/* ==================== 14. EXNESS MOBILE APP FLOW (@media max-width: 768px) ==================== */
+
+/* Desktop defaults: Hide mobile nav and docks */
+@media (min-width: 769px) {
+  .mobile-nav-bar,
+  .mobile-trade-dock,
+  .mobile-views-wrapper,
+  .mobile-screen-view {
+    display: none !important;
+  }
+}
+
+/* Mobile App Layout */
+@media (max-width: 768px) {
+  body {
+    overflow: hidden;
+    position: fixed;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* Hide Desktop Chrome */
+  .ex-left-panel,
+  .ex-order-panel,
+  .ex-bottom-panel,
+  .ex-footer,
+  .ex-tabs-bar,
+  .ex-tab-add-wrap,
+  .ex-header-sep,
+  .quick-tab-search-popup {
+    display: none !important;
+  }
+
+  /* Compact Header */
+  .ex-header {
+    height: 44px;
+    padding: 0 10px;
+    justify-content: space-between;
+  }
+
+  .ex-header-right {
+    gap: 6px;
+  }
+
+  .acc-badge-btn {
+    padding: 3px 7px;
+    font-size: 11px;
+  }
+
+  /* Center Chart Area on Mobile */
+  .ex-center-area {
+    width: 100vw;
+    height: calc(100vh - 44px - 56px - 72px) !important;
+    position: relative;
+    padding-bottom: 0;
+  }
+
+  body.mobile-view-active .ex-center-area,
+  body.mobile-view-active .mobile-trade-dock {
+    display: none !important;
+  }
+
+  .ex-chart-topbar {
+    height: 34px;
+    padding: 0 8px;
+    overflow-x: auto;
+  }
+
+  .active-ohlc {
+    display: none;
+  }
+
+  .ex-tf-btn {
+    padding: 2px 5px;
+    font-size: 11px;
+  }
+
+  .pane-header {
+    height: 24px;
+    padding: 0 8px;
+  }
+
+  .pane-quote-pill {
+    display: none;
+  }
+
+  /* --- Mobile Trade Dock (Chart View Bottom) --- */
+  .mobile-trade-dock {
+    position: fixed;
+    bottom: 56px;
+    left: 0;
+    right: 0;
+    height: 72px;
+    background: #131722;
+    border-top: 1px solid #202735;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    z-index: 450;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .m-dock-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+  }
+
+  .m-dock-btn {
+    flex: 1;
+    height: 100%;
+    border-radius: 6px;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    transition: opacity 0.15s ease;
+  }
+
+  .m-dock-btn:active {
+    opacity: 0.8;
+  }
+
+  .m-btn-sell {
+    background: var(--ex-sell);
+  }
+
+  .m-btn-buy {
+    background: var(--ex-buy);
+  }
+
+  .m-btn-title {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    opacity: 0.85;
+  }
+
+  .m-btn-price {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
+
+  .m-dock-lots {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 90px;
+    background: #1c212d;
+    border: 1px solid #283042;
+    border-radius: 6px;
+    padding: 2px 4px;
+    height: 100%;
+    justify-content: center;
+  }
+
+  .m-lots-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .m-lots-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 1px;
+  }
+
+  .m-lots-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    font-size: 16px;
+    font-weight: 700;
+    padding: 0 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .m-lots-val {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 800;
+    color: #fff;
+  }
+
+  .m-dock-info {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .m-dock-info b {
+    color: #fff;
+    font-family: var(--font-mono);
+  }
+
+  .m-tag-free {
+    color: var(--bull);
+    font-weight: 700;
+  }
+
+  /* --- Mobile Views Wrapper (Accounts, Trade, Performance, Profile) --- */
+  .mobile-views-wrapper {
+    position: fixed;
+    top: 44px;
+    bottom: 56px;
+    left: 0;
+    right: 0;
+    background: #0e1117;
+    z-index: 400;
+    overflow: hidden;
+    display: none;
+  }
+
+  body.mobile-view-active .mobile-views-wrapper {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mobile-screen-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0e1117;
+  }
+
+  .m-screen-header {
+    height: 48px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #1a202c;
+    flex-shrink: 0;
+  }
+
+  .m-header-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+  }
+
+  .m-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .m-hdr-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .m-header-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .m-pill-demo {
+    background: rgba(0, 176, 116, 0.2);
+    color: var(--bull);
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .m-screen-scrollable {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px 24px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prompt Banner (Yellow, Matching Screenshot 1 & 4) */
+  .m-banner-yellow {
+    background: #2b2308;
+    border: 1px solid #735a12;
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .m-banner-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 183, 3, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-gold);
+  }
+
+  .m-banner-text {
+    font-size: 12.5px;
+    color: #f0e6cc;
+    line-height: 1.4;
+  }
+
+  .m-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .m-btn-learn {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .m-btn-complete {
+    flex: 1;
+    background: var(--accent-gold);
+    border: none;
+    color: #0e1117;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  /* Account Card (Matching Screenshot 1) */
+  .m-account-card {
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 18px;
+  }
+
+  .m-acc-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .m-acc-name-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .m-acc-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: 0.04em;
+  }
+
+  .m-acc-id {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .m-acc-cog {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 15px;
+    cursor: pointer;
+  }
+
+  .m-acc-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .m-acc-badge {
+    background: #202735;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .m-acc-badge.demo {
+    background: rgba(0, 176, 116, 0.2);
+    color: var(--bull);
+  }
+
+  .m-acc-balance-display {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-bottom: 18px;
+  }
+
+  .m-acc-balance-val {
+    font-size: 26px;
+    font-weight: 800;
+    color: #ffffff;
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+
+  .m-acc-balance-cur {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 700;
+  }
+
+  /* 3 Circular Action Buttons (Matching Screenshot 1) */
+  .m-acc-actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding-top: 8px;
+    border-top: 1px solid #202735;
+  }
+
+  .m-action-circle-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+
+  .m-circle-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s ease;
+  }
+
+  .m-action-circle-btn.yellow .m-circle-icon {
+    background: var(--accent-gold);
+    color: #0e1117;
+  }
+
+  .m-action-circle-btn.dark .m-circle-icon {
+    background: #202735;
+    color: #ffffff;
+  }
+
+  .m-action-circle-btn:active .m-circle-icon {
+    transform: scale(0.92);
+  }
+
+  .m-action-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  /* Orders Section in Accounts Tab */
+  .m-orders-section {
+    margin-top: 6px;
+  }
+
+  .m-orders-tabs {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid #202735;
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
+
+  .m-otab {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 4px 0;
+    position: relative;
+    cursor: pointer;
+  }
+
+  .m-otab.active {
+    color: #ffffff;
+  }
+
+  .m-otab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -9px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #ffffff;
+    border-radius: 2px;
+  }
+
+  .m-orders-empty-msg {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+
+  /* Quick Carousel (Matching Screenshot 1) */
+  .m-quick-carousel {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .m-quick-card {
+    min-width: 110px;
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+  }
+
+  .m-qc-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .m-qc-icon {
+    font-size: 16px;
+  }
+
+  .m-qc-price {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .m-qc-chg {
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .m-qc-chg.pos { color: var(--bull); }
+  .m-qc-chg.neg { color: var(--bear); }
+
+  /* --- Trade Tab (Watchlist, Matching Screenshot 2) --- */
+  .m-trade-search-bar {
+    padding: 8px 16px;
+    background: #0e1117;
+  }
+
+  .m-trade-search-bar input {
+    width: 100%;
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 13px;
+    color: #fff;
+    outline: none;
+  }
+
+  .m-trade-categories {
+    display: flex;
+    gap: 8px;
+    padding: 6px 16px 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-bottom: 1px solid #1a202c;
+  }
+
+  .m-cat-chip {
+    white-space: nowrap;
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 16px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .m-cat-chip.active {
+    background: #202735;
+    color: #fff;
+    border-color: #3b4252;
+  }
+
+  .m-trade-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+
+  .m-trade-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid #141822;
+    cursor: pointer;
+    transition: background 0.1s ease;
+  }
+
+  .m-trade-item:active {
+    background: #171b24;
+  }
+
+  .m-ti-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .m-ti-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #202735;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  .m-ti-names {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .m-ti-sym {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .m-ti-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .m-ti-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  .m-ti-price {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .m-ti-chg {
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .m-ti-chg.pos { color: var(--bull); }
+  .m-ti-chg.neg { color: var(--bear); }
+
+  /* --- Performance Tab (Matching Screenshot 3) --- */
+  .m-perf-info-box {
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+    line-height: 1.4;
+  }
+
+  .m-perf-filters-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .m-perf-pill {
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 16px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .m-perf-summary-card {
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .m-perf-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .m-metric-label {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .m-metric-val {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 800;
+    color: #fff;
+  }
+
+  .m-metric-val.pos { color: var(--bull); }
+  .m-metric-val.neg { color: var(--bear); }
+
+  .m-perf-empty-state {
+    text-align: center;
+    padding: 24px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .m-empty-warn-icon {
+    font-size: 36px;
+    color: var(--accent-gold);
+    margin-bottom: 10px;
+  }
+
+  .m-empty-warn-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+
+  .m-empty-warn-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+    max-width: 260px;
+  }
+
+  .m-btn-start-trading {
+    background: var(--accent-gold);
+    border: none;
+    color: #0e1117;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 10px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  /* --- Profile Tab (Matching Screenshot 4) --- */
+  .m-profile-section-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: #ffffff;
+    margin: 14px 0 8px;
+  }
+
+  .m-profile-card {
+    background: #171b24;
+    border: 1px solid #202735;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+
+  .m-profile-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid #202735;
+  }
+
+  .m-profile-row:last-child {
+    border-bottom: none;
+  }
+
+  .m-prow-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .m-prow-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #202735;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+  }
+
+  .m-prow-texts {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .m-prow-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .m-prow-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+  }
+
+  .m-prow-badge.verified {
+    background: rgba(0, 176, 116, 0.2);
+    color: var(--bull);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .m-profile-clickable-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    border-bottom: 1px solid #202735;
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .m-profile-clickable-row:last-child {
+    border-bottom: none;
+  }
+
+  .m-prow-label {
+    flex: 1;
+    margin-left: 10px;
+  }
+
+  .m-prow-arrow {
+    color: var(--text-dim);
+    font-size: 16px;
+  }
+
+  .m-profile-card.benefits {
+    padding: 12px 14px;
+  }
+
+  .m-benefit-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    padding: 5px 0;
+  }
+
+  .m-benefit-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--bull);
+  }
+
+  /* --- Fixed Mobile Bottom Navigation Bar (5 Items) --- */
+  .mobile-nav-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: #0e1117;
+    border-top: 1px solid #202735;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    z-index: 500;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .mobile-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: transparent;
+    border: none;
+    color: #6c788d;
+    cursor: pointer;
+    padding: 6px 0;
+    transition: color 0.15s ease;
+  }
+
+  .mobile-nav-item.active {
+    color: var(--accent-gold);
+  }
+
+  .mnav-icon svg {
+    display: block;
+    color: inherit;
+  }
+
+  .mnav-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
 }
