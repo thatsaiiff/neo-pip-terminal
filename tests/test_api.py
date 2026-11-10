@@ -1356,6 +1356,47 @@ def test_signup_otp_resume_and_resend_preserves_password_hash(client):
     assert si.status_code == 200
 
 
+def test_paper_wallet_deposit_withdraw_and_withdraw_all(client):
+    _signup_verified(client, "wallet_fx", "wallet_pw_1", "wallet.fx@gmail.com")
+    si = client.post("/api/auth/signin", json={"username": "wallet_fx", "password": "wallet_pw_1"})
+    assert si.status_code == 200
+    hdrs = {"Authorization": f"Bearer {si.json()['token']}"}
+
+    # Select Forex ($10,000 initial) -> Deposit $2,500.50 -> Balance $12,500.50
+    client.post("/api/user/select-market", headers=hdrs, json={"market": "forex"})
+    d1 = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "deposit", "amount": 2500.50, "market": "forex"})
+    assert d1.status_code == 200, d1.text
+    assert d1.json()["balance"] == 12500.50
+    assert client.get("/api/funds?market=forex", headers=hdrs).json()["balance"] == 12500.50
+
+    # Withdraw $5,000 -> Balance $7,500.50
+    w1 = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "withdraw", "amount": 5000.0, "market": "forex"})
+    assert w1.status_code == 200
+    assert w1.json()["balance"] == 7500.50
+
+    # Withdraw more than remaining ($999,999) -> subtracts down cleanly to $0.00 (never negative)
+    w_over = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "withdraw", "amount": 999999.0, "market": "forex"})
+    assert w_over.status_code == 200
+    assert w_over.json()["balance"] == 0.0
+    assert client.get("/api/funds?market=forex", headers=hdrs).json()["available_margin"] == 0.0
+
+    # Deposit back $1,500 -> Withdraw All -> $0.00
+    d2 = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "deposit", "amount": 1500.0, "market": "forex"})
+    assert d2.status_code == 200 and d2.json()["balance"] == 1500.0
+    wa = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "withdraw_all", "market": "forex"})
+    assert wa.status_code == 200 and wa.json()["balance"] == 0.0
+
+    # Indian paper wallet stays independent and works identically
+    ind_dep = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "deposit", "amount": 250000.0, "market": "indian"})
+    assert ind_dep.status_code == 200 and ind_dep.json()["balance"] == 1250000.0
+    assert client.get("/api/funds?market=forex", headers=hdrs).json()["balance"] == 0.0
+
+    # Zero amount rejected for deposit/withdraw
+    bad = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "deposit", "amount": 0, "market": "forex"})
+    assert bad.status_code == 400
+
+
+
 
 
 

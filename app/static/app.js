@@ -2824,9 +2824,27 @@
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);
   updateTradingViewSymbol('NIFTY');
 
+  function setupMainLegalModal() {
+    const legalModal = $('main-legal-modal');
+    const openBtns = [$('main-legal-btn'), $('main-auth-legal-btn')].filter(Boolean);
+    const closeBtns = [$('main-legal-close'), $('main-legal-ok')].filter(Boolean);
+    openBtns.forEach(b => b.addEventListener('click', () => {
+      if (legalModal) legalModal.classList.remove('hidden');
+    }));
+    closeBtns.forEach(b => b.addEventListener('click', () => {
+      if (legalModal) legalModal.classList.add('hidden');
+    }));
+    if (legalModal) {
+      legalModal.addEventListener('click', (e) => {
+        if (e.target === legalModal) legalModal.classList.add('hidden');
+      });
+    }
+  }
+
   setupIndexTickerSlide();
   setupMoversControls();
   wireMainAuthModal();
+  setupMainLegalModal();
   lockMainSite();
 
   requestLanAccess().then(() => {

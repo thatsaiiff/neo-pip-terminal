@@ -3345,3 +3345,83 @@ button:active:not(:disabled),
     font-size: 10px;
   }
 }
+
+@keyframes mainModalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mainCardPopIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-backdrop:not(.hidden) {
+  animation: mainModalFadeIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.modal-backdrop:not(.hidden) > .modal-card {
+  animation: mainCardPopIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.footer-meta-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.main-legal-link-btn {
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-full);
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+.main-legal-link-btn:hover {
+  border-color: var(--accent-ink);
+  color: var(--ink-primary);
+}
+
+.main-legal-card {
+  max-width: 560px !important;
+  width: 94vw;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.main-legal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.main-legal-block {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+.main-legal-block b {
+  color: var(--ink-primary);
+}
+
+.main-legal-block p {
+  margin: 4px 0 0;
+}
+
+.main-legal-block ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}

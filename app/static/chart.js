@@ -45,6 +45,7 @@
   let cachedClosedPositions = [];
   let cachedExecutions = [];
   let cachedPnlSummary = {};
+  let cachedFunds = {};
   let activeSltpRules = [];
   let updateMobileOrdersFn = null;
   let _lastSltpTickMs = 0;
@@ -62,6 +63,8 @@
       'modal-api-keys',
       'modal-guest-profile',
       'order-window-modal',
+      'modal-paper-wallet',
+      'modal-legal-disclaimer',
     ].forEach(id => {
       if (id !== exceptId && $(id)) $(id).classList.add('hidden');
     });
@@ -3860,6 +3863,7 @@
 
       // 2. Funds & Equity
       const fundsData = await api(`/api/funds?${mQ}`).catch(() => ({}));
+      cachedFunds = fundsData || {};
       const eqEl = $('f-equity');
       const fmEl = $('f-free-margin');
       const muEl = $('f-margin-used');
@@ -4136,6 +4140,10 @@
 
     function openModal() {
       if (!modal) return;
+      if (currentMarketMode === 'forex') {
+        toast('Option Chain is only available in Indian markets.');
+        return;
+      }
       closeAllOverlays('option-chain-modal');
       modal.classList.remove('hidden');
       if (undSelect) currentUnd = undSelect.value;
@@ -4303,7 +4311,14 @@
     if (lbl) lbl.textContent = clean === 'forex' ? 'FOREX' : 'INDIAN';
 
     const ocHeaderBtn = $('btn-header-opt-chain');
+    const ocRailBtn = $('rail-btn-option-chain');
+    const ocModal = $('option-chain-modal');
     if (ocHeaderBtn) ocHeaderBtn.classList.toggle('hidden', clean === 'forex');
+    if (ocRailBtn) ocRailBtn.classList.toggle('hidden', clean === 'forex');
+    if (clean === 'forex' && ocModal) ocModal.classList.add('hidden');
+    if ($('menu-wallet-section')) {
+      $('menu-wallet-section').classList.toggle('hidden', !isAuthenticated || (isAdminUser && clean === 'indian'));
+    }
 
     const catSelect = $('ex-inst-category');
     const searchIn = $('ex-inst-search');
@@ -4383,6 +4398,8 @@
       el.classList.toggle('hidden', !adminActive);
     });
 
+    const walletSec = $('menu-wallet-section');
+    if (walletSec) walletSec.classList.toggle('hidden', !(isAuthenticated && (!adminActive || currentMarketMode === 'forex')));
     if (adminActive) {
       const kText = kotakConnected ? '🟢 Kotak Neo: Authenticated (Live)' : '🔴 Kotak Neo: Not Authenticated';
       if (menuKotakBadge) {
@@ -5216,6 +5233,197 @@
     if (closeBtn) closeBtn.addEventListener('click', closeGuide);
   }
 
+  // --- Paper Wallet Deposit / Withdraw Modal (Desktop & Mobile) ---
+  function setupPaperWalletModal() {
+    const modal = $('modal-paper-wallet');
+    const tabDep = $('wallet-tab-deposit');
+    const tabWdr = $('wallet-tab-withdraw');
+    const amtInput = $('wallet-amount-input');
+    const lblEl = $('wallet-amount-label');
+    const hintEl = $('wallet-mode-hint');
+    const chipsEl = $('wallet-quick-chips');
+    const errEl = $('wallet-error-msg');
+    const btnWithdrawAll = $('btn-wallet-withdraw-all');
+    const btnSubmit = $('btn-wallet-submit');
+    const curBalEl = $('wallet-cur-balance');
+    const freeMarEl = $('wallet-free-margin');
+    const mktPill = $('wallet-market-pill');
+
+    let walletMode = 'deposit';
+
+    function renderChips() {
+      if (!chipsEl) return;
+      const isFx = currentMarketMode === 'forex';
+      const cs = isFx ? '$' : '₹';
+      const vals = isFx ? [500, 1000, 5000, 10000] : [10000, 50000, 100000, 500000];
+      chipsEl.innerHTML = '';
+      vals.forEach(v => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'wallet-chip-btn';
+        b.textContent = `${walletMode === 'deposit' ? '+' : '−'}${cs}${v.toLocaleString('en-IN')}`;
+        b.addEventListener('click', () => {
+          if (amtInput) {
+            amtInput.value = String(v);
+            amtInput.focus();
+          }
+        });
+        chipsEl.appendChild(b);
+      });
+    }
+
+    function syncWalletHeaderStats() {
+      const isFx = currentMarketMode === 'forex';
+      if (mktPill) mktPill.textContent = isFx ? 'FOREX · USD' : 'INDIAN · INR';
+      const rawBal = cachedFunds && cachedFunds.balance !== undefined
+        ? Number(cachedFunds.balance)
+        : (cachedFunds && cachedFunds.total_equity !== undefined ? Number(cachedFunds.total_equity) : 0);
+      const rawAvail = cachedFunds && cachedFunds.available_margin !== undefined
+        ? Number(cachedFunds.available_margin)
+        : rawBal;
+      if (curBalEl) curBalEl.textContent = fmtMoney(Math.max(0, rawBal));
+      if (freeMarEl) freeMarEl.textContent = fmtMoney(Math.max(0, rawAvail));
+      if (btnWithdrawAll) btnWithdrawAll.textContent = `Withdraw All (${fmtMoney(0)})`;
+    }
+
+    function setWalletMode(mode) {
+      walletMode = mode === 'withdraw' ? 'withdraw' : 'deposit';
+      const isW = walletMode === 'withdraw';
+      if (tabDep) tabDep.classList.toggle('active', !isW);
+      if (tabWdr) tabWdr.classList.toggle('active', isW);
+      if (btnWithdrawAll) btnWithdrawAll.classList.toggle('hidden', !isW);
+      if (btnSubmit) {
+        btnSubmit.classList.toggle('is-withdraw', isW);
+        btnSubmit.textContent = isW ? '➖ Withdraw Funds' : '➕ Deposit Funds';
+      }
+      if (lblEl) {
+        lblEl.textContent = isW
+          ? 'Amount to Withdraw (Subtracts down to 0)'
+          : 'Amount to Deposit (Virtual Paper Funds)';
+      }
+      if (hintEl) {
+        hintEl.textContent = isW
+          ? 'Enter any amount — subtracts from your paper balance down to 0, or tap Withdraw All.'
+          : 'Add any virtual amount to your active paper account balance.';
+      }
+      if (errEl) errEl.classList.add('hidden');
+      renderChips();
+    }
+
+    function openWalletModal(initialMode = 'deposit') {
+      if (!isAuthenticated) {
+        const gm = $('modal-gatekeeper');
+        if (gm) gm.classList.remove('hidden');
+        return;
+      }
+      if (isAdminUser && currentMarketMode === 'indian') {
+        toast('💡 Admin Indian mode uses Kotak Neo live funds. Switch to Forex to manage virtual paper funds.');
+        return;
+      }
+      closeAllOverlays('modal-paper-wallet');
+      syncWalletHeaderStats();
+      setWalletMode(initialMode);
+      if (amtInput) amtInput.value = '';
+      if (modal) modal.classList.remove('hidden');
+      setTimeout(() => amtInput?.focus(), 60);
+    }
+
+    async function submitWalletAdjust(action, amountVal) {
+      if (errEl) errEl.classList.add('hidden');
+      try {
+        if (btnSubmit) btnSubmit.disabled = true;
+        if (btnWithdrawAll) btnWithdrawAll.disabled = true;
+        const res = await api('/api/paper-wallet/adjust', {
+          method: 'POST',
+          body: JSON.stringify({
+            action,
+            amount: amountVal || 0,
+            market: currentMarketMode,
+          }),
+        });
+        cachedFunds = res || cachedFunds;
+        syncWalletHeaderStats();
+        const avail = Number(res.available_margin !== undefined ? res.available_margin : res.balance || 0);
+        const eq = Number(res.total_equity !== undefined ? res.total_equity : res.balance || 0);
+        if ($('ex-acc-balance')) $('ex-acc-balance').textContent = fmtMoney(avail);
+        if ($('f-equity')) $('f-equity').textContent = fmtMoney(eq);
+        if ($('f-free-margin')) $('f-free-margin').textContent = fmtMoney(avail);
+        if (typeof updateMobileOrdersFn === 'function') updateMobileOrdersFn();
+        if (modal) modal.classList.add('hidden');
+        fetchPositionsAndOrders();
+        const label = action === 'withdraw_all'
+          ? `✅ Withdrew all paper funds — balance is now ${fmtMoney(0)}`
+          : (action === 'withdraw'
+            ? `✅ Withdrew funds — remaining balance ${fmtMoney(Number(res.balance || 0))}`
+            : `✅ Deposited ${fmtMoney(amountVal)} — new balance ${fmtMoney(Number(res.balance || 0))}`);
+        toast(label);
+      } catch (e) {
+        if (errEl) {
+          errEl.textContent = e.message;
+          errEl.classList.remove('hidden');
+        }
+      } finally {
+        if (btnSubmit) btnSubmit.disabled = false;
+        if (btnWithdrawAll) btnWithdrawAll.disabled = false;
+      }
+    }
+
+    window._openPaperWalletFn = openWalletModal;
+    if ($('btn-menu-deposit-funds')) $('btn-menu-deposit-funds').addEventListener('click', () => openWalletModal('deposit'));
+    if ($('btn-menu-withdraw-funds')) $('btn-menu-withdraw-funds').addEventListener('click', () => openWalletModal('withdraw'));
+    if ($('btn-close-wallet-modal')) $('btn-close-wallet-modal').addEventListener('click', () => modal && modal.classList.add('hidden'));
+    if (modal) modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
+    if (tabDep) tabDep.addEventListener('click', () => setWalletMode('deposit'));
+    if (tabWdr) tabWdr.addEventListener('click', () => setWalletMode('withdraw'));
+    if (btnWithdrawAll) {
+      btnWithdrawAll.addEventListener('click', () => submitWalletAdjust('withdraw_all', 0));
+    }
+    if (btnSubmit) {
+      btnSubmit.addEventListener('click', () => {
+        const val = parseFloat(amtInput?.value || '');
+        if (!Number.isFinite(val) || val <= 0) {
+          if (errEl) {
+            errEl.textContent = 'Enter an amount greater than 0.';
+            errEl.classList.remove('hidden');
+          }
+          return;
+        }
+        submitWalletAdjust(walletMode, val);
+      });
+    }
+  }
+
+  // --- Educational Purpose & Regulatory Laws Disclaimer Modal ---
+  function setupLegalModal() {
+    const modal = $('modal-legal-disclaimer');
+    const closeBtn = $('btn-close-legal');
+    const ackBtn = $('btn-legal-ack');
+    const openGuideBtn = $('btn-legal-open-guide');
+
+    function openLegal(e) {
+      if (e) e.stopPropagation();
+      closeAllOverlays('modal-legal-disclaimer');
+      if (modal) modal.classList.remove('hidden');
+    }
+    function closeLegal() {
+      if (modal) modal.classList.add('hidden');
+    }
+
+    window._openLegalModalFn = openLegal;
+    if ($('btn-legal-disclaimer')) $('btn-legal-disclaimer').addEventListener('click', openLegal);
+    if ($('btn-menu-legal')) $('btn-menu-legal').addEventListener('click', openLegal);
+    if ($('btn-gatekeeper-legal')) $('btn-gatekeeper-legal').addEventListener('click', openLegal);
+    if (closeBtn) closeBtn.addEventListener('click', closeLegal);
+    if (ackBtn) ackBtn.addEventListener('click', closeLegal);
+    if (modal) modal.addEventListener('click', e => { if (e.target === modal) closeLegal(); });
+    if (openGuideBtn) {
+      openGuideBtn.addEventListener('click', () => {
+        closeAllOverlays('modal-setup-guide');
+        if ($('modal-setup-guide')) $('modal-setup-guide').classList.remove('hidden');
+      });
+    }
+  }
+
   // --- Indicators Dropdown & Layout Switcher ---
   function setupIndicatorsMenu() {
     const btn = $('btn-indicators-dropdown');
@@ -5784,14 +5992,18 @@
     const mDepositBtn = $('m-action-deposit');
     if (mDepositBtn) {
       mDepositBtn.addEventListener('click', () => {
-        toast('💡 Deposit funds directly via your Kotak Neo netbanking / UPI portal.');
+        if (typeof window._openPaperWalletFn === 'function') {
+          window._openPaperWalletFn('deposit');
+        }
       });
     }
 
     const mWithdrawBtn = $('m-action-withdraw');
     if (mWithdrawBtn) {
       mWithdrawBtn.addEventListener('click', () => {
-        toast('💡 Withdrawals are settled to your linked primary bank account by Kotak Neo.');
+        if (typeof window._openPaperWalletFn === 'function') {
+          window._openPaperWalletFn('withdraw');
+        }
       });
     }
 
@@ -5876,6 +6088,13 @@
       mRowLocal.addEventListener('click', () => {
         closeAllOverlays('modal-setup-guide');
         guideModal.classList.remove('hidden');
+      });
+    }
+
+    const mRowLegal = $('m-row-legal');
+    if (mRowLegal) {
+      mRowLegal.addEventListener('click', () => {
+        if (typeof window._openLegalModalFn === 'function') window._openLegalModalFn();
       });
     }
 
@@ -6545,6 +6764,8 @@
     setupAdminModals();
     setupGatekeeper();
     setupGuideModal();
+    setupPaperWalletModal();
+    setupLegalModal();
     setupIndicatorsMenu();
     setupTokenModal();
     setupKeysModal();

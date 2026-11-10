@@ -2700,6 +2700,21 @@ body.ex-theme-dark {
   color: #fff;
 }
 
+.btn-primary-choice {
+  background: var(--accent-gold);
+  color: #0e1117;
+  border: none;
+  padding: 9px 18px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-primary-choice:hover {
+  filter: brightness(1.06);
+}
+
 .btn-owner-submit {
   background: var(--accent-gold);
   color: #0e1117;
@@ -5664,4 +5679,479 @@ button:active:not(:disabled),
 .auth-spam-banner strong {
   color: #facc15;
 }
+
+/* ==================== SMOOTHER INTERACTIVE ANIMATIONS & TRANSITIONS ==================== */
+@keyframes neoBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes neoCardPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes neoSheetSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes neoDropFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Smooth backdrop & dialog entrance animations whenever modals open */
+.ex-modal-backdrop:not(.hidden),
+.oc-modal-backdrop:not(.hidden),
+.token-modal-backdrop:not(.hidden) {
+  animation: neoBackdropIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ex-modal-backdrop:not(.hidden) > .ex-modal-card,
+.oc-modal-backdrop:not(.hidden) > .oc-modal-card,
+.token-modal-backdrop:not(.hidden) > .token-modal-card {
+  animation: neoCardPopIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ex-modal-backdrop:not(.hidden) > .order-win-card {
+  animation: neoCardPopIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (max-width: 960px) {
+  .ex-modal-backdrop:not(.hidden) > .order-win-card {
+    animation: neoSheetSlideUp 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+/* Smooth dropdown, menu & drawer entrance transitions */
+.ex-account-menu:not(.hidden),
+.layout-dropdown:not(.hidden),
+.ind-popover:not(.hidden),
+.tf-dropdown-menu:not(.hidden),
+.chart-plus-menu:not(.hidden) {
+  animation: neoDropFadeIn 0.17s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top center;
+}
+
+.fifo-detail-drawer {
+  animation: neoDropFadeIn 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Smooth drawer & layout transitions */
+.ex-drawer {
+  transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease, transform 0.22s ease;
+}
+
+/* Tactile hover & press transitions across interactive buttons, pills, tabs, & rows */
+.ex-header button,
+.ex-rail-btn,
+.tf-btn,
+.ex-tab,
+.bl-tab,
+.op-prod-tab,
+.op-mode-tab,
+.op-btn-buy,
+.op-btn-sell,
+.stepper-btn,
+.m-nav-item,
+.m-otab,
+.m-dock-btn,
+.m-lots-btn,
+.m-action-circle-btn,
+.acc-menu-item,
+.auth-mode-tab,
+.btn-auth-primary,
+.btn-market-choice,
+.wallet-mode-tab,
+.wallet-chip-btn,
+.wallet-submit-btn,
+.wallet-withdraw-all-btn,
+.footer-legal-btn,
+.inst-row,
+.m-trade-item,
+.m-order-card.closed,
+.m-profile-clickable-row,
+tr.closed-row-clickable {
+  transition:
+    transform 0.15s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.16s ease,
+    box-shadow 0.18s ease,
+    opacity 0.16s ease;
+}
+
+.ex-header button:not(:disabled):active,
+.ex-rail-btn:not(:disabled):active,
+.tf-btn:not(:disabled):active,
+.ex-tab:not(:disabled):active,
+.bl-tab:not(:disabled):active,
+.op-prod-tab:not(:disabled):active,
+.op-mode-tab:not(:disabled):active,
+.op-btn-buy:not(:disabled):active,
+.op-btn-sell:not(:disabled):active,
+.stepper-btn:not(:disabled):active,
+.m-nav-item:active,
+.m-otab:active,
+.m-dock-btn:not(:disabled):active,
+.m-lots-btn:active,
+.m-action-circle-btn:active,
+.acc-menu-item:active,
+.auth-mode-tab:active,
+.btn-auth-primary:not(:disabled):active,
+.btn-market-choice:active,
+.wallet-mode-tab:active,
+.wallet-chip-btn:active,
+.wallet-submit-btn:not(:disabled):active,
+.wallet-withdraw-all-btn:not(:disabled):active,
+.footer-legal-btn:active,
+.m-profile-clickable-row:active {
+  transform: scale(0.96);
+}
+
+.ex-switch-mini,
+.ex-switch-mini::after {
+  transition: background-color 0.2s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.toast {
+  transition: opacity 0.22s ease, transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-modal-backdrop:not(.hidden),
+  .ex-modal-backdrop:not(.hidden) > .ex-modal-card,
+  .ex-modal-backdrop:not(.hidden) > .order-win-card,
+  .ex-account-menu:not(.hidden),
+  .layout-dropdown:not(.hidden),
+  .ind-popover:not(.hidden),
+  .tf-dropdown-menu:not(.hidden),
+  .fifo-detail-drawer {
+    animation: none !important;
+  }
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==================== PAPER WALLET MODAL (DEPOSIT / WITHDRAW) ==================== */
+.acc-menu-item.wallet-item {
+  color: #fde68a;
+  font-weight: 600;
+}
+
+.wallet-card {
+  max-width: 440px !important;
+  width: 94vw;
+  padding: 22px !important;
+  background: #131722 !important;
+  border: 1px solid #2b3446 !important;
+}
+
+.wallet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.wallet-balance-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(59, 130, 246, 0.10));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.wallet-balance-box .wb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wallet-balance-box .wb-col.right {
+  text-align: right;
+}
+
+.wallet-balance-box .wb-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wallet-balance-box .wb-val {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--bull);
+}
+
+.wallet-balance-box .wb-val.sub {
+  font-size: 15px;
+  color: var(--text-main);
+}
+
+.wallet-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  background: #141922;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+
+.wallet-mode-tab {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wallet-mode-tab.active {
+  background: #222938;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.wallet-mode-tab.active[data-wmode="deposit"] {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.wallet-mode-tab.active[data-wmode="withdraw"] {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.wallet-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wallet-input-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.wallet-input-group input {
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: #0d1118;
+  border: 1px solid #2b3446;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+}
+
+.wallet-input-group input:focus {
+  border-color: var(--accent-gold);
+}
+
+.wallet-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wallet-chip-btn {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid #2d3648;
+  background: #19202c;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wallet-chip-btn:hover {
+  border-color: var(--accent-gold);
+  color: #fff;
+}
+
+.wallet-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.wallet-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.wallet-withdraw-all-btn {
+  padding: 11px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wallet-withdraw-all-btn:hover {
+  background: rgba(239, 68, 68, 0.24);
+}
+
+.wallet-submit-btn {
+  flex: 1;
+  padding: 11px 16px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wallet-submit-btn.is-withdraw {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+/* ==================== LEGAL DISCLAIMER & FOOTER NOTICE ==================== */
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.footer-legal-btn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(245, 197, 24, 0.08);
+  border: 1px solid rgba(245, 197, 24, 0.25);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.footer-legal-btn:hover {
+  background: rgba(245, 197, 24, 0.18);
+  border-color: rgba(245, 197, 24, 0.5);
+  color: #fde68a;
+}
+
+.gatekeeper-legal-summary {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.legal-guide-callout {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(245, 197, 24, 0.09);
+  border: 1px solid rgba(245, 197, 24, 0.35);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.legal-card {
+  max-width: 640px !important;
+  width: 94vw;
+  max-height: 88vh;
+  padding: 22px !important;
+  background: #131722 !important;
+  border: 1px solid #2b3446 !important;
+  overflow-y: auto !important;
+}
+
+.guide-badge.legal {
+  background: rgba(245, 197, 24, 0.16);
+  color: #fde68a;
+  border: 1px solid rgba(245, 197, 24, 0.38);
+}
+
+.legal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.legal-section {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: #171d29;
+  border: 1px solid #252e3f;
+}
+
+.legal-section h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-gold);
+}
+
+.legal-section p,
+.legal-section li {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #cbd5e1;
+}
+
+.legal-section ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legal-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 

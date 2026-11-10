@@ -2001,6 +2001,12 @@ class SelectMarketPayload(BaseModel):
     market: Literal["forex", "indian"]
 
 
+class PaperWalletAdjustPayload(BaseModel):
+    action: Literal["deposit", "withdraw", "withdraw_all"]
+    amount: float = Field(default=0.0, ge=0.0, le=1_000_000_000.0)
+    market: Literal["forex", "indian"] | None = None
+
+
 class CheckEmailPayload(BaseModel):
     email: str
 
@@ -2365,6 +2371,80 @@ def user_select_market(
         "currency": "USD" if market == "forex" else "INR",
         "market_is_open": True if market == "forex" else _is_indian_market_open(),
         "balance": sess.get("forex_balance", _FOREX_DEMO_BALANCE) if market == "forex" else sess.get("indian_balance", _GUEST_DEMO_BALANCE),
+    }
+
+
+@app.post("/api/paper-wallet/adjust")
+def adjust_paper_wallet(
+    payload: PaperWalletAdjustPayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=payload.market, require_auth=True)
+    eff_market = ctx["market_mode"]
+    if ctx["is_admin"] and eff_market == "indian":
+        raise HTTPException(
+            status_code=400,
+            detail="Admin Indian mode connects to Kotak Neo live funds. Switch to Forex paper mode to adjust virtual funds.",
+        )
+
+    amt = float(payload.amount or 0.0)
+    if not math.isfinite(amt) or amt < 0:
+        raise HTTPException(status_code=400, detail="Enter a valid non-negative amount.")
+    amt = round(amt, 2)
+    if payload.action in {"deposit", "withdraw"} and amt <= 0:
+        raise HTTPException(status_code=400, detail="Enter an amount greater than 0.")
+
+    base_bal = float(ctx["base_balance"])
+    acc_id = ctx["account_id"]
+    funds_before = _compute_paper_funds(acc_id, base_bal, eff_market)
+    cur_balance = max(0.0, float(funds_before.get("balance") or 0.0))
+
+    if payload.action == "deposit":
+        new_base = round(base_bal + amt, 2)
+    elif payload.action == "withdraw":
+        target_bal = max(0.0, round(cur_balance - amt, 2))
+        new_base = round(base_bal + (target_bal - cur_balance), 2)
+    else:  # withdraw_all
+        new_base = round(base_bal - cur_balance, 2)
+
+    uid = ctx.get("user_id") or -1
+    uemail = str(ctx.get("email") or "").lower()
+    with db() as conn:
+        if eff_market == "forex":
+            conn.execute(
+                "UPDATE users SET forex_balance = ? WHERE id = ? OR LOWER(email) = ?",
+                (new_base, uid, uemail),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET indian_balance = ?, paper_balance = ? WHERE id = ? OR LOWER(email) = ?",
+                (new_base, new_base, uid, uemail),
+            )
+        conn.commit()
+        u_row = conn.execute(
+            "SELECT indian_balance, forex_balance FROM users WHERE id = ? OR LOWER(email) = ? LIMIT 1",
+            (uid, uemail),
+        ).fetchone()
+
+    funds_after = _compute_paper_funds(acc_id, new_base, eff_market)
+    ind_bal = float(u_row["indian_balance"]) if (u_row and u_row["indian_balance"] is not None) else _GUEST_DEMO_BALANCE
+    fx_bal = float(u_row["forex_balance"]) if (u_row and u_row["forex_balance"] is not None) else _FOREX_DEMO_BALANCE
+    audit("paper_wallet_adjust", {
+        "username": ctx["username"],
+        "market": eff_market,
+        "action": payload.action,
+        "amount": amt,
+        "new_balance": funds_after.get("balance", 0.0),
+    })
+    return {
+        "ok": True,
+        "action": payload.action,
+        "market_mode": eff_market,
+        "indian_balance": round(ind_bal, 2),
+        "forex_balance": round(fx_bal, 2),
+        **funds_after,
     }
 
 
