@@ -52,6 +52,14 @@
   let _isDraggingTradeLine = false;
   let _chartDragCancelFn = null;
 
+  function playTradeSound(kind) {
+    try {
+      if (window.NeoSoundFX && typeof window.NeoSoundFX.play === 'function') {
+        window.NeoSoundFX.play(kind);
+      }
+    } catch (_) {}
+  }
+
   function closeAllOverlays(exceptId = null) {
     [
       'modal-kotak-connect',
@@ -1195,6 +1203,9 @@
           body: JSON.stringify(payload),
         });
         if (res.ok) {
+          if (res.order_status !== 'pending' && res.status !== 'pending') {
+            playTradeSound('filled');
+          }
           toast(`✅ ${res.message || `${side} order placed!`}`);
           await fetchPositionsAndOrders();
         }
@@ -1530,6 +1541,7 @@
               method: 'POST',
               body: JSON.stringify({ percentage: 100 }),
             });
+            playTradeSound('closed');
             toast(`✅ Closed ${pane.sym}`);
             fetchPositionsAndOrders();
           } catch (err) {
@@ -2046,8 +2058,19 @@
         body: JSON.stringify({ symbol: pane.sym, ltp: Number(ltp) }),
       });
       if (res && (res.triggered_count > 0 || res.filled_pending_count > 0)) {
-        if (res.triggered_count > 0) toast(`🎯 ${res.triggered[0].trigger_type} hit on ${pane.sym} @ ${curSym(pane.sym)}${ltp}`);
-        if (res.filled_pending_count > 0) toast(`⚡ Pending order filled on ${pane.sym} @ ${curSym(pane.sym)}${res.filled_pending[0].fill_price}`);
+        if (res.filled_pending_count > 0) {
+          playTradeSound('filled');
+          toast(`⚡ Pending order filled on ${pane.sym} @ ${curSym(pane.sym)}${res.filled_pending[0].fill_price}`);
+        }
+        if (res.triggered_count > 0) {
+          const trigType = String(res.triggered[0].trigger_type || '').toUpperCase() === 'TP' ? 'tp' : 'sl';
+          if (res.filled_pending_count > 0) {
+            setTimeout(() => playTradeSound(trigType), 260);
+          } else {
+            playTradeSound(trigType);
+          }
+          toast(`🎯 ${res.triggered[0].trigger_type} hit on ${pane.sym} @ ${curSym(pane.sym)}${ltp}`);
+        }
         fetchPositionsAndOrders();
       }
     } catch (_) {}
@@ -2366,6 +2389,9 @@
         });
 
         if (res.ok) {
+          if (res.order_status !== 'pending' && res.status !== 'pending') {
+            playTradeSound('filled');
+          }
           toast(`✅ ${res.message || `${typeTag} order placed!`}`);
           fetchPositionsAndOrders();
           return true;
@@ -3796,6 +3822,7 @@
           toast('Squaring off all positions...');
           const res = await api(`/api/positions/exit-all?market=${encodeURIComponent(currentMarketMode)}`, { method: 'POST' });
           if (res.ok) {
+            playTradeSound('closed');
             toast(`✅ ${res.message || 'All positions squared off!'}`);
             fetchPositionsAndOrders();
           }
@@ -3870,6 +3897,7 @@
                   body: JSON.stringify({ percentage: 100 }),
                 });
                 if (res.ok) {
+                  playTradeSound('closed');
                   toast(`✅ Position ${sym} closed!`);
                   fetchPositionsAndOrders();
                 }
@@ -5607,6 +5635,7 @@
             body: JSON.stringify({ percentage: 100 }),
           });
           if (res.ok) {
+            playTradeSound('closed');
             toast(`✅ Closed ${ap.sym}`);
             fetchPositionsAndOrders();
           }
@@ -6277,6 +6306,7 @@
                     body: JSON.stringify({ percentage: 100 }),
                   });
                   if (res.ok) {
+                    playTradeSound('closed');
                     toast(`✅ Position ${sym} closed!`);
                     fetchPositionsAndOrders();
                   }
@@ -6762,6 +6792,31 @@
   }
   window._updateCountdownsFn = updatePaneCountdowns;
 
+  function setupSoundControls() {
+    function syncUi() {
+      const on = window.NeoSoundFX ? window.NeoSoundFX.isEnabled() : true;
+      const footerBtn = $('btn-footer-sound');
+      const menuIcon = $('menu-sound-icon');
+      const menuLbl = $('menu-sound-label');
+      const mobIcon = $('m-sound-icon');
+      const mobLbl = $('m-sound-label');
+      if (footerBtn) footerBtn.textContent = on ? '🔊 Sound: ON' : '🔇 Sound: OFF';
+      if (menuIcon) menuIcon.textContent = on ? '🔊' : '🔇';
+      if (menuLbl) menuLbl.textContent = `Trade Chimes & Vibrate: ${on ? 'ON' : 'OFF'}`;
+      if (mobIcon) mobIcon.textContent = on ? '🔊' : '🔇';
+      if (mobLbl) mobLbl.textContent = `Execution Chimes & Vibrate: ${on ? 'ON' : 'OFF'}`;
+    }
+    function handleToggle() {
+      const next = window.NeoSoundFX ? window.NeoSoundFX.toggle() : true;
+      syncUi();
+      toast(next ? '🔊 Trade chimes & vibration enabled' : '🔇 Trade chimes & vibration muted');
+    }
+    [$('btn-footer-sound'), $('btn-menu-sound-toggle'), $('m-row-sound')].forEach(el => {
+      if (el) el.addEventListener('click', handleToggle);
+    });
+    syncUi();
+  }
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
     // Prevent page pinch / double-tap zoom while leaving single-finger + / - taps instant
@@ -6788,6 +6843,7 @@
     setupGuideModal();
     setupPaperWalletModal();
     setupLegalModal();
+    setupSoundControls();
     setupIndicatorsMenu();
     setupTokenModal();
     setupKeysModal();

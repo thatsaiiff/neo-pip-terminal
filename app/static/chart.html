@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord12">
+  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord13">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -112,6 +112,10 @@
           <button type="button" id="btn-menu-legal" class="acc-menu-item">
             <span class="acc-item-icon">⚖️</span>
             <span>Educational Use &amp; Laws Disclaimer</span>
+          </button>
+          <button type="button" id="btn-menu-sound-toggle" class="acc-menu-item">
+            <span class="acc-item-icon" id="menu-sound-icon">🔊</span>
+            <span id="menu-sound-label">Trade Chimes &amp; Vibrate: ON</span>
           </button>
           <div class="acc-menu-divider"></div>
           <button type="button" id="btn-logout" class="acc-menu-item hidden">
@@ -812,6 +816,9 @@
       <b class="stat-val text-green">ACTIVE</b>
     </div>
     <div class="footer-right">
+      <button type="button" id="btn-footer-sound" class="footer-legal-btn" title="Toggle Order Filled / TP / SL / Closed Chimes &amp; Vibration">
+        🔊 Sound: ON
+      </button>
       <button type="button" id="btn-legal-disclaimer" class="footer-legal-btn" title="Educational Purpose Only · Personal Self-Hosted Use · Applicable Financial Laws">
         ⚖️ Educational Only · Personal Use · Legal &amp; Laws Disclaimer
       </button>
@@ -1141,6 +1148,11 @@
             <span class="m-prow-icon">💻</span>
             <span class="m-prow-label">Run on Your System (GitHub)</span>
             <span class="m-prow-arrow">›</span>
+          </div>
+          <div class="m-profile-clickable-row" id="m-row-sound">
+            <span class="m-prow-icon" id="m-sound-icon">🔊</span>
+            <span class="m-prow-label" id="m-sound-label">Execution Chimes &amp; Vibrate: ON</span>
+            <span class="m-prow-arrow">↻</span>
           </div>
           <div class="m-profile-clickable-row" id="m-row-legal">
             <span class="m-prow-icon">⚖️</span>
@@ -1933,6 +1945,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261111-ord12"></script>
+  <script src="/static/trade-sounds.js?v=20261111-sfx1"></script>
+  <script src="/static/chart.js?v=20261111-ord13"></script>
 </body>
 </html>

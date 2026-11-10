@@ -2,6 +2,13 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+  function playTradeSound(kind) {
+    try {
+      if (window.NeoSoundFX && typeof window.NeoSoundFX.play === 'function') {
+        window.NeoSoundFX.play(kind);
+      }
+    } catch (_) {}
+  }
   const explicitDemo = new URLSearchParams(location.search).get('cloud') === 'demo';
   let cloudDemoMode = explicitDemo;
 
@@ -430,10 +437,16 @@
           method: 'POST',
           body: JSON.stringify({ symbol: instrument.trading_symbol, ltp: quote.ltp })
         }).then(res => {
-          if (res && res.triggered_count > 0) {
-            res.triggered.forEach(t => {
-              toast(`🛡️ OCO Triggered: ${t.trigger_type} hit at ₹${t.trigger_ltp}! Market exit order placed.`, 'warning', 6000);
-            });
+          if (res && (res.triggered_count > 0 || res.filled_pending_count > 0)) {
+            if (res.filled_pending_count > 0) {
+              playTradeSound('filled');
+            }
+            if (res.triggered_count > 0) {
+              res.triggered.forEach(t => {
+                playTradeSound(String(t.trigger_type || '').toUpperCase() === 'TP' ? 'tp' : 'sl');
+                toast(`🛡️ OCO Triggered: ${t.trigger_type} hit at ₹${t.trigger_ltp}! Market exit order placed.`, 'warning', 6000);
+              });
+            }
             loadPositions();
             loadOrders();
             loadSltpRules();
@@ -1183,6 +1196,9 @@
 
     try {
       const result = await api('/api/orders', { method: 'POST', body: JSON.stringify(orderSnapshot) });
+      if (result && result.ok !== false && result.order_status !== 'pending' && result.status !== 'pending') {
+        playTradeSound('filled');
+      }
       toast(result.message || 'Order placed successfully.', 'success');
       state.pendingOrder = null;
       await loadOrders();
@@ -1562,10 +1578,14 @@
               method: 'POST',
               body: JSON.stringify({ symbol: p.symbol, ltp: Number(p.ltp) })
             }).then(res => {
-              if (res && res.triggered_count > 0) {
-                res.triggered.forEach(t => {
-                  toast(`🛡️ OCO Triggered: ${t.trigger_type} hit for ${p.symbol} at ₹${t.trigger_ltp}!`, 'warning', 6000);
-                });
+              if (res && (res.triggered_count > 0 || res.filled_pending_count > 0)) {
+                if (res.filled_pending_count > 0) playTradeSound('filled');
+                if (res.triggered_count > 0) {
+                  res.triggered.forEach(t => {
+                    playTradeSound(String(t.trigger_type || '').toUpperCase() === 'TP' ? 'tp' : 'sl');
+                    toast(`🛡️ OCO Triggered: ${t.trigger_type} hit for ${p.symbol} at ₹${t.trigger_ltp}!`, 'warning', 6000);
+                  });
+                }
                 loadPositions();
                 loadOrders();
               }
@@ -2024,6 +2044,7 @@
       btn.textContent = 'EXITING...';
       try {
         const res = await api('/api/positions/exit-all', { method: 'POST' });
+        if (res && res.ok !== false) playTradeSound('closed');
         toast(res.message || 'Exit All complete.', 'warning', 6000);
         await loadPositions();
         await loadOrders();
