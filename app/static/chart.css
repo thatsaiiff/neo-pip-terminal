@@ -986,7 +986,11 @@ body.ex-theme-dark {
 }
 
 .chart-pane.active {
-  box-shadow: inset 0 0 0 1px var(--accent-gold);
+  box-shadow: inset 0 0 0 1.5px var(--accent-gold);
+}
+.chart-pane.active .pane-header {
+  background: rgba(255, 183, 3, 0.08);
+  border-bottom-color: rgba(255, 183, 3, 0.25);
 }
 
 .pane-header {
@@ -999,17 +1003,40 @@ body.ex-theme-dark {
   padding: 0 8px;
   font-size: 11px;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 .pane-title-wrap {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .pane-sym {
   font-weight: 700;
   color: #fff;
+  white-space: nowrap;
+}
+
+.pane-pos-pnl {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pane-pos-pnl.pos {
+  background: rgba(0, 176, 116, 0.16);
+  color: #00d084;
+  border: 1px solid rgba(0, 176, 116, 0.4);
+}
+.pane-pos-pnl.neg {
+  background: rgba(255, 71, 87, 0.16);
+  color: #ff6b7a;
+  border: 1px solid rgba(255, 71, 87, 0.4);
 }
 
 .pane-tf, .pane-seg {
@@ -2854,10 +2881,18 @@ body.ex-theme-dark {
     font-size: 11px;
   }
 
+  /* Keep ultra-clean TF row on 390px mobile: 5s, 1m, 5m, 15m + full TF picker dropdown */
+  .ex-tf-btn[data-tf="15s"],
+  .ex-tf-btn[data-tf="3m"],
+  .ex-tf-btn[data-tf="30m"],
+  .ex-tf-btn[data-tf="1h"],
+  .ex-tf-btn[data-tf="4h"],
+  .ex-tf-btn[data-tf="1d"] {
+    display: none;
+  }
+
   #layout-toggle-btn {
-    padding: 3px 6px;
-    font-size: 10.5px;
-    white-space: nowrap;
+    padding: 4px 7px;
   }
 
   .pane-header {
@@ -4809,6 +4844,183 @@ input:checked + .ex-switch-mini::after {
 }
 .trade-price-line.tpl-pending-draft.is-sell-limit .tpl-drag-handle {
   background: #d92d3a;
+}
+
+/* Exness Active Running P&L Pill, Icon-Only Layout Button, Timeframe Picker & Index Lock */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ex-active-pnl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  font-weight: 800;
+  background: #141a24;
+  border: 1px solid #263042;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ex-active-pnl.pos {
+  color: #00d084;
+  border-color: rgba(0, 208, 132, 0.35);
+  background: rgba(0, 176, 116, 0.12);
+}
+.ex-active-pnl.neg {
+  color: #ff6b7a;
+  border-color: rgba(255, 71, 87, 0.35);
+  background: rgba(255, 71, 87, 0.12);
+}
+.ex-active-pnl-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.78;
+}
+.ex-active-pnl-close:hover {
+  opacity: 1;
+}
+
+.ex-layout-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 7px;
+  min-width: 30px;
+  height: 26px;
+}
+.layout-icon-svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.tf-picker-wrap {
+  position: relative;
+}
+/* Keep desktop TF bar clean & single-line; secondary TFs live inside #tf-dropdown-menu right beside it */
+.ex-tf-btn[data-tf="15s"],
+.ex-tf-btn[data-tf="3m"],
+.ex-tf-btn[data-tf="30m"],
+.ex-tf-btn[data-tf="4h"] {
+  display: none;
+}
+.tf-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.tf-caret {
+  font-size: 9px;
+  opacity: 0.75;
+}
+.tf-dropdown-menu {
+  position: fixed;
+  top: 76px;
+  left: 120px;
+  z-index: 99998;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(54px, 1fr));
+  gap: 4px;
+  padding: 6px;
+  background: #141923;
+  border: 1px solid #2b3548;
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+}
+.tf-opt {
+  background: #1c2230;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #cbd5e1;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 5px 8px;
+  cursor: pointer;
+  text-align: center;
+}
+.tf-opt:hover {
+  background: #283144;
+  color: #fff;
+}
+.tf-opt.active {
+  background: rgba(255, 183, 3, 0.16);
+  border-color: rgba(255, 183, 3, 0.5);
+  color: var(--accent-gold);
+}
+
+.tz-toggle-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tz-toggle-btn:hover {
+  border-color: #2c3547;
+  color: #fff;
+}
+
+.op-index-notice {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #94a3b8;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 4px;
+}
+
+.op-btn-sell.is-index-disabled,
+.op-btn-buy.is-index-disabled,
+.m-dock-btn.is-index-disabled,
+.op-btn-sell:disabled,
+.op-btn-buy:disabled,
+.m-dock-btn:disabled,
+.op-drag-btn:disabled,
+.m-drag-chip:disabled {
+  background: #272d38 !important;
+  border-color: #363e4d !important;
+  color: #7c8596 !important;
+  opacity: 0.6;
+  cursor: not-allowed !important;
+  filter: grayscale(1);
+}
+@media (max-width: 768px) {
+  .ex-active-pnl {
+    padding: 2px 6px;
+    font-size: 10.5px;
+  }
 }
 
 /* Floating Y-axis '+' Quick Order Button & Menu */

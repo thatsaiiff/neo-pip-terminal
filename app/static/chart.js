@@ -75,9 +75,69 @@
       'quick-tab-search-popup',
       'ex-inst-search-results',
       'chart-plus-menu',
+      'tf-dropdown-menu',
     ].forEach(id => {
       if (id !== exceptId && $(id)) $(id).classList.add('hidden');
     });
+  }
+
+  // Fast Cached IST / UTC Timezone Formatters (zero-GC lag across zoom/pan/TF switches)
+  let activeTimeZone = localStorage.getItem('neo_chart_tz') || 'Asia/Kolkata'; // Default UTC+5:30 (IST)
+  let _tzFormatters = null;
+  function getTzFormatters() {
+    if (_tzFormatters && _tzFormatters.tz === activeTimeZone) return _tzFormatters;
+    const tz = activeTimeZone;
+    const locale = 'en-IN';
+    _tzFormatters = {
+      tz,
+      year: new Intl.DateTimeFormat(locale, { timeZone: tz, year: 'numeric' }),
+      month: new Intl.DateTimeFormat(locale, { timeZone: tz, month: 'short' }),
+      day: new Intl.DateTimeFormat(locale, { timeZone: tz, day: '2-digit', month: 'short' }),
+      time: new Intl.DateTimeFormat(locale, { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }),
+      sec: new Intl.DateTimeFormat(locale, { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+      crosshairIntraday: new Intl.DateTimeFormat(locale, { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }),
+      crosshairSec: new Intl.DateTimeFormat(locale, { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+    };
+    return _tzFormatters;
+  }
+
+  function lwcTimeToDate(time) {
+    if (typeof time === 'number') return new Date(time * 1000);
+    if (time && typeof time === 'object' && time.year) {
+      return new Date(Date.UTC(time.year, (time.month || 1) - 1, time.day || 1));
+    }
+    return new Date();
+  }
+
+  function formatChartTickMark(time, tickMarkType) {
+    const fmts = getTzFormatters();
+    const d = lwcTimeToDate(time);
+    if (tickMarkType === 0) return fmts.year.format(d);
+    if (tickMarkType === 1) return fmts.month.format(d);
+    if (tickMarkType === 2) return fmts.day.format(d);
+    if (tickMarkType === 4) return fmts.sec.format(d);
+    return fmts.time.format(d);
+  }
+
+  function formatChartCrosshairTime(time) {
+    const fmts = getTzFormatters();
+    const d = lwcTimeToDate(time);
+    if (typeof time === 'number') {
+      const p = getActivePane();
+      return String(p && p.tf || '').includes('s') ? fmts.crosshairSec.format(d) : fmts.crosshairIntraday.format(d);
+    }
+    return fmts.day.format(d) + ' ' + fmts.year.format(d);
+  }
+
+  function getActivePane() {
+    return panes[activePaneIdx] || panes[0];
+  }
+
+  function updateTzBadgeUI() {
+    const btn = $('btn-tz-toggle');
+    if (btn) {
+      btn.textContent = activeTimeZone === 'Asia/Kolkata' ? 'UTC+5:30 (IST)' : 'UTC+0 (GMT)';
+    }
   }
 
   function _svgCurrencyFlag(code) {
@@ -245,6 +305,22 @@
     return /\d\s*(?:CE|PE)(?:\b|$)/i.test(s);
   }
 
+  const INDEX_SPOT_SYMBOLS = new Set([
+    'NIFTY', 'NIFTY50', 'BANKNIFTY', 'NIFTYBANK', 'FINNIFTY',
+    'MIDCPNIFTY', 'SENSEX', 'BSESENSEX', 'SENSEX50', 'BANKEX',
+    'INDIAVIX', 'CNXFINANCE', 'MIDCAP',
+  ]);
+
+  function isIndexSpotSymbol(sym, token = '', segment = '') {
+    const raw = String(sym || '').trim().toUpperCase();
+    if (!raw || isForexSym(raw) || isOptionSymbol(raw) || /\bFUT\b/i.test(raw)) return false;
+    const compact = raw.replace(/\s+/g, '');
+    if (INDEX_SPOT_SYMBOLS.has(compact)) return true;
+    const tokU = String(token || '').toUpperCase();
+    const metaSeg = String((symbolMeta[raw] && symbolMeta[raw].segment) || segment || '').toUpperCase();
+    return tokU.includes('_INDEX|') || metaSeg.includes('INDEX');
+  }
+
   function registerSymbolMeta(sym, meta = {}) {
     const key = String(sym || '').trim().toUpperCase();
     if (!key) return;
@@ -347,11 +423,11 @@
     {
       idx: 1,
       id: 'pane-2',
-      sym: 'NIFTY 25000 PE',
-      token: '',
+      sym: 'BANKNIFTY',
+      token: 'NSE_INDEX|Nifty Bank',
       tf: '1m',
       rangeDays: 5,
-      isOption: true,
+      isOption: false,
       candles: [],
       volumes: [],
       chart: null,
@@ -375,12 +451,13 @@
       activeBar: null,
       lastLtp: null,
       prevClose: null,
+      _userPicked: false,
     },
     {
       idx: 2,
       id: 'pane-3',
-      sym: 'NIFTY',
-      token: 'NSE_INDEX|Nifty 50',
+      sym: 'SENSEX',
+      token: 'BSE_INDEX|SENSEX',
       tf: '5m',
       rangeDays: 5,
       isOption: false,
@@ -407,6 +484,7 @@
       activeBar: null,
       lastLtp: null,
       prevClose: null,
+      _userPicked: false,
     },
   ];
 
@@ -432,6 +510,122 @@
     txt.textContent = msg;
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), duration);
+  }
+
+  function refreshAllPaneTimezones() {
+    updateTzBadgeUI();
+    panes.forEach(p => {
+      if (p && p.chart) {
+        try {
+          p.chart.applyOptions({
+            localization: { timeFormatter: formatChartCrosshairTime },
+            timeScale: {
+              secondsVisible: String(p.tf || '').includes('s'),
+              tickMarkFormatter: formatChartTickMark,
+            },
+          });
+        } catch (_) {}
+      }
+    });
+  }
+
+  function computeLivePosM2m(pos) {
+    const symU = String(pos.symbol || pos.trading_symbol || pos.trdSym || '').trim().toUpperCase();
+    const matchPane = panes.find(p => String(p.sym || '').trim().toUpperCase() === symU && Number(p.lastLtp) > 0);
+    const avg = Number(pos.average_price || pos.avg_price || pos.avgPrc || 0);
+    const ltp = matchPane ? Number(matchPane.lastLtp) : Number(pos.ltp || avg);
+    const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(pos.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+    const qty = Math.abs(Number(pos.quantity || pos.qty || 0));
+    const fx = getForexSpec(symU);
+    const mult = Number(pos.multiplier || (fx && fx.multiplier) || 1.0);
+    if (matchPane && avg > 0 && qty > 0) {
+      return (side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult;
+    }
+    return Number(pos.m2m !== undefined ? pos.m2m : ((side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult));
+  }
+
+  function sumSymbolOpenPnl(sym) {
+    const symU = String(sym || '').trim().toUpperCase();
+    if (!symU || !cachedPositions.length) return { hasOpen: false, pnl: 0 };
+    const matching = cachedPositions.filter(p => String(p.symbol || p.trading_symbol || p.trdSym || '').trim().toUpperCase() === symU);
+    if (!matching.length) return { hasOpen: false, pnl: 0 };
+    const total = matching.reduce((acc, p) => acc + computeLivePosM2m(p), 0);
+    return { hasOpen: true, pnl: total };
+  }
+
+  function updateActivePanePnlBadges() {
+    // 1. Update each pane header badge (especially right beside symbol name on Mobile & split panes)
+    panes.forEach(p => {
+      const badge = $(`${getPanePrefix(p)}-pos-pnl`);
+      if (!badge) return;
+      if (!isAuthenticated) {
+        badge.classList.add('hidden');
+        return;
+      }
+      const { hasOpen, pnl } = sumSymbolOpenPnl(p.sym);
+      if (!hasOpen) {
+        badge.classList.add('hidden');
+      } else {
+        const cs = curSym(p.sym);
+        const sign = pnl >= 0 ? '+' : '-';
+        badge.textContent = `${sign}${cs}${Math.abs(pnl).toFixed(2)}`;
+        badge.className = `pane-pos-pnl ${pnl >= 0 ? 'pos' : 'neg'}`;
+      }
+    });
+
+    // 2. Update top-toolbar Exness active-symbol individual P&L pill (just left of layout icon)
+    const wrap = $('active-pos-pnl-wrap');
+    const valEl = $('active-pos-pnl-val');
+    if (!wrap || !valEl) return;
+    if (!isAuthenticated) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    const ap = getActivePane();
+    const { hasOpen, pnl } = sumSymbolOpenPnl(ap.sym);
+    if (!hasOpen) {
+      wrap.classList.add('hidden');
+    } else {
+      const cs = curSym(ap.sym);
+      const sign = pnl >= 0 ? '+' : '-';
+      const curSuffix = cs === '$' ? ' USD' : ' INR';
+      valEl.textContent = `${sign}${cs}${Math.abs(pnl).toFixed(2)}${curSuffix}`;
+      wrap.className = `ex-active-pnl ${pnl >= 0 ? 'pos' : 'neg'}`;
+    }
+  }
+
+  function syncTradeButtonsForActivePane() {
+    const pane = getActivePane();
+    const isIdx = isIndexSpotSymbol(pane.sym, pane.token);
+
+    ['btn-order-sell', 'btn-order-buy', 'm-btn-sell', 'm-btn-buy'].forEach(id => {
+      const btn = $(id);
+      if (!btn) return;
+      btn.disabled = isIdx;
+      btn.classList.toggle('is-index-disabled', isIdx);
+      btn.title = isIdx ? 'Index spot cannot be bought or sold directly — choose an Option (CE/PE) or Stock' : '';
+    });
+
+    ['op-btn-drag-buy', 'op-btn-drag-sell', 'm-btn-drag-buy', 'm-btn-drag-sell'].forEach(id => {
+      const btn = $(id);
+      if (btn) btn.disabled = isIdx;
+    });
+
+    const notice = $('op-index-notice');
+    if (notice) notice.classList.toggle('hidden', !isIdx);
+
+    if (isIdx) {
+      if ($('lbl-sell-action')) $('lbl-sell-action').textContent = 'Index';
+      if ($('lbl-buy-action')) $('lbl-buy-action').textContent = 'Chart Only';
+      if ($('m-sell-caption')) $('m-sell-caption').textContent = 'Index';
+      if ($('m-buy-caption')) $('m-buy-caption').textContent = 'Chart';
+    } else {
+      const isPend = !instantExecution && selectedOrderType === 'PENDING';
+      if ($('lbl-sell-action')) $('lbl-sell-action').textContent = isPend ? 'Sell Pending' : 'Sell';
+      if ($('lbl-buy-action')) $('lbl-buy-action').textContent = isPend ? 'Buy Pending' : 'Buy';
+      if ($('m-sell-caption')) $('m-sell-caption').textContent = isPend ? 'Sell Pend' : 'Sell';
+      if ($('m-buy-caption')) $('m-buy-caption').textContent = isPend ? 'Buy Pend' : 'Buy';
+    }
   }
 
   async function api(path, options = {}) {
@@ -771,11 +965,15 @@
         scaleMargins: { top: 0.08, bottom: 0.18 },
         autoScale: true,
       },
+      localization: {
+        timeFormatter: formatChartCrosshairTime,
+      },
       timeScale: {
         borderColor: '#202735',
         timeVisible: true,
         secondsVisible: pane.tf.includes('s'),
         rightOffset: 6,
+        tickMarkFormatter: formatChartTickMark,
       },
     });
 
@@ -961,6 +1159,11 @@
       if (!activePlusMenuTarget) return;
       const pane = activePlusMenuTarget.pane;
       const sym = pane.sym;
+      if (isIndexSpotSymbol(sym, pane.token)) {
+        menu.classList.add('hidden');
+        toast('Index spot cannot be bought or sold directly — choose an Option (CE/PE) or Stock');
+        return;
+      }
       const fx = getForexSpec(sym);
       const isFx = Boolean(fx) || currentMarketMode === 'forex';
       const lotSize = fx ? fx.qty_per_lot : getIndexLotSize(sym);
@@ -1632,7 +1835,7 @@
     if (cEl) cEl.textContent = close ? close.toFixed(decs) : '—';
 
     // If active pane, also update top bar OHLC
-    if (pane.idx === 0) {
+    if (pane.idx === activePaneIdx) {
       const co = $('c-open');
       const ch = $('c-high');
       const cl = $('c-low');
@@ -1672,14 +1875,126 @@
       chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
     }
 
-    if (pane.idx === 0) {
+    if (pane.idx === activePaneIdx) {
       updateOrderFormPrices(ltp);
+    }
+    updateActivePanePnlBadges();
+  }
+
+  const _candleClientCache = new Map();
+
+  function renderCandlesIntoPane(pane, data, reqId) {
+    if (!pane || reqId !== pane._reqId) return;
+    const prefix = getPanePrefix(pane);
+    const pSym = $(`${prefix}-sym`);
+    const pTf = $(`${prefix}-tf`);
+    const paneEl = $(pane.id);
+    const segBadge = paneEl ? paneEl.querySelector('.pane-seg') : null;
+    const ikey = String((data && data.instrument_key) || pane.token || '');
+    const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|');
+    const isFxResolved = Boolean(data && data.is_forex) || isForexSym(pane.sym) || ikey.startsWith('FOREX|');
+    pane.isOption = !isFxResolved && (isOptionSymbol(pane.sym) || isOptResolved);
+    const segLabel = isFxResolved ? 'FOREX' : (isOptResolved ? 'NSE F&O' : (ikey.includes('_INDEX') ? 'NSE INDEX' : 'NSE EQ'));
+    if (ikey) {
+      registerSymbolMeta(pane.sym, { segment: ikey.split('|')[0] || segLabel });
+    }
+
+    if (pSym) pSym.textContent = pane.sym;
+    if (pTf) pTf.textContent = pane.tf;
+    if (segBadge) segBadge.textContent = segLabel;
+
+    if (pane.idx === activePaneIdx) {
+      const topSym = $('chart-active-sym');
+      const topSeg = $('chart-active-seg');
+      const opSym = $('op-sym-name');
+      const opIcon = $('op-sym-icon');
+      if (topSym) topSym.textContent = pane.sym;
+      if (topSeg) topSeg.textContent = segLabel;
+      if (opSym) opSym.textContent = pane.sym;
+      if (opIcon) opIcon.innerHTML = getInstrumentIconHtml(pane.sym, 20);
+      if (typeof updateLotDisplayFn === 'function') updateLotDisplayFn();
+      syncTradeButtonsForActivePane();
+    }
+
+    if (!data || !data.ok || !data.candles || !data.candles.length) {
+      clearPaneChartData(pane);
+      renderPaneTradeLines(pane);
+      return;
+    }
+
+    if (!pane.chart || !pane.candleSeries) {
+      initChartPane(pane);
+    }
+    if (!pane.candleSeries || !pane.volSeries) return;
+
+    const decs = getSymbolDecimals(pane.sym);
+    const minMove = Number((1 / Math.pow(10, decs)).toFixed(decs));
+    try {
+      pane.candleSeries.applyOptions({
+        priceFormat: { type: 'price', precision: decs, minMove },
+      });
+      pane.chart.priceScale('right').applyOptions({ autoScale: true });
+    } catch (_) {}
+
+    pane.chart.timeScale().applyOptions({ secondsVisible: String(pane.tf || '').includes('s') });
+
+    if (data.prev_close) pane.prevClose = Number(data.prev_close);
+    if (data.ltp) pane.lastLtp = Number(data.ltp);
+
+    const byTime = new Map();
+    data.candles.forEach(c => {
+      const t = Number(c.time);
+      if (!Number.isFinite(t)) return;
+      byTime.set(t, {
+        time: t,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+        volume: Number(c.volume || 0),
+      });
+    });
+    pane.candles = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+
+    const isIndexInst = ikey.startsWith('NSE_INDEX|') || ikey.startsWith('BSE_INDEX|');
+    pane.volumes = pane.candles.map(c => ({
+      time: c.time,
+      value: isIndexInst ? 0 : (c.volume || 0),
+      color: c.close >= c.open ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
+    }));
+
+    pane.candleSeries.setData(pane.candles);
+    applyPaneIndicators(pane);
+
+    requestAnimationFrame(() => {
+      if (!pane.chart || reqId !== pane._reqId) return;
+      resizePaneChart(pane);
+      try {
+        pane.chart.priceScale('right').applyOptions({ autoScale: true });
+        pane.chart.timeScale().fitContent();
+        renderPaneTradeLines(pane);
+      } catch (_) {}
+    });
+
+    const lastBar = pane.candles[pane.candles.length - 1];
+    if (lastBar) {
+      pane.activeBar = { ...lastBar };
+      updatePaneHeaderQuote(pane, lastBar.open, lastBar.high, lastBar.low, lastBar.close);
+      updatePaneQuote(pane, {
+        ltp: Number(data.ltp || lastBar.close),
+        prev_close: pane.prevClose || Number(data.prev_close || lastBar.open),
+        change: data.change,
+      });
     }
   }
 
   async function loadCandles(pane) {
     try {
       if (!pane) return;
+      if (pane._abortCtrl) {
+        try { pane._abortCtrl.abort(); } catch (_) {}
+      }
+      pane._abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
       pane._reqId = (pane._reqId || 0) + 1;
       const reqId = pane._reqId;
 
@@ -1690,115 +2005,26 @@
       const tokenEnc = encodeURIComponent(pane.token || '');
       const symEnc = encodeURIComponent(pane.sym);
       const reqDays = Math.max(1, Math.min(Number(pane.rangeDays || 5), 365));
-      const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${encodeURIComponent(pane.tf)}&days=${reqDays}`;
-      const data = await api(url);
-      if (reqId !== pane._reqId) return;
-
-      const prefix = getPanePrefix(pane);
-      const pSym = $(`${prefix}-sym`);
-      const pTf = $(`${prefix}-tf`);
-      const paneEl = $(pane.id);
-      const segBadge = paneEl ? paneEl.querySelector('.pane-seg') : null;
-      const ikey = String((data && data.instrument_key) || pane.token || '');
-      const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|');
-      const isFxResolved = Boolean(data && data.is_forex) || isForexSym(pane.sym) || ikey.startsWith('FOREX|');
-      pane.isOption = !isFxResolved && (isOptionSymbol(pane.sym) || isOptResolved);
-      const segLabel = isFxResolved ? 'FOREX' : (isOptResolved ? 'NSE F&O' : (ikey.includes('_INDEX') ? 'NSE INDEX' : 'NSE EQ'));
-      if (ikey) {
-        registerSymbolMeta(pane.sym, { segment: ikey.split('|')[0] || segLabel });
-      }
-
-      if (pSym) pSym.textContent = pane.sym;
-      if (pTf) pTf.textContent = pane.tf;
-      if (segBadge) segBadge.textContent = segLabel;
-
-      if (pane.idx === 0) {
-        const topSym = $('chart-active-sym');
-        const topSeg = $('chart-active-seg');
-        const opSym = $('op-sym-name');
-        if (topSym) topSym.textContent = pane.sym;
-        if (topSeg) topSeg.textContent = segLabel;
-        if (opSym) opSym.textContent = pane.sym;
-        if (typeof updateLotDisplayFn === 'function') updateLotDisplayFn();
-      }
-
-      if (!data || !data.ok || !data.candles || !data.candles.length) {
-        clearPaneChartData(pane);
-        renderPaneTradeLines(pane);
+      const cacheKey = `${String(pane.sym || '').toUpperCase()}|${pane.tf}|${reqDays}`;
+      const cached = _candleClientCache.get(cacheKey);
+      if (cached && (Date.now() - cached.ts) < 3500) {
+        renderCandlesIntoPane(pane, cached.data, reqId);
         return;
       }
 
-      if (!pane.chart || !pane.candleSeries) {
-        initChartPane(pane);
+      const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${encodeURIComponent(pane.tf)}&days=${reqDays}`;
+      const data = await api(url, pane._abortCtrl ? { signal: pane._abortCtrl.signal } : {});
+      if (reqId !== pane._reqId) return;
+      if (data && data.ok && data.candles && data.candles.length) {
+        _candleClientCache.set(cacheKey, { ts: Date.now(), data });
+        if (_candleClientCache.size > 36) {
+          const oldestKey = _candleClientCache.keys().next().value;
+          _candleClientCache.delete(oldestKey);
+        }
       }
-      if (!pane.candleSeries || !pane.volSeries) return;
-
-      const decs = getSymbolDecimals(pane.sym);
-      const minMove = Number((1 / Math.pow(10, decs)).toFixed(decs));
-      try {
-        pane.candleSeries.applyOptions({
-          priceFormat: { type: 'price', precision: decs, minMove },
-        });
-        pane.chart.priceScale('right').applyOptions({ autoScale: true });
-      } catch (_) {}
-
-      pane.chart.timeScale().applyOptions({ secondsVisible: String(pane.tf || '').includes('s') });
-
-      if (data.prev_close) pane.prevClose = Number(data.prev_close);
-      if (data.ltp) pane.lastLtp = Number(data.ltp);
-
-      // Ensure ascending unique timestamps for LightweightCharts setData
-      const byTime = new Map();
-      data.candles.forEach(c => {
-        const t = Number(c.time);
-        if (!Number.isFinite(t)) return;
-        byTime.set(t, {
-          time: t,
-          open: Number(c.open),
-          high: Number(c.high),
-          low: Number(c.low),
-          close: Number(c.close),
-          volume: Number(c.volume || 0),
-        });
-      });
-      pane.candles = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
-
-      const isIndexInst = ikey.startsWith('NSE_INDEX|') || ikey.startsWith('BSE_INDEX|');
-      pane.volumes = pane.candles.map(c => ({
-        time: c.time,
-        value: isIndexInst ? 0 : (c.volume || 0),
-        color: c.close >= c.open ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
-      }));
-
-      pane.candleSeries.setData(pane.candles);
-      applyPaneIndicators(pane);
-
-      // Auto-scale Y axis + fit X axis cleanly whenever candles or symbol load (Fix #4: NIFTY -> SENSEX auto fit)
-      function refitPane() {
-        if (!pane.chart || reqId !== pane._reqId) return;
-        resizePaneChart(pane);
-        try {
-          pane.chart.priceScale('right').applyOptions({ autoScale: true });
-          pane.chart.timeScale().fitContent();
-          renderPaneTradeLines(pane);
-        } catch (_) {}
-      }
-      refitPane();
-      requestAnimationFrame(refitPane);
-      setTimeout(refitPane, 60);
-      setTimeout(refitPane, 250);
-
-      const lastBar = pane.candles[pane.candles.length - 1];
-      if (lastBar) {
-        pane.activeBar = { ...lastBar };
-        updatePaneHeaderQuote(pane, lastBar.open, lastBar.high, lastBar.low, lastBar.close);
-        updatePaneQuote(pane, {
-          ltp: Number(data.ltp || lastBar.close),
-          prev_close: pane.prevClose || Number(data.prev_close || lastBar.open),
-          change: data.change,
-        });
-      }
+      renderCandlesIntoPane(pane, data, reqId);
     } catch (err) {
+      if (err && err.name === 'AbortError') return;
       console.warn(`[Candles] Failed loading candles for ${pane && pane.sym}:`, err && err.message ? err.message : err);
     }
   }
@@ -1981,8 +2207,10 @@
   }
 
   function updateOrderFormPrices(ltp) {
+    const activePane = getActivePane();
+    const sym = activePane.sym;
+    syncTradeButtonsForActivePane();
     if (!ltp) return;
-    const sym = panes[0].sym;
     const fx = getForexSpec(sym);
     const decs = fx ? fx.decimals : 2;
     const spread = fx ? fx.spread : ((ltp * 0.0005) + 0.05);
@@ -2157,6 +2385,10 @@
     function startChartPendingDrag(side, opts = {}) {
       stopChartPendingDrag(true);
       const pane = panes[activePaneIdx] || panes[0];
+      if (isIndexSpotSymbol(pane.sym, pane.token)) {
+        toast('Index spot cannot be bought or sold directly — choose an Option (CE/PE) or Stock');
+        return;
+      }
       const overlay = $(`p${pane.idx + 1}-trade-overlay`);
       if (!pane || !pane.canvasWrap || !pane.candleSeries || !overlay || !pane.candles.length) {
         toast('❌ Chart must finish loading before dragging an order');
@@ -2395,7 +2627,8 @@
     const owLotsInput = $('ow-lots-input');
 
     function updateLotDisplay() {
-      const sym = panes[0].sym;
+      const ap = getActivePane();
+      const sym = ap.sym;
       const fx = getForexSpec(sym);
       const isFx = Boolean(fx) || currentMarketMode === 'forex';
       if (inputLots) {
@@ -2427,12 +2660,14 @@
       if (unitsSub) unitsSub.textContent = labelTxt;
       if ($('ow-units-sub')) $('ow-units-sub').textContent = labelTxt;
       if ($('m-lots-val')) $('m-lots-val').textContent = selectedLots;
-      if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
+      if (ap.lastLtp) updateOrderFormPrices(ap.lastLtp);
+      else syncTradeButtonsForActivePane();
     }
     updateLotDisplayFn = updateLotDisplay;
 
     function adjustLots(deltaSign) {
-      const isFx = isForexSym(panes[0].sym) || currentMarketMode === 'forex';
+      const ap = getActivePane();
+      const isFx = isForexSym(ap.sym) || currentMarketMode === 'forex';
       const step = isFx ? 0.05 : 1;
       const minV = isFx ? 0.01 : 1;
       const next = Math.max(minV, Number((selectedLots + (deltaSign * step)).toFixed(2)));
@@ -2454,18 +2689,20 @@
     const inputPrice = $('input-limit-price');
     if (btnPriceMinus && btnPricePlus && inputPrice) {
       const bump = sign => {
-        const decs = getSymbolDecimals(panes[0].sym);
-        const step = getPriceTickStep(panes[0].sym);
-        const cur = parseFloat(inputPrice.value) || (panes[0].lastLtp || 40);
+        const ap = getActivePane();
+        const decs = getSymbolDecimals(ap.sym);
+        const step = getPriceTickStep(ap.sym);
+        const cur = parseFloat(inputPrice.value) || (ap.lastLtp || 40);
         inputPrice.value = Math.max(0.0001, cur + (sign * step)).toFixed(decs);
         inputPrice.dataset.manual = 'true';
-        if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
+        if (ap.lastLtp) updateOrderFormPrices(ap.lastLtp);
       };
       btnPriceMinus.addEventListener('click', () => bump(-1));
       btnPricePlus.addEventListener('click', () => bump(1));
       inputPrice.addEventListener('input', () => {
         inputPrice.dataset.manual = 'true';
-        if (panes[0].lastLtp) updateOrderFormPrices(panes[0].lastLtp);
+        const ap = getActivePane();
+        if (ap.lastLtp) updateOrderFormPrices(ap.lastLtp);
       });
     }
 
@@ -2741,8 +2978,13 @@
       });
     }
 
-    // Unified Buy/Sell button click: Instant ON -> 1-click Market fill | Instant OFF -> Order Placement Window
+    // Unified Buy/Sell button click: Index Spot guard -> Instant ON -> 1-click Market fill | Instant OFF -> Order Placement Window
     function handleTradeButtonClick(side) {
+      const ap = getActivePane();
+      if (isIndexSpotSymbol(ap.sym, ap.token)) {
+        toast('Index spot cannot be bought or sold directly — choose an Option (CE/PE) or Stock');
+        return;
+      }
       if (instantExecution) {
         executeUnifiedOrder({ side, orderMode: 'MKT' });
       } else {
@@ -2806,13 +3048,144 @@
 
   function syncToolbarForPane(pane) {
     if (!pane) return;
+    const tf = pane.tf || '1m';
     document.querySelectorAll('.ex-tf-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.tf === pane.tf);
+      b.classList.toggle('active', b.dataset.tf === tf);
     });
+    document.querySelectorAll('.tf-opt').forEach(b => {
+      b.classList.toggle('active', b.dataset.tf === tf);
+    });
+    if ($('tf-picker-label')) {
+      $('tf-picker-label').textContent = tf === '1d' ? '1D' : tf;
+    }
     const rangeDaysMap = { '1d': 5, '5d': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
     document.querySelectorAll('.range-btn').forEach(b => {
       b.classList.toggle('active', (rangeDaysMap[b.dataset.range] || 5) === (pane.rangeDays || 5));
     });
+  }
+
+  function selectPane(idx) {
+    if (idx < 0 || idx >= panes.length) return;
+    activePaneIdx = idx;
+    document.querySelectorAll('.chart-pane').forEach((el, i) => {
+      el.classList.toggle('active', i === idx);
+    });
+    const p = panes[idx];
+    if (!p) return;
+
+    const meta = symbolMeta[String(p.sym || '').trim().toUpperCase()] || {};
+    const segUpper = String(meta.segment || '').toUpperCase();
+    const isFx = isForexSym(p.sym) || segUpper === 'FOREX';
+    const isOpt = !isFx && (p.isOption || isOptionSymbol(p.sym));
+    const isFo = !isFx && Boolean(isOpt || /\bFUT\b/i.test(p.sym) || segUpper.includes('_FO'));
+    const segLabel = isFx ? 'FOREX' : (isFo ? 'NSE F&O' : (isIndexSpotSymbol(p.sym, p.token) ? 'NSE INDEX' : 'NSE EQ'));
+
+    if ($('chart-active-sym')) $('chart-active-sym').textContent = p.sym;
+    if ($('chart-active-seg')) $('chart-active-seg').textContent = segLabel;
+    if ($('op-sym-name')) $('op-sym-name').textContent = p.sym;
+    if ($('op-sym-icon')) $('op-sym-icon').innerHTML = getInstrumentIconHtml(p.sym, 20);
+
+    if (p.activeBar) {
+      updatePaneHeaderQuote(p, p.activeBar.open, p.activeBar.high, p.activeBar.low, p.activeBar.close);
+    } else if (p.candles && p.candles.length) {
+      const lb = p.candles[p.candles.length - 1];
+      updatePaneHeaderQuote(p, lb.open, lb.high, lb.low, lb.close);
+    }
+
+    syncToolbarForPane(p);
+    if (typeof updateLotDisplayFn === 'function') updateLotDisplayFn();
+    syncTradeButtonsForActivePane();
+    if (p.lastLtp) updateOrderFormPrices(p.lastLtp);
+    updateActivePanePnlBadges();
+  }
+
+  function ensureSecondaryPaneSymbols(reset = false) {
+    const isFxMode = currentMarketMode === 'forex';
+    const p1Upper = String(panes[0]?.sym || '').toUpperCase();
+
+    const wantFx1 = isFxMode ? (normFxSym(p1Upper) === 'BTCUSD' ? 'XAUUSD' : 'BTCUSD') : 'BANKNIFTY';
+    const tok1 = isFxMode ? `FOREX|${wantFx1}` : 'NSE_INDEX|Nifty Bank';
+    const wantFx2 = isFxMode ? (normFxSym(p1Upper) === 'ETHUSD' ? 'EURUSD' : 'ETHUSD') : 'SENSEX';
+    const tok2 = isFxMode ? `FOREX|${wantFx2}` : 'BSE_INDEX|SENSEX';
+
+    if (reset || !panes[1]._userPicked || (isFxMode && !isForexSym(panes[1].sym)) || (!isFxMode && isForexSym(panes[1].sym))) {
+      panes[1].sym = wantFx1;
+      panes[1].token = tok1;
+      panes[1].isOption = false;
+      panes[1].lastLtp = null;
+      panes[1].prevClose = null;
+      if (!isFxMode && reset) panes[1]._userPicked = false;
+      if ($('p2-sym')) $('p2-sym').textContent = panes[1].sym;
+      if ($('p2-tf')) $('p2-tf').textContent = panes[1].tf;
+      const s2 = $('pane-2')?.querySelector('.pane-seg');
+      if (s2) s2.textContent = isFxMode ? 'FOREX' : 'NSE INDEX';
+    }
+
+    if (reset || !panes[2]._userPicked || (isFxMode && !isForexSym(panes[2].sym)) || (!isFxMode && isForexSym(panes[2].sym))) {
+      panes[2].sym = wantFx2;
+      panes[2].token = tok2;
+      panes[2].isOption = false;
+      panes[2].lastLtp = null;
+      panes[2].prevClose = null;
+      if (!isFxMode && reset) panes[2]._userPicked = false;
+      if ($('p3-sym')) $('p3-sym').textContent = panes[2].sym;
+      if ($('p3-tf')) $('p3-tf').textContent = panes[2].tf;
+      const s3 = $('pane-3')?.querySelector('.pane-seg');
+      if (s3) s3.textContent = isFxMode ? 'FOREX' : 'NSE INDEX';
+    }
+  }
+
+  function openSymbolInPane(idx, cleanSym, token = '', lotSize = 0, segment = '') {
+    const p = panes[idx];
+    if (!p) return;
+    if (lotSize || segment) registerSymbolMeta(cleanSym, { lotSize, segment });
+
+    const segUpper = String(segment || '').toUpperCase();
+    const isFx = isForexSym(cleanSym) || segUpper === 'FOREX';
+    const isOpt = !isFx && isOptionSymbol(cleanSym);
+    const isFo = !isFx && Boolean(isOpt || /\bFUT\b/i.test(cleanSym) || segUpper.includes('_FO'));
+    const segLabel = isFx ? 'FOREX' : (isFo ? 'NSE F&O' : (isIndexSpotSymbol(cleanSym, token, segment) ? 'NSE INDEX' : 'NSE EQ'));
+
+    p.sym = cleanSym;
+    p.token = token || (isFx ? `FOREX|${normFxSym(cleanSym)}` : '');
+    p.isOption = !isFx && (isOpt || segUpper === 'NSE_FO' || /\bFUT\b/i.test(cleanSym));
+    p.lastLtp = null;
+    p.prevClose = null;
+    p._userPicked = true;
+    clearPaneChartData(p);
+
+    if (p.chart) {
+      try { p.chart.priceScale('right').applyOptions({ autoScale: true }); } catch (_) {}
+    }
+
+    const pref = getPanePrefix(p);
+    if ($(`${pref}-sym`)) $(`${pref}-sym`).textContent = p.sym;
+    if ($(`${pref}-tf`)) $(`${pref}-tf`).textContent = p.tf;
+    const pEl = $(p.id);
+    const segBadge = pEl ? pEl.querySelector('.pane-seg') : null;
+    if (segBadge) segBadge.textContent = segLabel;
+    if ($(`${pref}-ltp`)) $(`${pref}-ltp`).textContent = '—';
+    if ($(`${pref}-chg`)) {
+      $(`${pref}-chg`).textContent = '—';
+      $(`${pref}-chg`).className = 'pane-chg pos';
+    }
+    updatePaneHeaderQuote(p, 0, 0, 0, 0);
+
+    selectPane(idx);
+
+    const reqSym = p.sym;
+    api(`/api/chart/live-quote?symbol=${encodeURIComponent(p.sym)}&token=${encodeURIComponent(p.token || '')}`)
+      .then(q => {
+        if (p.sym !== reqSym) return;
+        if (q && q.ok && q.ltp && !q.is_fallback) {
+          p.lastLtp = Number(q.ltp);
+          if (q.prev_close) p.prevClose = Number(q.prev_close);
+          updatePaneQuote(p, q);
+        }
+      })
+      .catch(() => {});
+
+    loadCandles(p);
   }
 
   function switchTab(index) {
@@ -2901,6 +3274,8 @@
     if (typeof updateLotDisplayFn === 'function') {
       updateLotDisplayFn();
     }
+    syncTradeButtonsForActivePane();
+    updateActivePanePnlBadges();
 
     const reqSym = selected.symbol;
     api(`/api/chart/live-quote?symbol=${encodeURIComponent(selected.symbol)}&token=${encodeURIComponent(selected.token || '')}`)
@@ -2940,6 +3315,13 @@
       applyMarketModeUI('forex', false);
     } else if (!isFx && currentMarketMode === 'forex') {
       applyMarketModeUI('indian', false);
+    }
+
+    // If multi-chart mode is active and user selected Pane 2 (or 3), load straight into that active pane!
+    const effLay = window.innerWidth <= 768 ? Math.min(2, activeLayout) : activeLayout;
+    if (effLay > 1 && activePaneIdx > 0 && activePaneIdx < effLay) {
+      openSymbolInPane(activePaneIdx, cleanSym, token, lotSize, segment);
+      return;
     }
 
     if (lotSize || segment) {
@@ -3717,6 +4099,7 @@
       cachedPnlSummary = pnlSummaryData;
 
       renderAllPaneTradeLines();
+      updateActivePanePnlBadges();
 
       if (typeof updateMobileOrdersFn === 'function') {
         updateMobileOrdersFn();
@@ -3964,6 +4347,12 @@
       renderSymbolTabs();
       switchTab(0);
     }
+
+    ensureSecondaryPaneSymbols(true);
+    if (activeLayout >= 2 && panes[1].chart) loadCandles(panes[1]);
+    if (activeLayout === 3 && panes[2].chart) loadCandles(panes[2]);
+    syncTradeButtonsForActivePane();
+    updateActivePanePnlBadges();
 
     if (typeof updateLotDisplayFn === 'function') updateLotDisplayFn();
     if (isAuthenticated) fetchPositionsAndOrders();
@@ -4385,6 +4774,7 @@
       cachedExecutions = [];
       cachedPnlSummary = {};
       activeSltpRules = [];
+      updateActivePanePnlBadges();
       closeAllOverlays('modal-gatekeeper');
       if (typeof window._switchMobileTabFn === 'function') {
         window._switchMobileTabFn('chart', true);
@@ -4781,32 +5171,100 @@
       }
     });
 
-    // Active pane selection (in 2 or 3 chart split layout)
+    // Active pane selection (in 2 or 3 chart split layout — captures clicks & taps even on canvas!)
     document.querySelectorAll('.chart-pane').forEach((paneEl, idx) => {
+      paneEl.addEventListener('pointerdown', () => {
+        if (activePaneIdx !== idx) selectPane(idx);
+      }, true);
       paneEl.addEventListener('click', () => {
-        activePaneIdx = idx;
-        document.querySelectorAll('.chart-pane').forEach((el, i) => {
-          el.classList.toggle('active', i === idx);
-        });
-        if (panes[idx]) {
-          syncToolbarForPane(panes[idx]);
-        }
+        if (activePaneIdx !== idx) selectPane(idx);
       });
     });
 
-    // Timeframe Buttons
+    // Fast Shared Timeframe Switcher (Toolbar Pills + Dropdown Picker)
+    function applyTimeframe(tf) {
+      if (!tf) return;
+      const targetPane = panes[activePaneIdx] || panes[0];
+      targetPane.tf = tf;
+      if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
+        openTabs[activeTabIndex].interval = tf;
+        saveActiveTabSession(openTabs[activeTabIndex]);
+      }
+      if ($(`${getPanePrefix(targetPane)}-tf`)) {
+        $(`${getPanePrefix(targetPane)}-tf`).textContent = tf;
+      }
+      syncToolbarForPane(targetPane);
+      loadCandles(targetPane);
+    }
+
     document.querySelectorAll('.ex-tf-btn').forEach(tfBtn => {
-      tfBtn.addEventListener('click', () => {
-        document.querySelectorAll('.ex-tf-btn').forEach(b => b.classList.remove('active'));
-        tfBtn.classList.add('active');
-        const targetPane = panes[activePaneIdx] || panes[0];
-        targetPane.tf = tfBtn.dataset.tf;
-        if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
-          openTabs[activeTabIndex].interval = targetPane.tf;
-        }
-        loadCandles(targetPane);
-      });
+      tfBtn.addEventListener('click', () => applyTimeframe(tfBtn.dataset.tf));
     });
+
+    const tfPickerBtn = $('btn-tf-picker');
+    const tfDropMenu = $('tf-dropdown-menu');
+    if (tfPickerBtn && tfDropMenu) {
+      tfPickerBtn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isHidden = tfDropMenu.classList.contains('hidden');
+        if (isHidden) {
+          const rect = tfPickerBtn.getBoundingClientRect();
+          tfDropMenu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 190)}px`;
+          tfDropMenu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 135))}px`;
+          tfDropMenu.classList.remove('hidden');
+        } else {
+          tfDropMenu.classList.add('hidden');
+        }
+      });
+      tfDropMenu.querySelectorAll('.tf-opt').forEach(opt => {
+        opt.addEventListener('click', e => {
+          e.stopPropagation();
+          applyTimeframe(opt.dataset.tf);
+          tfDropMenu.classList.add('hidden');
+        });
+      });
+      document.addEventListener('click', e => {
+        if (!tfDropMenu.contains(e.target) && e.target !== tfPickerBtn && !tfPickerBtn.contains(e.target)) {
+          tfDropMenu.classList.add('hidden');
+        }
+      });
+    }
+
+    // Timezone Toggle Button (UTC+5:30 IST default <-> UTC+0)
+    const tzBtn = $('btn-tz-toggle');
+    if (tzBtn) {
+      updateTzBadgeUI();
+      tzBtn.addEventListener('click', () => {
+        activeTimeZone = activeTimeZone === 'Asia/Kolkata' ? 'UTC' : 'Asia/Kolkata';
+        localStorage.setItem('neo_chart_tz', activeTimeZone);
+        refreshAllPaneTimezones();
+        toast(`Chart X-Axis Timezone: ${activeTimeZone === 'Asia/Kolkata' ? 'UTC+5:30 (IST)' : 'UTC+0 (GMT)'}`);
+      });
+    }
+
+    // Close active chart individual position button beside Running P&L pill
+    const closeActivePosBtn = $('btn-close-active-pos');
+    if (closeActivePosBtn) {
+      closeActivePosBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const ap = getActivePane();
+        if (!ap || !ap.sym) return;
+        try {
+          toast(`Exiting ${ap.sym} position...`);
+          const res = await api(`/api/positions/${encodeURIComponent(ap.sym)}/exit?market=${encodeURIComponent(currentMarketMode)}`, {
+            method: 'POST',
+            body: JSON.stringify({ percentage: 100 }),
+          });
+          if (res.ok) {
+            toast(`✅ Closed ${ap.sym}`);
+            fetchPositionsAndOrders();
+          }
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
 
     // Bottom Date Range Shortcuts (1D, 5D, 1M, 3M, 6M, 1Y)
     const rangeDaysMap = { '1d': 5, '5d': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
@@ -4822,7 +5280,7 @@
         }
         if (days > 30 && targetPane.tf !== '1d') {
           targetPane.tf = '1d';
-          document.querySelectorAll('.ex-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === '1d'));
+          syncToolbarForPane(targetPane);
           if (targetPane.idx === 0 && openTabs[activeTabIndex]) {
             openTabs[activeTabIndex].interval = '1d';
           }
@@ -4831,25 +5289,42 @@
       });
     });
 
-    // Layout Toggle Button (Direct Cycle: 1 -> 2 -> 3 -> 1 on single tap)
+    // Layout Toggle Button (Icon-Only Exness Grid Cycle: 1->2->3 Desktop | 1->2 Mobile)
     const lBtn = $('layout-toggle-btn');
     const lDrop = $('layout-dropdown');
     const lLbl = $('current-layout-label');
+    const lIconSvg = $('layout-icon-svg');
     const stage = $('chart-stage');
+
+    function getLayoutIconSvg(lay) {
+      const mobile = window.innerWidth <= 768;
+      if (lay === 2) {
+        return mobile
+          ? '<svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="14" height="6" rx="1.3"/><rect x="2" y="10" width="14" height="6" rx="1.3"/></svg>'
+          : '<svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="6" height="14" rx="1.3"/><rect x="10" y="2" width="6" height="14" rx="1.3"/></svg>';
+      }
+      if (lay === 3) {
+        return '<svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="6" height="14" rx="1.2"/><rect x="10" y="2" width="6" height="6" rx="1.2"/><rect x="10" y="10" width="6" height="6" rx="1.2"/></svg>';
+      }
+      return '<svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.2" y="2.2" width="13.6" height="13.6" rx="2"/></svg>';
+    }
 
     function applyLayout(lay) {
       if (window.innerWidth <= 768 && lay > 2) lay = 2;
       activeLayout = lay;
       if (stage) stage.className = `ex-chart-stage layout-${lay}`;
       if (lLbl) lLbl.textContent = `${lay} CHART${lay > 1 ? 'S' : ''}`;
+      if (lIconSvg) lIconSvg.innerHTML = getLayoutIconSvg(lay);
 
       document.querySelectorAll('.layout-opt').forEach(opt => {
         opt.classList.toggle('active', parseInt(opt.dataset.layout) === lay);
       });
 
       if (lay === 1) {
-        activePaneIdx = 0;
-        document.querySelectorAll('.chart-pane').forEach((el, i) => el.classList.toggle('active', i === 0));
+        selectPane(0);
+      } else {
+        ensureSecondaryPaneSymbols(false);
+        if (activePaneIdx >= lay) selectPane(0);
       }
 
       // Initialize pane charts if not yet done
@@ -4862,7 +5337,6 @@
         loadCandles(panes[2]);
       }
 
-      // Resize all active pane charts so they fill container seamlessly
       function refitVisiblePanes() {
         panes.slice(0, lay).forEach(p => {
           if (p.chart) {
@@ -4876,6 +5350,7 @@
       setTimeout(refitVisiblePanes, 220);
     }
     window._applyChartLayoutFn = applyLayout;
+    if (lIconSvg) lIconSvg.innerHTML = getLayoutIconSvg(activeLayout);
 
     if (lBtn) {
       lBtn.addEventListener('click', e => {
@@ -5885,6 +6360,8 @@
     setupKeysModal();
     setupGuestProfileModal();
     setupMobileFlow();
+    syncTradeButtonsForActivePane();
+    updateTzBadgeUI();
 
     loadCandles(panes[0]);
     startQuotesPolling();

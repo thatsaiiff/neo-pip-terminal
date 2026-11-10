@@ -4813,7 +4813,7 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
     bsym = spec.get("binance")
     if bsym and fx_sym in {"BTCUSD", "ETHUSD"}:
         try:
-            bi_map = {"5s": "1s", "15s": "1s", "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "1h": "1h", "60m": "1h", "1d": "1d", "day": "1d"}
+            bi_map = {"5s": "1s", "15s": "1s", "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "60m": "1h", "4h": "4h", "240m": "4h", "1d": "1d", "day": "1d"}
             bi = bi_map.get(iv, "1m")
             limit = 600 if bi != "1s" else 900
             url = f"https://api.binance.com/api/v3/klines?symbol={bsym}&interval={bi}&limit={limit}"
@@ -4858,8 +4858,12 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
             ysym = spec["yahoo"]
             if iv in {"1d", "day", "daily"} or days > 60:
                 yi, yr = "1d", "1y"
+            elif iv in {"4h", "240m"}:
+                yi, yr = "1h", "3mo"
             elif iv in {"1h", "60m"} or days > 20:
                 yi, yr = "1h", "1mo"
+            elif iv in {"30m", "30min"}:
+                yi, yr = "30m", "1mo"
             elif iv == "15m" or days > 7:
                 yi, yr = "15m", "1mo"
             elif iv == "5m":
@@ -4912,18 +4916,19 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
                                 "volume": int(v),
                             })
 
-                        if iv == "3m" and raw_1m_list:
-                            b3: dict[int, dict[str, Any]] = {}
+                        if iv in {"3m", "4h", "240m"} and raw_1m_list:
+                            step_s = 14400 if iv in {"4h", "240m"} else 180
+                            b_res: dict[int, dict[str, Any]] = {}
                             for c_obj in raw_1m_list:
-                                bt = (c_obj["time"] // 180) * 180
-                                if bt not in b3:
-                                    b3[bt] = {**c_obj, "time": bt}
+                                bt = (c_obj["time"] // step_s) * step_s
+                                if bt not in b_res:
+                                    b_res[bt] = {**c_obj, "time": bt}
                                 else:
-                                    b3[bt]["high"] = max(b3[bt]["high"], c_obj["high"])
-                                    b3[bt]["low"] = min(b3[bt]["low"], c_obj["low"])
-                                    b3[bt]["close"] = c_obj["close"]
-                                    b3[bt]["volume"] += c_obj["volume"]
-                            res_candles = [b3[t] for t in sorted(b3.keys())]
+                                    b_res[bt]["high"] = max(b_res[bt]["high"], c_obj["high"])
+                                    b_res[bt]["low"] = min(b_res[bt]["low"], c_obj["low"])
+                                    b_res[bt]["close"] = c_obj["close"]
+                                    b_res[bt]["volume"] += c_obj["volume"]
+                            res_candles = [b_res[t] for t in sorted(b_res.keys())]
                         elif iv in {"5s", "15s"} and raw_1m_list:
                             sec = 5 if iv == "5s" else 15
                             sub_src = [[datetime.fromtimestamp(c["time"]).isoformat(), c["open"], c["high"], c["low"], c["close"], c["volume"]] for c in raw_1m_list[-60:]]
@@ -4936,7 +4941,7 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
     # 3. Secondary Binance fallback for XAUUSD via PAXGUSDT if Yahoo was throttled
     if not res_candles and fx_sym == "XAUUSD" and bsym:
         try:
-            bi_map = {"5s": "1m", "15s": "1m", "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "1h": "1h", "60m": "1h", "1d": "1d", "day": "1d"}
+            bi_map = {"5s": "1m", "15s": "1m", "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "60m": "1h", "4h": "4h", "240m": "4h", "1d": "1d", "day": "1d"}
             bi = bi_map.get(iv, "1m")
             url = f"https://api.binance.com/api/v3/klines?symbol={bsym}&interval={bi}&limit=400"
             with httpx.Client(timeout=3.0) as client:
@@ -5088,8 +5093,8 @@ def chart_candles(
             except Exception:
                 pass
 
-        # 2. Intraday Multi-Day Candles (up to 30 days for 1h or explicit days param, 1d for 5s/15s, else requested_days)
-        days_back = max(requested_days, 30) if interval_clean in {"1h", "60m"} else (1 if interval_clean in {"5s", "15s"} and requested_days <= 5 else min(requested_days, 30))
+        # 2. Intraday Multi-Day Candles (up to 30 days for 1h/4h or explicit days param, 1d for 5s/15s, else requested_days)
+        days_back = max(requested_days, 30) if interval_clean in {"1h", "60m", "4h", "240m"} else (1 if interval_clean in {"5s", "15s"} and requested_days <= 5 else min(requested_days, 30))
         from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
         range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
@@ -5216,8 +5221,12 @@ def chart_candles(
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=5)
     elif interval_clean in {"15m", "15min"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=15)
+    elif interval_clean in {"30m", "30min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=30)
     elif interval_clean in {"1h", "60m"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=60)
+    elif interval_clean in {"4h", "240m"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=240)
     elif interval_clean in {"1d", "day"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=375)
     else:

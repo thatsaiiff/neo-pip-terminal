@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-ord4">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-ord7">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -210,7 +210,7 @@
 
           <div class="v-sep"></div>
 
-          <!-- Timeframe Buttons -->
+          <!-- Timeframe Buttons + Exness Full TF Dropdown -->
           <div class="ex-tf-group" id="ex-tf-group">
             <button type="button" class="ex-tf-btn" data-tf="5s">5s</button>
             <button type="button" class="ex-tf-btn" data-tf="15s">15s</button>
@@ -218,8 +218,28 @@
             <button type="button" class="ex-tf-btn" data-tf="3m">3m</button>
             <button type="button" class="ex-tf-btn" data-tf="5m">5m</button>
             <button type="button" class="ex-tf-btn" data-tf="15m">15m</button>
+            <button type="button" class="ex-tf-btn" data-tf="30m">30m</button>
             <button type="button" class="ex-tf-btn" data-tf="1h">1h</button>
+            <button type="button" class="ex-tf-btn" data-tf="4h">4h</button>
             <button type="button" class="ex-tf-btn" data-tf="1d">1D</button>
+          </div>
+          <div class="tf-picker-wrap">
+            <button type="button" id="btn-tf-picker" class="ex-toolbar-btn tf-picker-btn" title="Select Timeframe">
+              <span id="tf-picker-label">1m</span>
+              <span class="tf-caret">▾</span>
+            </button>
+            <div id="tf-dropdown-menu" class="tf-dropdown-menu hidden">
+              <button type="button" class="tf-opt" data-tf="5s">5s</button>
+              <button type="button" class="tf-opt" data-tf="15s">15s</button>
+              <button type="button" class="tf-opt active" data-tf="1m">1m</button>
+              <button type="button" class="tf-opt" data-tf="3m">3m</button>
+              <button type="button" class="tf-opt" data-tf="5m">5m</button>
+              <button type="button" class="tf-opt" data-tf="15m">15m</button>
+              <button type="button" class="tf-opt" data-tf="30m">30m</button>
+              <button type="button" class="tf-opt" data-tf="1h">1h</button>
+              <button type="button" class="tf-opt" data-tf="4h">4h</button>
+              <button type="button" class="tf-opt" data-tf="1d">1D</button>
+            </div>
           </div>
 
           <!-- Technical Indicators Dropdown -->
@@ -281,11 +301,19 @@
         </div>
 
         <div class="tb-right">
-          <!-- Auto Layout Selector (1, 2, 3 Charts) -->
+          <!-- Individual Active-Chart Running Position P&L (Exness style, left of layout icon) -->
+          <div id="active-pos-pnl-wrap" class="ex-active-pnl hidden" title="Running P&amp;L for active chart symbol">
+            <span id="active-pos-pnl-val" class="ex-active-pnl-val">+₹0.00</span>
+            <button type="button" id="btn-close-active-pos" class="ex-active-pnl-close" title="Close active chart position at market">✕</button>
+          </div>
+
+          <!-- Icon-Only Exness Layout Switcher (1 / 2 / 3 Charts) -->
           <div class="layout-selector-wrap">
-            <button id="layout-toggle-btn" class="ex-toolbar-btn" type="button" title="Click to cycle 1, 2, 3 Charts">
-              <span class="layout-icon">◫</span>
-              <span id="current-layout-label">1 CHART</span>
+            <button id="layout-toggle-btn" class="ex-toolbar-btn ex-layout-icon-btn" type="button" title="Switch Chart Layout" aria-label="Switch Chart Layout">
+              <span id="layout-icon-svg" class="layout-icon-svg" aria-hidden="true">
+                <svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.2" y="2.2" width="13.6" height="13.6" rx="2"/></svg>
+              </span>
+              <span id="current-layout-label" class="sr-only">1 CHART</span>
             </button>
             <div id="layout-dropdown" class="layout-dropdown hidden">
               <div class="layout-opt active" data-layout="1">
@@ -321,6 +349,7 @@
           <div class="pane-header">
             <div class="pane-title-wrap">
               <span class="pane-sym" id="p1-sym">NIFTY</span>
+              <span class="pane-pos-pnl hidden" id="p1-pos-pnl"></span>
               <span class="pane-tf" id="p1-tf">1m</span>
               <span class="pane-seg" id="p1-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p1-quote-pill">
@@ -344,9 +373,10 @@
         <section class="chart-pane" id="pane-2" data-pane-idx="1">
           <div class="pane-header">
             <div class="pane-title-wrap">
-              <span class="pane-sym" id="p2-sym">NIFTY 25000 PE</span>
+              <span class="pane-sym" id="p2-sym">BANKNIFTY</span>
+              <span class="pane-pos-pnl hidden" id="p2-pos-pnl"></span>
               <span class="pane-tf" id="p2-tf">1m</span>
-              <span class="pane-seg" id="p2-seg">NSE F&amp;O</span>
+              <span class="pane-seg" id="p2-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p2-quote-pill">
                 O: <b id="p2-o">—</b> H: <b id="p2-h">—</b> L: <b id="p2-l">—</b> C: <b id="p2-c">—</b>
               </span>
@@ -368,7 +398,8 @@
         <section class="chart-pane" id="pane-3" data-pane-idx="2">
           <div class="pane-header">
             <div class="pane-title-wrap">
-              <span class="pane-sym" id="p3-sym">NIFTY</span>
+              <span class="pane-sym" id="p3-sym">SENSEX</span>
+              <span class="pane-pos-pnl hidden" id="p3-pos-pnl"></span>
               <span class="pane-tf" id="p3-tf">5m</span>
               <span class="pane-seg" id="p3-seg">NSE INDEX</span>
               <span class="pane-quote-pill" id="p3-quote-pill">
@@ -413,7 +444,7 @@
           <button type="button" class="range-btn" data-range="1y">1Y</button>
         </div>
         <div class="chart-meta-right">
-          <span class="tz-badge">UTC+5:30 (IST)</span>
+          <button type="button" class="tz-badge tz-toggle-btn" id="btn-tz-toggle" title="Click to switch X-Axis Timezone (IST / UTC)">UTC+5:30 (IST)</button>
           <span class="feed-badge" id="feed-status-badge">● Sub-30ms Live</span>
         </div>
       </div>
@@ -671,6 +702,11 @@
               <input type="number" id="op-tp-input" step="any" placeholder="TP Price" disabled>
             </div>
           </div>
+        </div>
+
+        <!-- Index Chart Protection Banner (Shown when active pane is an Index Spot like NIFTY/SENSEX) -->
+        <div id="op-index-notice" class="op-index-notice hidden">
+          Index spot charts cannot be bought/sold directly — pick an Option (CE/PE) or Stock.
         </div>
 
         <!-- Dual Buy / Sell Color Coded Action Buttons (Exness Red & Blue) -->
@@ -1748,6 +1784,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-ord5"></script>
+  <script src="/static/chart.js?v=20261110-ord6"></script>
 </body>
 </html>
