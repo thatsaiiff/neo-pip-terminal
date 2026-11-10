@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261110-tv1">
+  <link rel="stylesheet" href="/static/chart.css?v=20261110-otp3">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -1125,12 +1125,15 @@
       <!-- Sign In Form -->
       <form id="auth-signin-form" class="auth-step-form">
         <div class="auth-input-group">
-          <label for="signin-userid" class="auth-label">User ID</label>
-          <input type="text" id="signin-userid" class="auth-text-input" placeholder="Enter your User ID" required autocomplete="username" minlength="3" maxlength="32">
+          <label for="signin-userid" class="auth-label">User ID or Email</label>
+          <input type="text" id="signin-userid" class="auth-text-input" placeholder="Enter your User ID or email" required autocomplete="username" minlength="3" maxlength="80">
         </div>
         <div class="auth-input-group">
           <label for="signin-password" class="auth-label">Password</label>
           <input type="password" id="signin-password" class="auth-text-input" placeholder="Enter your password" required autocomplete="current-password" minlength="4">
+        </div>
+        <div class="auth-forgot-row">
+          <button type="button" id="btn-open-forgot" class="auth-inline-link">Forgot password?</button>
         </div>
         <div id="signin-error-msg" class="auth-error-msg hidden"></div>
         <button type="submit" id="btn-signin-submit" class="btn-auth-primary">
@@ -1139,23 +1142,69 @@
         </button>
       </form>
 
-      <!-- Sign Up Form -->
-      <form id="auth-signup-form" class="auth-step-form hidden">
-        <div class="auth-input-group">
-          <label for="signup-userid" class="auth-label">Choose User ID</label>
-          <input type="text" id="signup-userid" class="auth-text-input" placeholder="Letters, numbers, underscores (e.g. alex_fx)" required autocomplete="username" minlength="3" maxlength="28">
+      <!-- Forgot / Reset Password Form -->
+      <form id="auth-forgot-form" class="auth-step-form hidden" novalidate>
+        <div class="auth-input-group" id="forgot-email-group">
+          <label for="forgot-email" class="auth-label">Registered Trusted Email</label>
+          <input type="email" id="forgot-email" class="auth-text-input" placeholder="you@gmail.com" autocomplete="email">
         </div>
-        <div class="auth-input-group">
-          <label for="signup-password" class="auth-label">Password</label>
-          <input type="password" id="signup-password" class="auth-text-input" placeholder="Minimum 6 characters" required autocomplete="new-password" minlength="6">
+        <div id="forgot-otp-step" class="auth-otp-card hidden">
+          <div class="auth-otp-top">
+            <span id="forgot-otp-target">Reset code sent</span>
+          </div>
+          <div class="auth-input-group">
+            <label for="forgot-otp-input" class="auth-label">6-Digit Reset Code</label>
+            <input type="text" id="forgot-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+          </div>
+          <div class="auth-input-group">
+            <label for="forgot-newpass" class="auth-label">New Password</label>
+            <input type="password" id="forgot-newpass" class="auth-text-input" placeholder="Minimum 4 characters" autocomplete="new-password">
+          </div>
         </div>
-        <div class="auth-input-group">
-          <label for="signup-email" class="auth-label">Email (Optional)</label>
-          <input type="email" id="signup-email" class="auth-text-input" placeholder="you@example.com" autocomplete="email">
+        <div id="forgot-error-msg" class="auth-error-msg hidden"></div>
+        <button type="submit" id="btn-forgot-submit" class="btn-auth-primary">
+          <span>Send Reset Code</span>
+          <span class="btn-arrow">&rarr;</span>
+        </button>
+        <button type="button" id="btn-back-to-signin" class="auth-inline-link" style="align-self:center;margin-top:4px;">&larr; Back to Sign In</button>
+      </form>
+
+      <!-- Sign Up Form (Mandatory Trusted Email + 6-Digit Email OTP) -->
+      <form id="auth-signup-form" class="auth-step-form hidden" novalidate>
+        <div id="signup-details-wrap" class="auth-details-stack">
+          <div class="auth-input-group">
+            <label for="signup-email" class="auth-label">Email Address <span class="auth-req-tag">Trusted Only · OTP Required</span></label>
+            <input type="email" id="signup-email" class="auth-text-input" placeholder="you@gmail.com (Gmail, Outlook, Yahoo...)" required autocomplete="email">
+            <small class="auth-domain-hint">Disposable or untrusted email domains are blocked.</small>
+          </div>
+          <div class="auth-input-group">
+            <label for="signup-userid" class="auth-label">Choose User ID</label>
+            <input type="text" id="signup-userid" class="auth-text-input" placeholder="Letters, numbers, underscores (e.g. alex_fx)" required autocomplete="username" minlength="3" maxlength="28">
+          </div>
+          <div class="auth-input-group">
+            <label for="signup-password" class="auth-label">Password</label>
+            <input type="password" id="signup-password" class="auth-text-input" placeholder="Minimum 4 characters" required autocomplete="new-password" minlength="4">
+          </div>
         </div>
+
+        <div id="signup-otp-step" class="auth-otp-card hidden">
+          <div class="auth-otp-top">
+            <span id="signup-otp-target">Verification code sent</span>
+            <button type="button" id="btn-edit-signup-email" class="auth-inline-link">Change</button>
+          </div>
+          <div class="auth-input-group">
+            <label for="signup-otp-input" class="auth-label">6-Digit Email Verification Code</label>
+            <input type="text" id="signup-otp-input" class="auth-text-input auth-otp-input" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code">
+          </div>
+          <div class="auth-otp-foot">
+            <span class="auth-domain-hint">Check inbox &amp; spam · Expires in 10 min</span>
+            <button type="button" id="btn-resend-signup-otp" class="auth-inline-link">Resend Code</button>
+          </div>
+        </div>
+
         <div id="signup-error-msg" class="auth-error-msg hidden"></div>
         <button type="submit" id="btn-signup-submit" class="btn-auth-primary">
-          <span>Create Account &amp; Start</span>
+          <span>Send Verification Code</span>
           <span class="btn-arrow">&rarr;</span>
         </button>
       </form>
@@ -1564,6 +1613,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
-  <script src="/static/chart.js?v=20261110-tv1"></script>
+  <script src="/static/chart.js?v=20261110-otp3"></script>
 </body>
 </html>

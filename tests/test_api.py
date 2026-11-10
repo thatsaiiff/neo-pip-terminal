@@ -668,22 +668,38 @@ def test_auth_email_check_and_admin_login(client):
 
 
 def test_auth_user_otp_flow_and_keys(client):
-    # 1. User Email Check (non-admin)
-    res_user = client.post("/api/auth/check-email", json={"email": "trader99@test.com"})
+    # Untrusted / test domains rejected cleanly
+    bad_user = client.post("/api/auth/check-email", json={"email": "trader99@test.com"})
+    assert bad_user.status_code == 400
+
+    # 1. User Email Check (trusted Gmail domain)
+    res_user = client.post("/api/auth/check-email", json={"email": "trader99@gmail.com"})
     assert res_user.status_code == 200
     assert res_user.json()["is_admin"] is False
     assert res_user.json()["step"] == "otp"
     assert "suggested_username" in res_user.json()
 
-    # 2. Verify OTP with test fallback code
-    res_v = client.post("/api/auth/verify-otp", json={
-        "email": "trader99@test.com",
+    # Hardcoded 778899 must be rejected; only real DB OTP accepted
+    bad_v = client.post("/api/auth/verify-otp", json={
+        "email": "trader99@gmail.com",
         "otp": "778899",
-        "username": "SpeedScalper_77"
+        "username": "SpeedScalper_77",
+    })
+    assert bad_v.status_code == 400
+
+    with main.db() as conn:
+        real_otp = conn.execute("SELECT otp FROM email_otps WHERE email = 'trader99@gmail.com' ORDER BY id DESC LIMIT 1").fetchone()["otp"]
+
+    # 2. Verify OTP with real cryptographic code from email_otps
+    res_v = client.post("/api/auth/verify-otp", json={
+        "email": "trader99@gmail.com",
+        "otp": real_otp,
+        "username": "SpeedScalper_77",
     })
     assert res_v.status_code == 200
     assert res_v.json()["ok"] is True
     assert res_v.json()["username"] == "SpeedScalper_77"
+    assert res_v.json()["email_verified"] is True
     assert res_v.json()["paper_balance"] == 1000000.0
     token = res_v.json()["token"]
 
@@ -948,16 +964,26 @@ def test_parse_upstox_market_quote_recovers_prev_close_from_net_change():
     assert q["change_percent"] == 0.23
 
 
+def _signup_verified(client, username: str, password: str, email: str):
+    req = client.post("/api/auth/request-signup-otp", json={"username": username, "password": password, "email": email})
+    assert req.status_code == 200, req.text
+    with main.db() as conn:
+        row = conn.execute("SELECT otp FROM email_otps WHERE LOWER(email) = ? AND purpose = 'signup' ORDER BY id DESC LIMIT 1", (email.lower(),)).fetchone()
+    assert row is not None
+    res = client.post("/api/auth/signup", json={"username": username, "password": password, "email": email, "otp": row["otp"]})
+    assert res.status_code == 200, res.text
+    return res
+
+
 def test_signup_signin_and_per_user_isolation(client, monkeypatch):
     monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 2650.0, "prev_close": 2640.0, "change": 10.0, "change_percent": 0.38})
 
-    r1 = client.post("/api/auth/signup", json={"username": "pune_trader", "password": "secret123", "email": "pune@example.com"})
-    assert r1.status_code == 200
+    r1 = _signup_verified(client, "pune_trader", "secret123", "pune.trader@gmail.com")
     tok1 = r1.json()["token"]
     assert r1.json()["is_admin"] is False
+    assert r1.json()["email_verified"] is True
 
-    r2 = client.post("/api/auth/signup", json={"username": "mumbai_trader", "password": "secret456"})
-    assert r2.status_code == 200
+    r2 = _signup_verified(client, "mumbai_trader", "secret456", "mumbai.trader@outlook.com")
     tok2 = r2.json()["token"]
 
     # Wrong password rejected
@@ -999,9 +1025,8 @@ def test_admin_signin_and_users_analytics(client, monkeypatch):
     assert "S@if7246" not in html
     assert "osaifala" not in html
 
-    # Sign up normal trader first
-    u_res = client.post("/api/auth/signup", json={"username": "alice_fx", "password": "alice_pwd"})
-    assert u_res.status_code == 200
+    # Sign up verified normal trader first
+    u_res = _signup_verified(client, "alice_fx", "alice_pwd", "alice.fx@yahoo.com")
     u_tok = u_res.json()["token"]
 
     # Non-admin denied access to admin analytics
@@ -1025,7 +1050,7 @@ def test_admin_signin_and_users_analytics(client, monkeypatch):
 
 def test_forex_sltp_drag_patch_trigger_and_metrics(client, monkeypatch):
     monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 90000.0, "prev_close": 89000.0, "change": 1000.0, "change_percent": 1.12})
-    tok = client.post("/api/auth/signup", json={"username": "fx_scalper", "password": "pw_fx_99"}).json()["token"]
+    tok = _signup_verified(client, "fx_scalper", "pw_fx_99", "fx.scalper@icloud.com").json()["token"]
     client.post("/api/user/select-market", json={"market": "forex"}, headers={"Authorization": f"Bearer {tok}"})
 
     # Place 0.10 lot BTCUSD
@@ -1067,7 +1092,7 @@ def test_pending_limit_order_fills_and_indian_market_hours_guard(client, monkeyp
     monkeypatch.setattr(main, "_get_live_quote_data", lambda sym, token=None: {"ok": True, "symbol": sym, "ltp": 2650.0, "prev_close": 2645.0, "change": 5.0, "change_percent": 0.19})
     monkeypatch.setattr(main, "_is_indian_market_open", lambda: False)
 
-    tok = client.post("/api/auth/signup", json={"username": "hours_tester", "password": "pw_hrs_99"}).json()["token"]
+    tok = _signup_verified(client, "hours_tester", "pw_hrs_99", "hours.tester@proton.me").json()["token"]
     client.post("/api/user/select-market", json={"market": "indian"}, headers={"Authorization": f"Bearer {tok}"})
 
     # Indian order rejected outside NSE hours
@@ -1110,8 +1135,7 @@ def test_chart_search_forex_and_performance_metrics(client):
 def test_unauthenticated_and_non_admin_isolation_on_main_site_endpoints(client, monkeypatch):
     # Sign up regular trader while PYTEST_CURRENT_TEST is active, also log an owner-like audit event
     main.audit("broker_login_success", {"account_id": "KOTAK_OWNER", "environment": "prod"})
-    res_up = client.post("/api/auth/signup", json={"username": "sec_trader", "password": "pw_sec_99"})
-    assert res_up.status_code == 200
+    res_up = _signup_verified(client, "sec_trader", "pw_sec_99", "sec.trader@zoho.com")
     tok = res_up.json()["token"]
     client.post("/api/user/select-market", json={"market": "indian"}, headers={"Authorization": f"Bearer {tok}"})
 
@@ -1158,6 +1182,96 @@ def test_unauthenticated_and_non_admin_isolation_on_main_site_endpoints(client, 
 
     audit_user = client.get("/api/audit", headers=headers).json()
     assert all(ev.get("event_type") != "broker_login_success" for ev in audit_user)
+
+
+def test_trusted_email_domain_validation_and_mandatory_otp_signup(client):
+    # 1. Disposable, fake, typo, and untrusted domains must all be rejected on OTP request & signup
+    for bad_email in [
+        "spammer@mailinator.com",
+        "temp@yopmail.com",
+        "user@10minutemail.com",
+        "fake@trader.local",
+        "bad@example.com",
+        "typo@gmal.com",
+        "random@unknownuntrusted.xyz",
+    ]:
+        r = client.post("/api/auth/request-signup-otp", json={
+            "username": "baduser1", "password": "pw_good_1", "email": bad_email
+        })
+        assert r.status_code == 400, f"Should reject untrusted/disposable domain {bad_email}: {r.text}"
+
+    # 2. Signup without OTP or wrong OTP is rejected cleanly (never issues unverified account)
+    no_otp = client.post("/api/auth/signup", json={
+        "username": "otp_enforced", "password": "pw_good_1", "email": "real.user@gmail.com"
+    })
+    assert no_otp.status_code == 422
+
+    req = client.post("/api/auth/request-signup-otp", json={
+        "username": "otp_enforced", "password": "pw_good_1", "email": "real.user@gmail.com"
+    })
+    assert req.status_code == 200
+    assert "otp" not in req.json()  # OTP must NEVER be exposed in HTTP response!
+
+    wrong = client.post("/api/auth/signup", json={
+        "username": "otp_enforced", "password": "pw_good_1", "email": "real.user@gmail.com", "otp": "000000"
+    })
+    assert wrong.status_code == 400
+
+    # Verify with real OTP from email_otps -> succeeds and marks email_verified=1
+    with main.db() as conn:
+        real_otp = conn.execute("SELECT otp FROM email_otps WHERE email = 'real.user@gmail.com' ORDER BY id DESC LIMIT 1").fetchone()["otp"]
+    ok_res = client.post("/api/auth/signup", json={
+        "username": "otp_enforced", "password": "pw_good_1", "email": "real.user@gmail.com", "otp": real_otp
+    })
+    assert ok_res.status_code == 200
+    assert ok_res.json()["email_verified"] is True
+
+    # OTP replay rejected
+    replay = client.post("/api/auth/signup", json={
+        "username": "otp_enforced2", "password": "pw_good_1", "email": "real.user@gmail.com", "otp": real_otp
+    })
+    assert replay.status_code == 400
+
+
+def test_forgot_password_and_email_delivery_channels(client, monkeypatch):
+    _signup_verified(client, "reset_user", "oldpass123", "reset.user@iitb.ac.in")
+
+    # Request password reset OTP
+    req = client.post("/api/auth/forgot-password", json={"email": "reset.user@iitb.ac.in"})
+    assert req.status_code == 200
+    with main.db() as conn:
+        reset_otp = conn.execute("SELECT otp FROM email_otps WHERE email = 'reset.user@iitb.ac.in' AND purpose = 'reset' ORDER BY id DESC LIMIT 1").fetchone()["otp"]
+
+    # Wrong OTP fails
+    bad_rst = client.post("/api/auth/reset-password", json={"email": "reset.user@iitb.ac.in", "otp": "111111", "new_password": "newpass999"})
+    assert bad_rst.status_code == 400
+
+    # Real OTP resets password
+    ok_rst = client.post("/api/auth/reset-password", json={"email": "reset.user@iitb.ac.in", "otp": reset_otp, "new_password": "newpass999"})
+    assert ok_rst.status_code == 200
+
+    assert client.post("/api/auth/signin", json={"username": "reset_user", "password": "oldpass123"}).status_code == 401
+    assert client.post("/api/auth/signin", json={"username": "reset_user", "password": "newpass999"}).status_code == 200
+
+    # Verify Brevo HTTPS mail path when BREVO_API_KEY + EMAIL_FROM set
+    sent_payloads = []
+    class FakeResp:
+        status_code = 201
+        text = "{}"
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, headers=None, json=None):
+            sent_payloads.append((url, headers, json))
+            return FakeResp()
+
+    monkeypatch.setattr(main, "BREVO_API_KEY", "xkeysib-test")
+    monkeypatch.setattr(main, "EMAIL_FROM", "saif@gmail.com")
+    monkeypatch.setattr(main.httpx, "Client", FakeClient)
+    assert main.send_otp_email("demo@gmail.com", "654321", username="demo") is True
+    assert sent_payloads[0][0] == "https://api.brevo.com/v3/smtp/email"
+    assert "654321" in sent_payloads[0][2]["subject"]
 
 
 

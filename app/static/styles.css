@@ -3164,6 +3164,82 @@ body.site-locked #app-shell {
   font-weight: 600;
 }
 
+.main-auth-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.main-auth-hint {
+  font-size: 10px;
+  color: var(--ink-muted);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.main-auth-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.main-auth-link-btn {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.main-auth-link-btn:hover:not(:disabled) {
+  color: var(--ink-primary);
+}
+
+.main-auth-link-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.main-auth-otp-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-medium);
+}
+
+.main-auth-otp-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green-ink);
+}
+
+.main-auth-otp-input {
+  text-align: center;
+  font-family: var(--font-mono) !important;
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.35em;
+}
+
+.main-auth-otp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .main-user-pill {
   display: inline-flex;
   align-items: center;

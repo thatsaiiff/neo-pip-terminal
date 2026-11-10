@@ -2403,7 +2403,67 @@
   // ========================================================================
   // Shared Gatekeeper Session Sync across / and /chart
   // ========================================================================
-  let mainAuthMode = 'signin';
+  let mainAuthMode = 'signin'; // 'signin' | 'signup' | 'forgot'
+  let mainAuthStep = 'details'; // 'details' | 'otp'
+  let mainResendTimer = null;
+
+  const TRUSTED_EMAIL_DOMAINS = new Set([
+    'gmail.com', 'googlemail.com',
+    'outlook.com', 'outlook.in', 'hotmail.com', 'hotmail.co.uk', 'live.com', 'live.in', 'msn.com',
+    'yahoo.com', 'yahoo.in', 'yahoo.co.in', 'yahoo.co.uk', 'ymail.com', 'rocketmail.com',
+    'icloud.com', 'me.com', 'mac.com',
+    'proton.me', 'protonmail.com', 'pm.me',
+    'tuta.io', 'tutanota.com', 'tuta.com',
+    'zoho.com', 'zohomail.com', 'zohomail.in',
+    'rediffmail.com', 'aol.com', 'gmx.com', 'gmx.net', 'mail.com', 'fastmail.com', 'hey.com',
+  ]);
+  const DISPOSABLE_EMAIL_DOMAINS = new Set([
+    'mailinator.com', 'yopmail.com', 'yopmail.fr', 'tempmail.com', 'temp-mail.org', 'temp-mail.io',
+    '10minutemail.com', '10minutemail.net', 'guerrillamail.com', 'guerrillamail.info', 'guerrillamailblock.com',
+    'sharklasers.com', 'grr.la', 'trashmail.com', 'throwawaymail.com', 'maildrop.cc', 'getnada.com',
+    'mohmal.com', 'dispostable.com', 'fakeinbox.com', 'mintemail.com', 'mailnesia.com', 'emailondeck.com',
+    'mytemp.email', 'tempmailo.com', 'burnermail.io', 'inboxkitten.com', 'dropmail.me', 'harakirimail.com',
+    'tmpmail.org', 'tmpmail.net', 'mailcatch.com', 'spambog.com', 'mail.tm', 'moakt.com',
+    'trader.local', 'localhost', 'example.com', 'example.org', 'example.net', 'test.com', 'fake.com',
+  ]);
+  const DOMAIN_TYPO_MAP = {
+    'gmal.com': 'gmail.com', 'gmial.com': 'gmail.com', 'gamil.com': 'gmail.com',
+    'gnail.com': 'gmail.com', 'gmail.con': 'gmail.com', 'yaho.com': 'yahoo.com',
+    'yahooo.com': 'yahoo.com', 'hotmal.com': 'hotmail.com', 'outlok.com': 'outlook.com',
+  };
+
+  function validateTrustedEmailClient(raw) {
+    const email = String(raw || '').trim().toLowerCase();
+    if (!email || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,24}$/.test(email) || email.includes('..')) {
+      return 'Enter a valid email address (e.g. name@gmail.com).';
+    }
+    const domain = email.split('@')[1] || '';
+    if (DOMAIN_TYPO_MAP[domain]) return `Did you mean @${DOMAIN_TYPO_MAP[domain]}? Please check your email domain.`;
+    if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) return 'Disposable or test emails are not allowed. Use a real trusted domain (Gmail, Outlook, Yahoo, iCloud, Proton, Zoho).';
+    const isEdu = ['.edu', '.edu.in', '.ac.in', '.ac.uk', '.edu.au'].some(s => domain.endsWith(s) && domain.length > s.length + 1);
+    if (!TRUSTED_EMAIL_DOMAINS.has(domain) && !isEdu) {
+      return 'Only verified trusted email domains (Gmail, Outlook, Yahoo, iCloud, Proton, Zoho, Rediffmail, .edu) are allowed.';
+    }
+    return '';
+  }
+
+  function startResendCountdown(btn, seconds = 30) {
+    if (!btn) return;
+    clearInterval(mainResendTimer);
+    let rem = seconds;
+    btn.disabled = true;
+    btn.textContent = `Resend in ${rem}s`;
+    mainResendTimer = setInterval(() => {
+      rem -= 1;
+      if (rem <= 0) {
+        clearInterval(mainResendTimer);
+        btn.disabled = false;
+        btn.textContent = 'Resend code';
+      } else {
+        btn.textContent = `Resend in ${rem}s`;
+      }
+    }, 1000);
+  }
 
   function closeMainModals() {
     if ($('review-modal')) $('review-modal').classList.add('hidden');
@@ -2500,31 +2560,79 @@
     }
   }
 
-  function setMainAuthTab(mode) {
-    mainAuthMode = mode === 'signup' ? 'signup' : 'signin';
+  function setMainAuthTab(mode, step = 'details') {
+    mainAuthMode = (mode === 'signup' || mode === 'forgot') ? mode : 'signin';
+    mainAuthStep = step === 'otp' ? 'otp' : 'details';
     const isUp = mainAuthMode === 'signup';
+    const isForgot = mainAuthMode === 'forgot';
+    const isOtp = mainAuthStep === 'otp';
+
     if ($('main-auth-tab-signin')) $('main-auth-tab-signin').classList.toggle('active', !isUp);
     if ($('main-auth-tab-signup')) $('main-auth-tab-signup').classList.toggle('active', isUp);
-    if ($('main-auth-name-wrap')) $('main-auth-name-wrap').style.display = isUp ? 'flex' : 'none';
-    if ($('main-auth-submit')) $('main-auth-submit').textContent = isUp ? 'Create Account' : 'Sign In';
+
+    if ($('main-auth-email-wrap')) $('main-auth-email-wrap').style.display = ((isUp && !isOtp) || (isForgot && !isOtp)) ? 'flex' : 'none';
+    if ($('main-auth-name-wrap')) $('main-auth-name-wrap').style.display = (isUp && !isOtp) ? 'flex' : 'none';
+    if ($('main-auth-user-wrap')) $('main-auth-user-wrap').style.display = (!isForgot && !isOtp) ? 'flex' : 'none';
+    if ($('main-auth-pass-wrap')) $('main-auth-pass-wrap').style.display = (!isForgot && !isOtp) ? 'flex' : 'none';
+    if ($('main-auth-forgot-row')) $('main-auth-forgot-row').style.display = (mainAuthMode === 'signin') ? 'flex' : 'none';
+    if ($('main-auth-user-label')) $('main-auth-user-label').textContent = isUp ? 'Choose User ID' : 'User ID or Email';
+
+    if ($('main-auth-otp-wrap')) $('main-auth-otp-wrap').classList.toggle('hidden', !isOtp);
+    if ($('main-auth-newpass-wrap')) $('main-auth-newpass-wrap').classList.toggle('hidden', !(isForgot && isOtp));
+    if ($('main-auth-back-signin')) $('main-auth-back-signin').classList.toggle('hidden', !isForgot);
+
+    const submitBtn = $('main-auth-submit');
+    if (submitBtn) {
+      if (isForgot) submitBtn.textContent = isOtp ? 'Reset Password' : 'Send Reset Code →';
+      else if (isUp) submitBtn.textContent = isOtp ? 'Verify & Create Account →' : 'Send Verification Code →';
+      else submitBtn.textContent = 'Sign In';
+    }
     if ($('main-auth-pass')) $('main-auth-pass').setAttribute('autocomplete', isUp ? 'new-password' : 'current-password');
     if ($('main-auth-error')) { $('main-auth-error').classList.add('hidden'); $('main-auth-error').textContent = ''; }
+    if (isOtp && $('main-auth-otp')) {
+      $('main-auth-otp').value = '';
+      setTimeout(() => $('main-auth-otp')?.focus(), 60);
+    }
   }
 
   async function handleMainLogout() {
     try { await api('/api/auth/owner-logout', { method: 'POST', body: '{}' }); } catch (_) {}
     localStorage.removeItem('neo_owner_token');
+    if ($('main-auth-pass')) $('main-auth-pass').value = '';
+    if ($('main-auth-otp')) $('main-auth-otp').value = '';
+    setMainAuthTab('signin', 'details');
     lockMainSite();
     toast('Signed out cleanly across terminal.', 'info');
   }
 
   function wireMainAuthModal() {
-    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').addEventListener('click', () => setMainAuthTab('signin'));
-    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').addEventListener('click', () => setMainAuthTab('signup'));
+    if ($('main-auth-tab-signin')) $('main-auth-tab-signin').addEventListener('click', () => setMainAuthTab('signin', 'details'));
+    if ($('main-auth-tab-signup')) $('main-auth-tab-signup').addEventListener('click', () => setMainAuthTab('signup', 'details'));
+    if ($('main-auth-forgot-btn')) $('main-auth-forgot-btn').addEventListener('click', () => setMainAuthTab('forgot', 'details'));
+    if ($('main-auth-back-signin')) $('main-auth-back-signin').addEventListener('click', () => setMainAuthTab('signin', 'details'));
+    if ($('main-auth-edit-email')) $('main-auth-edit-email').addEventListener('click', () => setMainAuthTab(mainAuthMode, 'details'));
     if ($('main-logout-btn')) $('main-logout-btn').addEventListener('click', handleMainLogout);
     if ($('main-signin-trigger')) $('main-signin-trigger').addEventListener('click', () => {
       if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
     });
+
+    if ($('main-auth-resend')) {
+      $('main-auth-resend').addEventListener('click', async () => {
+        const email = ($('main-auth-email')?.value || '').trim().toLowerCase();
+        const errBox = $('main-auth-error');
+        if (!email) return;
+        try {
+          await api('/api/auth/resend-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email, purpose: mainAuthMode === 'forgot' ? 'reset' : 'signup' }),
+          });
+          startResendCountdown($('main-auth-resend'), 30);
+          toast(`Verification code re-sent to ${email}`, 'success');
+        } catch (err) {
+          if (errBox) { errBox.textContent = cleanErrorMessage(err.message); errBox.classList.remove('hidden'); }
+        }
+      });
+    }
 
     const form = $('main-auth-form');
     if (form) {
@@ -2532,27 +2640,84 @@
         e.preventDefault();
         const username = ($('main-auth-user')?.value || '').trim();
         const password = $('main-auth-pass')?.value || '';
+        const email = ($('main-auth-email')?.value || '').trim().toLowerCase();
         const name = ($('main-auth-name')?.value || '').trim();
+        const otp = ($('main-auth-otp')?.value || '').trim();
+        const newPass = $('main-auth-newpass')?.value || '';
         const errBox = $('main-auth-error');
         const btn = $('main-auth-submit');
         if (errBox) { errBox.classList.add('hidden'); errBox.textContent = ''; }
-        if (!username || !password) {
-          if (errBox) { errBox.textContent = 'Enter your User ID and password.'; errBox.classList.remove('hidden'); }
-          return;
-        }
-        if (btn) { btn.disabled = true; btn.textContent = mainAuthMode === 'signup' ? 'Creating Account…' : 'Signing In…'; }
+
+        const showErr = (msg) => {
+          if (errBox) { errBox.textContent = msg; errBox.classList.remove('hidden'); }
+        };
+
         try {
-          const endpoint = mainAuthMode === 'signup' ? '/api/auth/signup' : '/api/auth/signin';
-          const body = mainAuthMode === 'signup' ? { username, password, name } : { username, password };
-          const res = await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
-          if (res.token) localStorage.setItem('neo_owner_token', res.token);
-          if ($('main-auth-pass')) $('main-auth-pass').value = '';
-          await syncMainAuthSession(true);
-          toast(`Signed in as @${res.username}`, 'success');
+          if (mainAuthMode === 'signin') {
+            if (!username || !password) return showErr('Enter your User ID and password.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Signing In…'; }
+            const res = await api('/api/auth/signin', { method: 'POST', body: JSON.stringify({ username, password }) });
+            if (res.token) localStorage.setItem('neo_owner_token', res.token);
+            if ($('main-auth-pass')) $('main-auth-pass').value = '';
+            await syncMainAuthSession(true);
+            toast(`Signed in as @${res.username}`, 'success');
+          } else if (mainAuthMode === 'signup' && mainAuthStep === 'details') {
+            const emailErr = validateTrustedEmailClient(email);
+            if (emailErr) return showErr(emailErr);
+            if (!username || username.length < 3) return showErr('Enter a valid User ID (at least 3 characters).');
+            if (!password || password.length < 4) return showErr('Password must be at least 4 characters.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Sending Verification Code…'; }
+            const res = await api('/api/auth/request-signup-otp', {
+              method: 'POST',
+              body: JSON.stringify({ email, username, password, name }),
+            });
+            if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Code sent to ${res.email || email}`;
+            setMainAuthTab('signup', 'otp');
+            startResendCountdown($('main-auth-resend'), 30);
+            toast(`6-digit verification code sent to ${email}`, 'success');
+          } else if (mainAuthMode === 'signup' && mainAuthStep === 'otp') {
+            if (!/^\d{6}$/.test(otp)) return showErr('Enter the 6-digit verification code sent to your email.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Verifying & Creating…'; }
+            const res = await api('/api/auth/signup', {
+              method: 'POST',
+              body: JSON.stringify({ email, username, password, name, otp }),
+            });
+            if (res.token) localStorage.setItem('neo_owner_token', res.token);
+            if ($('main-auth-pass')) $('main-auth-pass').value = '';
+            if ($('main-auth-otp')) $('main-auth-otp').value = '';
+            await syncMainAuthSession(true);
+            toast(`Email verified! Signed in as @${res.username}`, 'success');
+          } else if (mainAuthMode === 'forgot' && mainAuthStep === 'details') {
+            const emailErr = validateTrustedEmailClient(email);
+            if (emailErr) return showErr(emailErr);
+            if (btn) { btn.disabled = true; btn.textContent = 'Sending Reset Code…'; }
+            await api('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+            if ($('main-auth-otp-target')) $('main-auth-otp-target').textContent = `Reset code sent to ${email}`;
+            setMainAuthTab('forgot', 'otp');
+            startResendCountdown($('main-auth-resend'), 30);
+            toast(`Password reset code sent to ${email}`, 'info');
+          } else if (mainAuthMode === 'forgot' && mainAuthStep === 'otp') {
+            if (!/^\d{6}$/.test(otp)) return showErr('Enter the 6-digit reset code from your email.');
+            if (!newPass || newPass.length < 4) return showErr('New password must be at least 4 characters.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Resetting Password…'; }
+            await api('/api/auth/reset-password', {
+              method: 'POST',
+              body: JSON.stringify({ email, otp, new_password: newPass }),
+            });
+            if ($('main-auth-otp')) $('main-auth-otp').value = '';
+            if ($('main-auth-newpass')) $('main-auth-newpass').value = '';
+            setMainAuthTab('signin', 'details');
+            toast('Password reset! Please sign in with your new password.', 'success');
+          }
         } catch (err) {
-          if (errBox) { errBox.textContent = cleanErrorMessage(err.message); errBox.classList.remove('hidden'); }
+          showErr(cleanErrorMessage(err.message));
         } finally {
-          if (btn) { btn.disabled = false; btn.textContent = mainAuthMode === 'signup' ? 'Create Account' : 'Sign In'; }
+          if (btn) {
+            btn.disabled = false;
+            if (mainAuthMode === 'forgot') btn.textContent = mainAuthStep === 'otp' ? 'Reset Password' : 'Send Reset Code →';
+            else if (mainAuthMode === 'signup') btn.textContent = mainAuthStep === 'otp' ? 'Verify & Create Account →' : 'Send Verification Code →';
+            else btn.textContent = 'Sign In';
+          }
         }
       });
     }

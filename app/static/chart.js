@@ -1049,11 +1049,6 @@
       if (pane.chart) {
         try { pane.chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (_) {}
       }
-      try {
-        if (ev.pointerId !== undefined && ev.currentTarget && ev.currentTarget.setPointerCapture) {
-          ev.currentTarget.setPointerCapture(ev.pointerId);
-        }
-      } catch (_) {}
       window.addEventListener('pointermove', onMove, { passive: false });
       window.addEventListener('pointerup', onEnd);
       window.addEventListener('pointercancel', onEnd);
@@ -3580,25 +3575,134 @@
     const tabSignup = $('tab-auth-signup');
     const formSignin = $('auth-signin-form');
     const formSignup = $('auth-signup-form');
+    const formForgot = $('auth-forgot-form');
     const signinErr = $('signin-error-msg');
     const signupErr = $('signup-error-msg');
+    const forgotErr = $('forgot-error-msg');
 
     const accBtn = $('ex-account-btn');
     const accMenu = $('ex-account-menu');
     const btnLogout = $('btn-logout');
     const sessionTimerText = $('session-timer-text');
 
+    let signupStage = 'details'; // 'details' | 'otp'
+    let forgotStage = 'email';   // 'email' | 'otp'
+    let resendCountdownTimer = null;
+
+    const TRUSTED_DOMAINS = new Set([
+      'gmail.com', 'googlemail.com',
+      'outlook.com', 'outlook.in', 'hotmail.com', 'hotmail.co.uk', 'live.com', 'live.in', 'msn.com',
+      'yahoo.com', 'yahoo.in', 'yahoo.co.in', 'yahoo.co.uk', 'ymail.com', 'rocketmail.com',
+      'icloud.com', 'me.com', 'mac.com',
+      'proton.me', 'protonmail.com', 'pm.me',
+      'tuta.io', 'tutanota.com', 'tuta.com',
+      'zoho.com', 'zohomail.com', 'zohomail.in',
+      'rediffmail.com', 'aol.com', 'gmx.com', 'gmx.net', 'mail.com', 'fastmail.com', 'hey.com',
+    ]);
+    const DISPOSABLE_DOMAINS = new Set([
+      'mailinator.com', 'yopmail.com', 'yopmail.fr', 'tempmail.com', 'temp-mail.org', 'temp-mail.io',
+      '10minutemail.com', '10minutemail.net', 'guerrillamail.com', 'guerrillamail.info', 'guerrillamailblock.com',
+      'sharklasers.com', 'grr.la', 'trashmail.com', 'throwawaymail.com', 'maildrop.cc', 'getnada.com',
+      'mohmal.com', 'dispostable.com', 'fakeinbox.com', 'mintemail.com', 'mailnesia.com', 'emailondeck.com',
+      'mytemp.email', 'tempmailo.com', 'burnermail.io', 'inboxkitten.com', 'dropmail.me', 'harakirimail.com',
+      'tmpmail.org', 'tmpmail.net', 'mailcatch.com', 'spambog.com', 'mail.tm', 'moakt.com',
+      'trader.local', 'localhost', 'example.com', 'example.org', 'example.net', 'test.com', 'fake.com',
+    ]);
+    const TYPO_MAP = {
+      'gmal.com': 'gmail.com', 'gmial.com': 'gmail.com', 'gamil.com': 'gmail.com',
+      'gnail.com': 'gmail.com', 'gmail.con': 'gmail.com', 'yaho.com': 'yahoo.com',
+      'yahooo.com': 'yahoo.com', 'hotmal.com': 'hotmail.com', 'outlok.com': 'outlook.com',
+    };
+
+    function validateTrustedEmailClient(raw) {
+      const email = String(raw || '').trim().toLowerCase();
+      if (!email || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,24}$/.test(email) || email.includes('..')) {
+        return 'Please enter a valid email address (e.g. name@gmail.com).';
+      }
+      const dom = email.split('@')[1] || '';
+      if (TYPO_MAP[dom]) return `Did you mean @${TYPO_MAP[dom]}? Please check your email domain.`;
+      if (DISPOSABLE_DOMAINS.has(dom)) return 'Disposable or test emails are not allowed. Use a real trusted email (Gmail, Outlook, Yahoo, iCloud, Proton, Zoho).';
+      const isEdu = ['.edu', '.edu.in', '.ac.in', '.ac.uk', '.edu.au'].some(s => dom.endsWith(s) && dom.length > s.length + 1);
+      if (!TRUSTED_DOMAINS.has(dom) && !isEdu) {
+        return 'Untrusted email domain. Only trusted providers (Gmail, Outlook, Yahoo, iCloud, Proton, Zoho, Rediffmail, .edu) are allowed.';
+      }
+      return '';
+    }
+
+    function setResendTimer(btn, sec = 30) {
+      if (!btn) return;
+      clearInterval(resendCountdownTimer);
+      let left = sec;
+      btn.disabled = true;
+      btn.textContent = `Resend in ${left}s`;
+      resendCountdownTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(resendCountdownTimer);
+          btn.disabled = false;
+          btn.textContent = 'Resend Code';
+        } else {
+          btn.textContent = `Resend in ${left}s`;
+        }
+      }, 1000);
+    }
+
+    function setSignupStage(stage) {
+      signupStage = stage === 'otp' ? 'otp' : 'details';
+      const isOtp = signupStage === 'otp';
+      if ($('signup-details-wrap')) $('signup-details-wrap').classList.toggle('hidden', isOtp);
+      if ($('signup-otp-step')) $('signup-otp-step').classList.toggle('hidden', !isOtp);
+      if (signupErr) signupErr.classList.add('hidden');
+      const btn = $('btn-signup-submit');
+      if (btn) {
+        btn.innerHTML = isOtp
+          ? '<span>Verify &amp; Create Account</span><span class="btn-arrow">&rarr;</span>'
+          : '<span>Send Verification Code</span><span class="btn-arrow">&rarr;</span>';
+      }
+      if (isOtp && $('signup-otp-input')) {
+        $('signup-otp-input').value = '';
+        setTimeout(() => $('signup-otp-input')?.focus(), 60);
+      }
+    }
+
+    function setForgotStage(stage) {
+      forgotStage = stage === 'otp' ? 'otp' : 'email';
+      const isOtp = forgotStage === 'otp';
+      if ($('forgot-email-group')) $('forgot-email-group').classList.toggle('hidden', isOtp);
+      if ($('forgot-otp-step')) $('forgot-otp-step').classList.toggle('hidden', !isOtp);
+      if (forgotErr) forgotErr.classList.add('hidden');
+      const btn = $('btn-forgot-submit');
+      if (btn) {
+        btn.innerHTML = isOtp
+          ? '<span>Reset Password</span><span class="btn-arrow">&rarr;</span>'
+          : '<span>Send Reset Code</span><span class="btn-arrow">&rarr;</span>';
+      }
+      if (isOtp && $('forgot-otp-input')) {
+        $('forgot-otp-input').value = '';
+        setTimeout(() => $('forgot-otp-input')?.focus(), 60);
+      }
+    }
+
     function switchAuthTab(mode) {
       if (signinErr) signinErr.classList.add('hidden');
       if (signupErr) signupErr.classList.add('hidden');
-      if (tabSignin) tabSignin.classList.toggle('active', mode === 'signin');
-      if (tabSignup) tabSignup.classList.toggle('active', mode === 'signup');
-      if (formSignin) formSignin.classList.toggle('hidden', mode !== 'signin');
-      if (formSignup) formSignup.classList.toggle('hidden', mode !== 'signup');
+      if (forgotErr) forgotErr.classList.add('hidden');
+      const isSignup = mode === 'signup';
+      const isForgot = mode === 'forgot';
+      if (tabSignin) tabSignin.classList.toggle('active', !isSignup);
+      if (tabSignup) tabSignup.classList.toggle('active', isSignup);
+      if (formSignin) formSignin.classList.toggle('hidden', isSignup || isForgot);
+      if (formSignup) formSignup.classList.toggle('hidden', !isSignup);
+      if (formForgot) formForgot.classList.toggle('hidden', !isForgot);
+      if (isSignup) setSignupStage('details');
+      if (isForgot) setForgotStage('email');
     }
 
     if (tabSignin) tabSignin.addEventListener('click', () => switchAuthTab('signin'));
     if (tabSignup) tabSignup.addEventListener('click', () => switchAuthTab('signup'));
+    if ($('btn-open-forgot')) $('btn-open-forgot').addEventListener('click', () => switchAuthTab('forgot'));
+    if ($('btn-back-to-signin')) $('btn-back-to-signin').addEventListener('click', () => switchAuthTab('signin'));
+    if ($('btn-edit-signup-email')) $('btn-edit-signup-email').addEventListener('click', () => setSignupStage('details'));
 
     if (accBtn && accMenu) {
       accBtn.addEventListener('click', e => {
@@ -3714,26 +3818,126 @@
       });
     }
 
+    if ($('btn-resend-signup-otp')) {
+      $('btn-resend-signup-otp').addEventListener('click', async () => {
+        const email = ($('signup-email')?.value || '').trim().toLowerCase();
+        if (!email) return;
+        try {
+          await api('/api/auth/resend-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email, purpose: 'signup' }),
+          });
+          setResendTimer($('btn-resend-signup-otp'), 30);
+          toast(`✅ New 6-digit code sent to ${email}`);
+        } catch (err) {
+          if (signupErr) {
+            signupErr.textContent = err.message;
+            signupErr.classList.remove('hidden');
+          }
+        }
+      });
+    }
+
     if (formSignup) {
       formSignup.addEventListener('submit', async e => {
         e.preventDefault();
         if (signupErr) signupErr.classList.add('hidden');
         const uid = ($('signup-userid')?.value || '').trim();
         const pwd = $('signup-password')?.value || '';
-        const email = ($('signup-email')?.value || '').trim();
+        const email = ($('signup-email')?.value || '').trim().toLowerCase();
+        const otp = ($('signup-otp-input')?.value || '').trim();
+        const btn = $('btn-signup-submit');
+
         try {
-          const res = await api('/api/auth/signup', {
-            method: 'POST',
-            body: JSON.stringify({ username: uid, password: pwd, email }),
-          });
-          if (res && res.ok) {
-            onAuthenticatedSuccess(res);
-            toast('✅ Account created! Choose Forex or Indian markets to begin.');
+          if (signupStage === 'details') {
+            const emailErr = validateTrustedEmailClient(email);
+            if (emailErr) throw new Error(emailErr);
+            if (!uid || uid.length < 3) throw new Error('Choose a valid User ID (minimum 3 characters).');
+            if (!pwd || pwd.length < 4) throw new Error('Password must be at least 4 characters.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Sending Verification Code...'; }
+            const res = await api('/api/auth/request-signup-otp', {
+              method: 'POST',
+              body: JSON.stringify({ username: uid, password: pwd, email }),
+            });
+            if ($('signup-otp-target')) $('signup-otp-target').textContent = `Code sent to ${res.email || email}`;
+            setSignupStage('otp');
+            setResendTimer($('btn-resend-signup-otp'), 30);
+            toast(`📧 6-digit verification code sent to ${email}`);
+          } else {
+            if (!/^\d{6}$/.test(otp)) throw new Error('Enter the 6-digit verification code from your email.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Verifying Email...'; }
+            const res = await api('/api/auth/signup', {
+              method: 'POST',
+              body: JSON.stringify({ username: uid, password: pwd, email, otp }),
+            });
+            if (res && res.ok) {
+              if ($('signup-password')) $('signup-password').value = '';
+              if ($('signup-otp-input')) $('signup-otp-input').value = '';
+              onAuthenticatedSuccess(res);
+              toast('✅ Email verified & account created! Choose Forex or Indian markets.');
+            }
           }
         } catch (err) {
           if (signupErr) {
             signupErr.textContent = err.message;
             signupErr.classList.remove('hidden');
+          }
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = signupStage === 'otp'
+              ? '<span>Verify &amp; Create Account</span><span class="btn-arrow">&rarr;</span>'
+              : '<span>Send Verification Code</span><span class="btn-arrow">&rarr;</span>';
+          }
+        }
+      });
+    }
+
+    if (formForgot) {
+      formForgot.addEventListener('submit', async e => {
+        e.preventDefault();
+        if (forgotErr) forgotErr.classList.add('hidden');
+        const email = ($('forgot-email')?.value || '').trim().toLowerCase();
+        const otp = ($('forgot-otp-input')?.value || '').trim();
+        const newPw = $('forgot-newpass')?.value || '';
+        const btn = $('btn-forgot-submit');
+
+        try {
+          if (forgotStage === 'email') {
+            const emailErr = validateTrustedEmailClient(email);
+            if (emailErr) throw new Error(emailErr);
+            if (btn) { btn.disabled = true; btn.textContent = 'Sending Reset Code...'; }
+            await api('/api/auth/forgot-password', {
+              method: 'POST',
+              body: JSON.stringify({ email }),
+            });
+            if ($('forgot-otp-target')) $('forgot-otp-target').textContent = `Reset code sent to ${email}`;
+            setForgotStage('otp');
+            toast(`📧 Reset code sent to ${email}`);
+          } else {
+            if (!/^\d{6}$/.test(otp)) throw new Error('Enter the 6-digit reset code from your email.');
+            if (!newPw || newPw.length < 4) throw new Error('New password must be at least 4 characters.');
+            if (btn) { btn.disabled = true; btn.textContent = 'Resetting Password...'; }
+            await api('/api/auth/reset-password', {
+              method: 'POST',
+              body: JSON.stringify({ email, otp, new_password: newPw }),
+            });
+            if ($('forgot-otp-input')) $('forgot-otp-input').value = '';
+            if ($('forgot-newpass')) $('forgot-newpass').value = '';
+            switchAuthTab('signin');
+            toast('✅ Password reset! Sign in with your new password.');
+          }
+        } catch (err) {
+          if (forgotErr) {
+            forgotErr.textContent = err.message;
+            forgotErr.classList.remove('hidden');
+          }
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = forgotStage === 'otp'
+              ? '<span>Reset Password</span><span class="btn-arrow">&rarr;</span>'
+              : '<span>Send Reset Code</span><span class="btn-arrow">&rarr;</span>';
           }
         }
       });

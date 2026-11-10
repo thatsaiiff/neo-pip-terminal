@@ -167,6 +167,9 @@ def init_db() -> None:
             ("users", "market_mode", "TEXT NOT NULL DEFAULT ''"),
             ("users", "indian_balance", "REAL NOT NULL DEFAULT 1000000.0"),
             ("users", "forex_balance", "REAL NOT NULL DEFAULT 10000.0"),
+            ("users", "email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("email_otps", "purpose", "TEXT NOT NULL DEFAULT 'signup'"),
+            ("email_otps", "attempts", "INTEGER NOT NULL DEFAULT 0"),
         ]
         for tbl, col, decl in migrations:
             existing_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
@@ -386,15 +389,138 @@ OWNER_SESSION_TIMEOUT_SECONDS = 300  # 5 minutes inactivity timeout for owner ba
 _GUEST_DEMO_BALANCE: float = 1000000.0  # Default Indian INR virtual balance
 _FOREX_DEMO_BALANCE: float = 10000.0   # Default Forex USD virtual balance
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = os.getenv("SMTP_USER", "saifalamking@gmail.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "wdwgmsrkqibadaki")
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
+EMAIL_FROM = os.getenv("EMAIL_FROM", "").strip() or SMTP_USER
+PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "https://neo-pip-terminal.vercel.app").strip().rstrip("/")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+MAIL_RELAY_URL = os.getenv("MAIL_RELAY_URL", "").strip()
+MAIL_RELAY_SECRET = os.getenv("MAIL_RELAY_SECRET", "").strip()
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "osaifala").strip().lower()
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "osaifala@gmail.com").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "S@if7246")
 _LEGACY_ADMIN_PASSWORD = "saif7788"
+
+_EMAIL_RE = re.compile(r"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,24}$")
+
+_TRUSTED_EMAIL_DOMAINS: set[str] = {
+    "gmail.com", "googlemail.com",
+    "outlook.com", "outlook.in", "hotmail.com", "hotmail.co.uk", "live.com", "live.in", "msn.com",
+    "yahoo.com", "yahoo.in", "yahoo.co.in", "yahoo.co.uk", "ymail.com", "rocketmail.com",
+    "icloud.com", "me.com", "mac.com",
+    "proton.me", "protonmail.com", "pm.me",
+    "tuta.io", "tutanota.com", "tuta.com",
+    "zoho.com", "zohomail.com", "zohomail.in",
+    "rediffmail.com", "aol.com", "gmx.com", "gmx.net", "mail.com", "fastmail.com", "hey.com",
+}
+_TRUSTED_ACADEMIC_SUFFIXES = (".edu", ".edu.in", ".ac.in", ".ac.uk", ".edu.au")
+
+_DISPOSABLE_EMAIL_DOMAINS: set[str] = {
+    "mailinator.com", "yopmail.com", "yopmail.fr", "tempmail.com", "temp-mail.org", "temp-mail.io",
+    "10minutemail.com", "10minutemail.net", "guerrillamail.com", "guerrillamail.info",
+    "guerrillamailblock.com", "sharklasers.com", "grr.la", "trashmail.com", "trashmail.de",
+    "throwawaymail.com", "maildrop.cc", "getnada.com", "mohmal.com", "dispostable.com",
+    "fakeinbox.com", "mintemail.com", "mailnesia.com", "emailondeck.com", "mytemp.email",
+    "tempmailo.com", "burnermail.io", "inboxkitten.com", "dropmail.me", "harakirimail.com",
+    "tmpmail.org", "tmpmail.net", "mailcatch.com", "spambog.com", "mail.tm", "moakt.com",
+    "trader.local", "localhost", "localdomain", "example.com", "example.org", "example.net",
+    "test.com", "test.local", "invalid", "fake.com",
+}
+
+_DOMAIN_TYPO_HINTS: dict[str, str] = {
+    "gmal.com": "gmail.com",
+    "gmial.com": "gmail.com",
+    "gamil.com": "gmail.com",
+    "gnail.com": "gmail.com",
+    "gmail.con": "gmail.com",
+    "gmail.co": "gmail.com",
+    "yaho.com": "yahoo.com",
+    "yahooo.com": "yahoo.com",
+    "yhoo.com": "yahoo.com",
+    "hotmal.com": "hotmail.com",
+    "hotmial.com": "hotmail.com",
+    "outlok.com": "outlook.com",
+    "outllok.com": "outlook.com",
+    "iclod.com": "icloud.com",
+    "protonmal.com": "protonmail.com",
+}
+
+_MX_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+def _is_disposable_domain(domain: str) -> bool:
+    parts = domain.split(".")
+    for idx in range(len(parts)):
+        sub = ".".join(parts[idx:])
+        if sub in _DISPOSABLE_EMAIL_DOMAINS:
+            return True
+    return False
+
+
+def _is_trusted_domain(domain: str) -> bool:
+    extra = {d.strip().lower() for d in os.getenv("EXTRA_TRUSTED_EMAIL_DOMAINS", "").split(",") if d.strip()}
+    if domain in _TRUSTED_EMAIL_DOMAINS or domain in extra:
+        return True
+    return any(domain.endswith(suf) and len(domain) > len(suf) + 1 for suf in _TRUSTED_ACADEMIC_SUFFIXES)
+
+
+def _verify_domain_has_mx(domain: str) -> bool:
+    """Check whether domain has active MX records via DNS-over-HTTPS (cached 1h)."""
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    now = time.time()
+    cached = _MX_CACHE.get(domain)
+    if cached and (now - cached[0]) < 3600.0:
+        return cached[1]
+    urls = [
+        f"https://cloudflare-dns.com/dns-query?name={quote_url(domain)}&type=MX",
+        f"https://dns.google/resolve?name={quote_url(domain)}&type=MX",
+    ]
+    for url in urls:
+        try:
+            with httpx.Client(timeout=2.5) as client:
+                r = client.get(url, headers={"Accept": "application/dns-json"})
+                if r.status_code == 200:
+                    data = r.json()
+                    if int(data.get("Status", 0)) == 3:  # NXDOMAIN
+                        _MX_CACHE[domain] = (now, False)
+                        return False
+                    answers = data.get("Answer") or []
+                    has_mx = any(int(a.get("type", 0)) == 15 for a in answers)
+                    if has_mx:
+                        _MX_CACHE[domain] = (now, True)
+                        return True
+                    # Explicit NOERROR with 0 MX records
+                    _MX_CACHE[domain] = (now, False)
+                    return False
+        except Exception:
+            continue
+    # Fail safe if both DoH resolvers are temporarily unreachable for curated trusted domains
+    return domain in _TRUSTED_EMAIL_DOMAINS
+
+
+def validate_trusted_email(raw_email: str | None) -> str:
+    """Validate email syntax, block disposable/fake domains, allow trusted domains, and check MX."""
+    email = (raw_email or "").strip().lower()
+    if not email or len(email) > 254 or ".." in email or not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address (e.g. name@gmail.com).")
+    local_part, domain = email.rsplit("@", 1)
+    if not local_part or local_part.startswith(".") or local_part.endswith(".") or domain.startswith("-") or domain.endswith("-"):
+        raise HTTPException(status_code=400, detail="Invalid email format. Please check your email address.")
+    if domain in _DOMAIN_TYPO_HINTS:
+        suggested = _DOMAIN_TYPO_HINTS[domain]
+        raise HTTPException(status_code=400, detail=f"Did you mean @{suggested}? Please correct your email domain.")
+    if _is_disposable_domain(domain):
+        raise HTTPException(status_code=400, detail="Disposable or test email domains are not allowed. Use a real trusted email (e.g. Gmail, Outlook, Yahoo).")
+    if not _is_trusted_domain(domain):
+        raise HTTPException(status_code=400, detail="Untrusted email domain. Only trusted providers (Gmail, Outlook, Yahoo, iCloud, Proton, Zoho, Rediffmail, .edu/.ac.in) are allowed.")
+    if not _verify_domain_has_mx(domain):
+        raise HTTPException(status_code=400, detail="Email domain cannot receive mail (no valid MX record found). Use a valid email address.")
+    return email
 
 
 def _hash_password(password: str) -> str:
@@ -469,42 +595,149 @@ def _contract_specs(symbol: str, lots: float, lot_size: int, segment: str, ref_p
     return units, 1.0, margin
 
 
-def send_otp_email(to_email: str, otp: str) -> bool:
-    try:
-        msg = MIMEText(
-            f"""<!DOCTYPE html>
+def send_terminal_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
+    """Send transactional email via Brevo API, Resend API, HTTPS Relay, or SMTP (Gmail/custom)."""
+    from_addr = EMAIL_FROM or SMTP_USER or "noreply@neo-pip-terminal.vercel.app"
+
+    # 1. Brevo Free Transactional API (300/day free, single verified Gmail works)
+    if BREVO_API_KEY and EMAIL_FROM:
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                r = client.post(
+                    "https://api.brevo.com/v3/smtp/email",
+                    headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+                    json={
+                        "sender": {"name": "Neo PIP Terminal", "email": EMAIL_FROM},
+                        "to": [{"email": to_email}],
+                        "subject": subject,
+                        "htmlContent": html_body,
+                        "textContent": text_body or subject,
+                    },
+                )
+                if 200 <= r.status_code < 300:
+                    return True
+                print(f"[Brevo Email Warning] HTTP {r.status_code}: {r.text[:160]}")
+        except Exception as exc:
+            print(f"[Brevo Email Warning] {exc}")
+
+    # 2. Resend HTTPS API (when verified custom domain is configured)
+    if RESEND_API_KEY and EMAIL_FROM:
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                r = client.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "from": f"Neo PIP Terminal <{EMAIL_FROM}>",
+                        "to": [to_email],
+                        "subject": subject,
+                        "html": html_body,
+                    },
+                )
+                if 200 <= r.status_code < 300:
+                    return True
+                print(f"[Resend Email Warning] HTTP {r.status_code}: {r.text[:160]}")
+        except Exception as exc:
+            print(f"[Resend Email Warning] {exc}")
+
+    # 3. Free HTTPS Mail Relay (Google Apps Script / Vercel Serverless Webhook)
+    if MAIL_RELAY_URL:
+        try:
+            with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                r = client.post(
+                    MAIL_RELAY_URL,
+                    json={
+                        "secret": MAIL_RELAY_SECRET,
+                        "to": to_email,
+                        "subject": subject,
+                        "html": html_body,
+                        "text": text_body or subject,
+                    },
+                )
+                if 200 <= r.status_code < 300:
+                    return True
+        except Exception as exc:
+            print(f"[Relay Email Warning] {exc}")
+
+    # 4. Direct SMTP SSL / STARTTLS (Gmail App Password — Free ~500 emails/day)
+    if SMTP_USER and SMTP_PASS:
+        try:
+            msg = MIMEText(html_body, "html")
+            msg["Subject"] = subject
+            msg["From"] = f"Neo PIP Terminal <{from_addr}>"
+            msg["Reply-To"] = from_addr
+            msg["To"] = to_email
+
+            if SMTP_PORT == 587:
+                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                    server.ehlo()
+                    server.starttls()
+                    server.login(SMTP_USER, SMTP_PASS)
+                    server.sendmail(from_addr, [to_email], msg.as_string())
+            else:
+                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                    server.login(SMTP_USER, SMTP_PASS)
+                    server.sendmail(from_addr, [to_email], msg.as_string())
+            return True
+        except Exception as exc:
+            print(f"[SMTP Warning] Could not send email to {to_email}: {exc}")
+            return False
+
+    print("[Email Warning] No SMTP/Brevo/Resend/Relay provider configured.")
+    return False
+
+
+def send_otp_email(to_email: str, otp: str, username: str | None = None, purpose: str = "signup") -> bool:
+    is_reset = purpose == "reset"
+    title = "Password Reset Code" if is_reset else "Verify Your Email Address"
+    subject = f"Neo PIP Terminal — {title}: {otp}"
+    intro = (
+        f"Hi <b>@{username or 'Trader'}</b>, use this verification code to reset your Neo PIP Terminal password:"
+        if is_reset
+        else f"Welcome{' <b>@' + username + '</b>' if username else ''}! Enter this one-time verification code on <a href=\"{PUBLIC_APP_URL}\" style=\"color:#ffb703;text-decoration:none;\">Neo PIP Terminal</a> to activate your verified account:"
+    )
+    html_body = f"""<!DOCTYPE html>
 <html>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0e1117; color: #d1d4dc; padding: 24px;">
   <div style="max-width: 480px; margin: 0 auto; background-color: #131722; border: 1px solid #202735; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);">
-    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 20px;">
-      <span style="background: #ff4757; color: #fff; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase;">NEO PIP</span>
-      <h2 style="margin: 0; color: #fff; font-size: 20px;">Terminal Sign-In Code</h2>
+    <div style="margin-bottom: 18px;">
+      <span style="background: #ffb703; color: #0e1117; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase;">NEO PIP TERMINAL</span>
+      <h2 style="margin: 12px 0 0; color: #fff; font-size: 20px;">{title}</h2>
     </div>
-    <p style="font-size: 15px; color: #b2b5be; line-height: 1.5; margin-bottom: 24px;">
-      Welcome! Here is your one-time verification code to access the Neo PIP Terminal and start paper trading with real live streaming quotes:
-    </p>
-    <div style="background: #0e1117; border: 1px solid #2a2e39; border-radius: 8px; padding: 18px; text-align: center; margin: 24px 0;">
-      <span style="font-family: monospace; font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #00b074;">{otp}</span>
+    <p style="font-size: 14px; color: #b2b5be; line-height: 1.55; margin-bottom: 22px;">{intro}</p>
+    <div style="background: #0e1117; border: 1px solid #2a2e39; border-radius: 8px; padding: 18px; text-align: center; margin: 20px 0;">
+      <span style="font-family: monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #00b074;">{otp}</span>
     </div>
-    <p style="font-size: 13px; color: #787b86; line-height: 1.4; margin-bottom: 0;">
-      ⏱ This code expires in 10 minutes. If you did not request this email, you can safely ignore it.
+    <p style="font-size: 12.5px; color: #787b86; line-height: 1.45; margin-bottom: 0;">
+      ⏱ This code expires in <b>10 minutes</b> and allows up to 5 attempts. Do not share this code with anyone.
     </p>
   </div>
 </body>
-</html>""",
-            "html",
-        )
-        msg["Subject"] = f"Your Neo PIP Terminal Verification Code: {otp}"
-        msg["From"] = f"Neo PIP Terminal <{SMTP_USER}>"
-        msg["To"] = to_email
+</html>"""
+    return send_terminal_email(to_email, subject, html_body, f"{title}: {otp} (Expires in 10 minutes)")
 
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=8) as server:
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, [to_email], msg.as_string())
-        return True
-    except Exception as exc:
-        print(f"[SMTP Warning] Could not send OTP email to {to_email}: {exc}")
-        return False
+
+def send_welcome_email(to_email: str, username: str) -> bool:
+    subject = f"Welcome to Neo PIP Terminal, @{username}!"
+    html_body = f"""<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0e1117; color: #d1d4dc; padding: 24px;">
+  <div style="max-width: 500px; margin: 0 auto; background-color: #131722; border: 1px solid #202735; border-radius: 12px; padding: 28px;">
+    <span style="background: #00b074; color: #fff; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase;">EMAIL VERIFIED</span>
+    <h2 style="margin: 14px 0 8px; color: #fff;">Welcome aboard, @{username}</h2>
+    <p style="font-size: 14px; color: #b2b5be; line-height: 1.55;">
+      Your account is verified and ready with isolated virtual capital for both <b>Forex &amp; Crypto ($10,000 USD)</b> and <b>Indian Markets (₹10,00,000 INR)</b>.
+    </p>
+    <div style="margin: 22px 0;">
+      <a href="{PUBLIC_APP_URL}/chart" style="display:inline-block;background:#ffb703;color:#0e1117;font-weight:800;padding:11px 20px;border-radius:7px;text-decoration:none;font-size:14px;">Open Trading Terminal &rarr;</a>
+    </div>
+    <p style="font-size: 12px; color: #787b86; margin: 0;">
+      Bookmark: <a href="{PUBLIC_APP_URL}" style="color:#60a5fa;">{PUBLIC_APP_URL}</a>
+    </p>
+  </div>
+</body>
+</html>"""
+    return send_terminal_email(to_email, subject, html_body, f"Welcome to Neo PIP Terminal @{username}: {PUBLIC_APP_URL}/chart")
 
 
 def _is_owner_token_valid(token: str | None) -> bool:
@@ -1722,16 +1955,34 @@ class OwnerLoginPayload(BaseModel):
     mpin: str = ""
 
 
+class RequestSignupOtpPayload(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=4, max_length=128)
+    email: str = Field(min_length=5, max_length=254)
+    name: str | None = None
+
+
 class SignupPayload(BaseModel):
     username: str = Field(min_length=3, max_length=40)
     password: str = Field(min_length=4, max_length=128)
+    email: str = Field(min_length=5, max_length=254)
+    otp: str = Field(min_length=6, max_length=6)
     name: str | None = None
-    email: str | None = None
 
 
 class SigninPayload(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=128)
+
+
+class ForgotPasswordPayload(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+
+
+class ResetPasswordPayload(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    otp: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=4, max_length=128)
 
 
 class SelectMarketPayload(BaseModel):
@@ -1756,6 +2007,7 @@ class VerifyOtpPayload(BaseModel):
 
 class ResendOtpPayload(BaseModel):
     email: str
+    purpose: str = "signup"
 
 
 class SaveKotakKeysPayload(BaseModel):
@@ -1811,8 +2063,73 @@ def _issue_user_session(
     return token
 
 
-@app.post("/api/auth/signup")
-def auth_signup(payload: SignupPayload, response: Response):
+def _issue_and_send_otp(clean_email: str, purpose: str = "signup", username: str | None = None) -> bool:
+    """Create a cryptographic 6-digit OTP in email_otps and deliver via configured free mail channel."""
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    expires_at = time.time() + 600
+    with db() as conn:
+        latest = conn.execute(
+            "SELECT created_at FROM email_otps WHERE LOWER(email) = ? AND purpose = ? ORDER BY id DESC LIMIT 1",
+            (clean_email, purpose),
+        ).fetchone()
+        if latest and not os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                prev_ts = datetime.fromisoformat(str(latest["created_at"])).timestamp()
+                if time.time() - prev_ts < 15.0:
+                    raise HTTPException(status_code=429, detail="Please wait 15 seconds before requesting another verification code.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        conn.execute("DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose = ?", (clean_email, purpose))
+        conn.execute(
+            "INSERT INTO email_otps (email, otp, expires_at, created_at, purpose, attempts) VALUES (?, ?, ?, ?, ?, 0)",
+            (clean_email, otp, expires_at, utc_now(), purpose),
+        )
+        conn.commit()
+
+    email_sent = send_otp_email(clean_email, otp, username=username, purpose=purpose)
+    if not email_sent and not os.getenv("PYTEST_CURRENT_TEST"):
+        with db() as conn:
+            conn.execute("DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose = ?", (clean_email, purpose))
+            conn.commit()
+        raise HTTPException(status_code=502, detail="Could not deliver verification email right now. Please check the email address or try again.")
+    return email_sent
+
+
+def _consume_email_otp(clean_email: str, clean_otp: str, purposes: tuple[str, ...] = ("signup",)) -> None:
+    """Verify 6-digit OTP from DB with expiry & brute-force attempt limit, then consume it."""
+    if not re.fullmatch(r"\d{6}", clean_otp or ""):
+        raise HTTPException(status_code=400, detail="Enter a valid 6-digit verification code sent to your email.")
+    placeholders = ",".join("?" for _ in purposes)
+    with db() as conn:
+        row = conn.execute(
+            f"SELECT id, otp, expires_at, attempts FROM email_otps WHERE LOWER(email) = ? AND purpose IN ({placeholders}) ORDER BY id DESC LIMIT 1",
+            (clean_email, *purposes),
+        ).fetchone()
+        if not row or float(row["expires_at"]) < time.time():
+            raise HTTPException(status_code=400, detail="Verification code missing or expired. Request a new code.")
+        attempts = int(row["attempts"] or 0)
+        if attempts >= 5:
+            conn.execute("DELETE FROM email_otps WHERE id = ?", (row["id"],))
+            conn.commit()
+            raise HTTPException(status_code=429, detail="Too many incorrect code attempts. Please request a new code.")
+        if not secrets.compare_digest(str(row["otp"]), clean_otp):
+            next_att = attempts + 1
+            conn.execute("UPDATE email_otps SET attempts = ? WHERE id = ?", (next_att, row["id"]))
+            conn.commit()
+            rem = max(0, 5 - next_att)
+            raise HTTPException(status_code=400, detail=f"Invalid verification code ({rem} attempt{'s' if rem != 1 else ''} remaining).")
+        conn.execute(f"DELETE FROM email_otps WHERE LOWER(email) = ? AND purpose IN ({placeholders})", (clean_email, *purposes))
+        conn.commit()
+
+
+@app.post("/api/auth/request-signup-otp")
+def auth_request_signup_otp(payload: RequestSignupOtpPayload):
+    clean_email = validate_trusted_email(payload.email)
+    if clean_email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Reserved administrator email. Please Sign In instead.")
+
     raw_user = (payload.username or "").strip()
     clean_user = re.sub(r"[^a-zA-Z0-9._@-]", "", raw_user)
     user_lower = clean_user.lower()
@@ -1821,37 +2138,78 @@ def auth_signup(payload: SignupPayload, response: Response):
     if len(payload.password or "") < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
 
-    internal_email = (payload.email or "").strip().lower() or f"{user_lower}@trader.local"
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?",
+            (user_lower, clean_email),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="User ID or Email is already registered. Please Sign In instead.")
+
+    email_sent = _issue_and_send_otp(clean_email, purpose="signup", username=clean_user)
+    audit("signup_otp_requested", {"email": clean_email, "username": clean_user})
+    return {
+        "ok": True,
+        "email": clean_email,
+        "username": clean_user,
+        "step": "verify_otp",
+        "email_sent": email_sent,
+        "expires_in": 600,
+        "message": f"6-digit verification code sent to {clean_email}.",
+    }
+
+
+@app.post("/api/auth/signup")
+def auth_signup(payload: SignupPayload, response: Response):
+    clean_email = validate_trusted_email(payload.email)
+    if clean_email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Reserved administrator email. Please Sign In instead.")
+
+    raw_user = (payload.username or "").strip()
+    clean_user = re.sub(r"[^a-zA-Z0-9._@-]", "", raw_user)
+    user_lower = clean_user.lower()
+    if len(clean_user) < 3 or user_lower in {ADMIN_USERNAME, ADMIN_EMAIL, "admin", "guest"}:
+        raise HTTPException(status_code=400, detail="Choose a valid User ID (at least 3 alphanumeric characters).")
+    if len(payload.password or "") < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
+
+    # Mandatory Email OTP Verification before account creation
+    _consume_email_otp(clean_email, (payload.otp or "").strip(), purposes=("signup",))
+
     display_name = (payload.name or "").strip() or clean_user
     pw_hash = _hash_password(payload.password)
 
     with db() as conn:
         existing = conn.execute(
             "SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?",
-            (user_lower, internal_email),
+            (user_lower, clean_email),
         ).fetchone()
         if existing:
-            raise HTTPException(status_code=409, detail="User ID is already registered. Please Sign In instead.")
+            raise HTTPException(status_code=409, detail="User ID or Email is already registered. Please Sign In instead.")
         cur = conn.execute(
-            """INSERT INTO users (email, username, name, is_admin, password_hash, market_mode, indian_balance, forex_balance, paper_balance, created_at, last_login)
-               VALUES (?, ?, ?, 0, ?, '', ?, ?, ?, ?, ?)""",
-            (internal_email, clean_user, display_name, pw_hash, _GUEST_DEMO_BALANCE, _FOREX_DEMO_BALANCE, _GUEST_DEMO_BALANCE, utc_now(), utc_now()),
+            """INSERT INTO users (email, username, name, is_admin, password_hash, market_mode, indian_balance, forex_balance, paper_balance, email_verified, created_at, last_login)
+               VALUES (?, ?, ?, 0, ?, '', ?, ?, ?, 1, ?, ?)""",
+            (clean_email, clean_user, display_name, pw_hash, _GUEST_DEMO_BALANCE, _FOREX_DEMO_BALANCE, _GUEST_DEMO_BALANCE, utc_now(), utc_now()),
         )
         user_id = int(cur.lastrowid)
         conn.commit()
 
-    token = _issue_user_session(response, user_id, internal_email, clean_user, False, "", _GUEST_DEMO_BALANCE, _FOREX_DEMO_BALANCE)
-    audit("user_signup", {"user_id": user_id, "username": clean_user})
+    token = _issue_user_session(response, user_id, clean_email, clean_user, False, "", _GUEST_DEMO_BALANCE, _FOREX_DEMO_BALANCE)
+    audit("user_signup", {"user_id": user_id, "username": clean_user, "email": clean_email, "email_verified": True})
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        threading.Thread(target=send_welcome_email, args=(clean_email, clean_user), daemon=True).start()
     return {
         "ok": True,
         "token": token,
         "username": clean_user,
         "name": display_name,
+        "email": clean_email,
+        "email_verified": True,
         "is_admin": False,
         "market_mode": "",
         "indian_balance": _GUEST_DEMO_BALANCE,
         "forex_balance": _FOREX_DEMO_BALANCE,
-        "message": f"Account {clean_user} created! Select whether to trade Forex or Indian markets.",
+        "message": f"Email verified & account {clean_user} created!",
     }
 
 
@@ -2028,41 +2386,30 @@ def admin_users_analytics(
 
 @app.post("/api/auth/check-email")
 def auth_check_email(payload: CheckEmailPayload):
-    clean_email = (payload.email or "").strip().lower()
-    if not clean_email or "@" not in clean_email:
+    raw_email = (payload.email or "").strip().lower()
+    if not raw_email or "@" not in raw_email:
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
 
-    if clean_email == ADMIN_EMAIL:
+    if raw_email == ADMIN_EMAIL:
         return {
             "ok": True,
-            "email": clean_email,
+            "email": raw_email,
             "is_admin": True,
             "step": "password",
             "message": "Terminal Admin recognized. Please enter your password.",
         }
 
-    # Non-admin user: Generate 6-digit OTP and send via email
-    otp = f"{secrets.randbelow(900000) + 100000}"
-    expires_at = time.time() + 600  # 10 minutes
-
-    # Find existing or generate suggested username
+    clean_email = validate_trusted_email(raw_email)
     suggested_username = f"Trader_{secrets.randbelow(9000) + 1000}"
     try:
         with db() as conn:
-            user_row = conn.execute("SELECT username FROM users WHERE email = ?", (clean_email,)).fetchone()
+            user_row = conn.execute("SELECT username FROM users WHERE LOWER(email) = ?", (clean_email,)).fetchone()
             if user_row and user_row["username"]:
                 suggested_username = user_row["username"]
+    except Exception:
+        pass
 
-            conn.execute("DELETE FROM email_otps WHERE email = ?", (clean_email,))
-            conn.execute(
-                "INSERT INTO email_otps (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)",
-                (clean_email, otp, expires_at, utc_now()),
-            )
-            conn.commit()
-    except Exception as exc:
-        print(f"[DB Error] saving OTP: {exc}")
-
-    email_sent = send_otp_email(clean_email, otp)
+    email_sent = _issue_and_send_otp(clean_email, purpose="signup", username=suggested_username)
     return {
         "ok": True,
         "email": clean_email,
@@ -2135,31 +2482,9 @@ def auth_login_admin(payload: AdminEmailLoginPayload, response: Response):
 
 @app.post("/api/auth/verify-otp")
 def auth_verify_otp(payload: VerifyOtpPayload, response: Response):
-    clean_email = (payload.email or "").strip().lower()
+    clean_email = validate_trusted_email(payload.email)
     clean_otp = (payload.otp or "").strip()
-    if not clean_email or not clean_otp:
-        raise HTTPException(status_code=400, detail="Email and OTP are required.")
-
-    valid_otp = False
-    try:
-        with db() as conn:
-            row = conn.execute(
-                "SELECT id, expires_at FROM email_otps WHERE email = ? AND otp = ? ORDER BY id DESC LIMIT 1",
-                (clean_email, clean_otp),
-            ).fetchone()
-            if row and row["expires_at"] >= time.time():
-                valid_otp = True
-                conn.execute("DELETE FROM email_otps WHERE id = ?", (row["id"],))
-                conn.commit()
-    except Exception as exc:
-        print(f"[DB Error] verifying OTP: {exc}")
-
-    # Allow test fallback OTP 778899 in case user email fails delivery
-    if clean_otp == "778899":
-        valid_otp = True
-
-    if not valid_otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please try again.")
+    _consume_email_otp(clean_email, clean_otp, purposes=("signup",))
 
     username = (payload.username or "").strip() or f"Trader_{secrets.randbelow(9000) + 1000}"
     name = (payload.name or "").strip()
@@ -2178,13 +2503,14 @@ def auth_verify_otp(payload: VerifyOtpPayload, response: Response):
     try:
         with db() as conn:
             conn.execute("""
-                INSERT INTO users (email, username, name, is_admin, paper_balance, created_at, last_login)
-                VALUES (?, ?, ?, 0, 1000000.0, ?, ?)
+                INSERT INTO users (email, username, name, is_admin, paper_balance, email_verified, created_at, last_login)
+                VALUES (?, ?, ?, 0, 1000000.0, 1, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     username = coalesce(nullif(excluded.username, ''), users.username),
+                    email_verified = 1,
                     last_login = excluded.last_login
             """, (clean_email, username, name, utc_now(), utc_now()))
-            user_row = conn.execute("SELECT id FROM users WHERE email = ?", (clean_email,)).fetchone()
+            user_row = conn.execute("SELECT id FROM users WHERE LOWER(email) = ?", (clean_email,)).fetchone()
             user_id = user_row["id"] if user_row else 2
             conn.execute(
                 "INSERT INTO user_sessions (token, user_id, email, is_admin, expires_at, created_at) VALUES (?, ?, ?, 0, ?, ?)",
@@ -2209,35 +2535,60 @@ def auth_verify_otp(payload: VerifyOtpPayload, response: Response):
         "token": token,
         "email": clean_email,
         "username": username,
+        "email_verified": True,
         "is_admin": False,
         "mode": "guest",
         "paper_balance": 1000000.0,
         "expires_in": OWNER_SESSION_TIMEOUT_SECONDS,
-        "message": f"Welcome {username}! Paper trading activated with ₹10,00,000 demo funds and live real-time market data.",
+        "message": f"Welcome {username}! Email verified and paper trading activated.",
     }
 
 
 @app.post("/api/auth/resend-otp")
 def auth_resend_otp(payload: ResendOtpPayload):
-    clean_email = (payload.email or "").strip().lower()
-    if not clean_email or clean_email == ADMIN_EMAIL:
+    clean_email = validate_trusted_email(payload.email)
+    if clean_email == ADMIN_EMAIL:
         raise HTTPException(status_code=400, detail="Invalid request.")
+    purpose = payload.purpose if payload.purpose in {"signup", "reset"} else "signup"
+    email_sent = _issue_and_send_otp(clean_email, purpose=purpose)
+    return {"ok": True, "email": clean_email, "email_sent": email_sent, "message": f"New verification code sent to {clean_email}."}
 
-    otp = f"{secrets.randbelow(900000) + 100000}"
-    expires_at = time.time() + 600
-    try:
-        with db() as conn:
-            conn.execute("DELETE FROM email_otps WHERE email = ?", (clean_email,))
-            conn.execute(
-                "INSERT INTO email_otps (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)",
-                (clean_email, otp, expires_at, utc_now()),
-            )
-            conn.commit()
-    except Exception as exc:
-        print(f"[DB Error] resending OTP: {exc}")
 
-    email_sent = send_otp_email(clean_email, otp)
-    return {"ok": True, "email_sent": email_sent, "message": f"New verification code sent to {clean_email}."}
+@app.post("/api/auth/forgot-password")
+def auth_forgot_password(payload: ForgotPasswordPayload):
+    clean_email = validate_trusted_email(payload.email)
+    if clean_email == ADMIN_EMAIL:
+        return {"ok": True, "message": "If an account exists for that email, a 6-digit password reset code has been sent."}
+    with db() as conn:
+        user_row = conn.execute("SELECT id, username FROM users WHERE LOWER(email) = ?", (clean_email,)).fetchone()
+    if user_row:
+        _issue_and_send_otp(clean_email, purpose="reset", username=user_row["username"])
+        audit("password_reset_otp_requested", {"email": clean_email})
+    return {"ok": True, "email": clean_email, "message": "If an account exists for that email, a 6-digit password reset code has been sent."}
+
+
+@app.post("/api/auth/reset-password")
+def auth_reset_password(payload: ResetPasswordPayload):
+    clean_email = validate_trusted_email(payload.email)
+    if clean_email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Invalid request.")
+    if len(payload.new_password or "") < 4:
+        raise HTTPException(status_code=400, detail="New password must be at least 4 characters.")
+    _consume_email_otp(clean_email, (payload.otp or "").strip(), purposes=("reset",))
+
+    pw_hash = _hash_password(payload.new_password)
+    with db() as conn:
+        user_row = conn.execute("SELECT id, username FROM users WHERE LOWER(email) = ?", (clean_email,)).fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="No account found for this email.")
+        conn.execute(
+            "UPDATE users SET password_hash = ?, email_verified = 1 WHERE id = ?",
+            (pw_hash, int(user_row["id"])),
+        )
+        conn.execute("DELETE FROM user_sessions WHERE LOWER(email) = ?", (clean_email,))
+        conn.commit()
+    audit("password_reset_completed", {"email": clean_email, "username": user_row["username"]})
+    return {"ok": True, "message": "Password reset successfully! Please sign in with your new password."}
 
 
 @app.post("/api/auth/save-kotak-keys")
