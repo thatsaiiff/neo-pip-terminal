@@ -1624,25 +1624,35 @@
     const cs = curSym(pane.sym);
     const wrapH = overlay.clientHeight || 280;
 
-    function createLineEl(cls, priceVal, draggableLine = false) {
-      const y = pane.candleSeries.priceToCoordinate(Number(priceVal));
-      if (y === null || !Number.isFinite(y) || y < 2 || y > wrapH - 2) return null;
+    function createLineEl(cls, priceVal, draggableLine = false, clampEntry = false) {
+      const yRaw = pane.candleSeries.priceToCoordinate(Number(priceVal));
+      if (yRaw === null || !Number.isFinite(yRaw)) {
+        if (!clampEntry) return null;
+      }
+      const offscreen = yRaw === null || !Number.isFinite(yRaw) || yRaw < 4 || yRaw > wrapH - 24;
+      if (offscreen && !clampEntry) return null;
+      const y = (yRaw !== null && Number.isFinite(yRaw))
+        ? Math.max(6, Math.min(Math.max(12, wrapH - 24), yRaw))
+        : Math.max(6, Math.min(Math.max(12, wrapH - 24), Math.round(wrapH * 0.48)));
       const el = document.createElement('div');
       el.className = `trade-price-line ${cls}`;
       el.style.top = `${y}px`;
+      const lineStyle = offscreen ? ' style="display:none;"' : '';
       el.innerHTML = draggableLine
-        ? '<div class="tpl-hit-bar" title="Drag up/down"></div><div class="tpl-line"></div>'
-        : '<div class="tpl-line"></div>';
+        ? `<div class="tpl-hit-bar" title="Drag up/down"></div><div class="tpl-line"${lineStyle}></div>`
+        : `<div class="tpl-line"${lineStyle}></div>`;
       return el;
     }
 
     // 1. Entry Price Line for open position
     if (pos) {
-      const avg = Number(pos.average_price || pos.avg_price || pos.avg_buy_price || 0);
+      const avgRaw = Number(pos.average_price || pos.avg_price || pos.avg_buy_price || 0);
+      const entryRef = avgRaw > 0 ? avgRaw : Number(pos.ltp || pane.lastLtp || 0);
+      const avg = entryRef;
       const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(pos.quantity) >= 0 ? 'BUY' : 'SELL')).toUpperCase();
       const qtyDisp = pos.lots && isForexSym(pane.sym) ? `${pos.lots} lot` : `${Math.abs(Number(pos.quantity || 0))}`;
       const m2m = computeLivePosM2m(pos);
-      const entryLine = createLineEl('tpl-entry', avg, false);
+      const entryLine = entryRef > 0 ? createLineEl('tpl-entry', entryRef, false, true) : null;
       if (entryLine) {
         const bg = document.createElement('div');
         bg.className = 'tpl-badge-group';
@@ -1668,7 +1678,10 @@
           const defSl = Number((side === 'BUY' ? ref - delta : ref + delta).toFixed(decs));
           const defTp = Number((side === 'BUY' ? ref + delta * 1.25 : ref - delta * 1.25).toFixed(decs));
           const val = targetPrice !== null ? Number(targetPrice.toFixed(decs)) : null;
+          const effProd = (pos.product && pos.product !== '—') ? pos.product : selectedProduct;
+          const effQty = Math.max(1, Math.abs(Math.round(Number(pos.quantity || (selectedLots * getIndexLotSize(pane.sym))))));
           try {
+            _portfolioMutationEpoch += 1;
             if (existingRule) {
               const patch = {};
               if (kind === 'tp') patch.tp_price = val || defTp;
@@ -1688,10 +1701,10 @@
                 body: JSON.stringify({
                   symbol: pane.sym,
                   exchange_segment: fx ? 'forex' : inferOrderExchangeSegment(pane.sym, pane.token),
-                  product: pos.product || 'NRML',
+                  product: effProd,
                   side,
-                  quantity: Math.abs(Number(pos.quantity || 1)),
-                  entry_price: avg,
+                  quantity: effQty,
+                  entry_price: Number(avg > 0 ? avg : ref),
                   sl_price: kind === 'tp' ? null : (kind === 'sl' && val ? val : defSl),
                   tp_price: kind === 'sl' ? null : (kind === 'tp' && val ? val : defTp),
                 }),
@@ -1855,6 +1868,7 @@
           rmBtn.title = 'Remove Take Profit line';
           rmBtn.addEventListener('click', async e => {
             e.stopPropagation();
+            _portfolioMutationEpoch += 1;
             if (rule.sl_price) {
               await api(`/api/sltp/${rule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
                 method: 'PATCH',
@@ -1892,6 +1906,7 @@
           rmBtn.title = 'Remove Stop Loss line';
           rmBtn.addEventListener('click', async e => {
             e.stopPropagation();
+            _portfolioMutationEpoch += 1;
             if (rule.tp_price) {
               await api(`/api/sltp/${rule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
                 method: 'PATCH',
@@ -1911,9 +1926,10 @@
     });
 
     // 3. Pending Orders (Limit / Stop) rendered on chart with drag-to-modify & 1-click cancel
-    const pendingForPane = cachedOrders.filter(
-      o => o.status === 'pending' && String(o.symbol || '').trim().toUpperCase() === symUpper
-    );
+    const pendingForPane = cachedOrders.filter(o => {
+      if (o.status !== 'pending') return false;
+      return symbolsMatchTrade(o.symbol || '', symUpper) || (o.display_symbol && symbolsMatchTrade(o.display_symbol, symUpper));
+    });
     pendingForPane.forEach(po => {
       const poPrice = Number(po.trigger_price || po.price || 0);
       if (!(poPrice > 0)) return;
@@ -2006,6 +2022,7 @@
       cancelBtn.title = 'Cancel pending order';
       cancelBtn.addEventListener('click', async e => {
         e.stopPropagation();
+        _portfolioMutationEpoch += 1;
         try {
           await api(`/api/orders/${po.id}/cancel?market=${encodeURIComponent(currentMarketMode)}`, { method: 'POST' });
           toast('✅ Pending order cancelled');
@@ -2368,25 +2385,33 @@
     }
   }
 
+  const _sltpCheckTimesBySym = {};
   async function maybeCheckLiveTriggers(pane, ltp) {
-    if (!isAuthenticated || !pane || !ltp || ltp <= 0) return;
-    const now = Date.now();
-    if (now - _lastSltpTickMs < 650) return;
-    const symU = String(pane.sym || '').trim().toUpperCase();
-    const hasPending = cachedOrders.some(o => o.status === 'pending' && String(o.symbol || '').trim().toUpperCase() === symU);
-    const hasRules = activeSltpRules.some(r => r.status === 'active' && String(r.symbol || '').trim().toUpperCase() === symU);
+    return maybeCheckLiveTriggersBySymbol(pane && pane.sym, ltp);
+  }
+
+  async function maybeCheckLiveTriggersBySymbol(symbol, ltp) {
+    if (!isAuthenticated || !symbol || !ltp || ltp <= 0) return;
+    const symU = String(symbol || '').trim().toUpperCase();
+    if (!symU) return;
+    const hasPending = cachedOrders.some(o => o.status === 'pending' && symbolsMatchTrade(o.symbol || '', symU));
+    const hasRules = activeSltpRules.some(r => r.status === 'active' && symbolsMatchTrade(r.symbol || '', symU));
     if (!hasPending && !hasRules) return;
 
+    const now = Date.now();
+    const rateKey = parseTradeContractId(symU) || symU;
+    if (now - (_sltpCheckTimesBySym[rateKey] || 0) < 650) return;
+    _sltpCheckTimesBySym[rateKey] = now;
     _lastSltpTickMs = now;
     try {
       const res = await api(`/api/sltp/check?market=${encodeURIComponent(currentMarketMode)}`, {
         method: 'POST',
-        body: JSON.stringify({ symbol: pane.sym, ltp: Number(ltp) }),
+        body: JSON.stringify({ symbol, ltp: Number(ltp) }),
       });
       if (res && (res.triggered_count > 0 || res.filled_pending_count > 0)) {
         if (res.filled_pending_count > 0) {
           playTradeSound('filled');
-          toast(`⚡ Pending order filled on ${pane.sym} @ ${curSym(pane.sym)}${res.filled_pending[0].fill_price}`);
+          toast(`⚡ Pending order filled on ${symbol} @ ${curSym(symbol)}${res.filled_pending[0].fill_price}`);
         }
         if (res.triggered_count > 0) {
           const trigType = String(res.triggered[0].trigger_type || '').toUpperCase() === 'TP' ? 'tp' : 'sl';
@@ -2395,8 +2420,9 @@
           } else {
             playTradeSound(trigType);
           }
-          toast(`🎯 ${res.triggered[0].trigger_type} hit on ${pane.sym} @ ${curSym(pane.sym)}${ltp}`);
+          toast(`🎯 ${res.triggered[0].trigger_type} hit on ${symbol} @ ${curSym(symbol)}${ltp}`);
         }
+        _portfolioMutationEpoch += 1;
         fetchPositionsAndOrders();
       }
     } catch (_) {}
@@ -2664,6 +2690,13 @@
               maybeCheckLiveTriggers(pane, q.ltp);
             }
           });
+          if (activeSltpRules.length || cachedOrders.some(o => o.status === 'pending')) {
+            Object.entries(qMap).forEach(([symKey, q]) => {
+              if (!q || !q.ltp || q.is_fallback) return;
+              if (activePanes.some(ap => symbolsMatchTrade(ap.sym, symKey))) return;
+              maybeCheckLiveTriggersBySymbol(symKey, q.ltp);
+            });
+          }
           if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
         }
         if (pollTickCount % 15 === 0) {
@@ -2933,11 +2966,16 @@
         });
 
         if (res.ok) {
+          _portfolioMutationEpoch += 1;
           if (res.order_status !== 'pending' && res.status !== 'pending') {
             playTradeSound('filled');
           }
           toast(`✅ ${res.message || `${typeTag} order placed!`}`);
           fetchPositionsAndOrders();
+          if (currentMarketMode === 'indian') {
+            setTimeout(fetchPositionsAndOrders, 450);
+            setTimeout(fetchPositionsAndOrders, 1200);
+          }
           return true;
         }
         toast(`❌ Order failed: ${res.detail || 'Rejection'}`);

@@ -1767,6 +1767,179 @@ def test_kotak_live_positions_enrichment_executions_closed_and_summary(client, m
     assert d_sum["losing_trades"] == 0
 
 
+def test_kotak_live_order_reflects_and_sltp_places_updates_and_triggers(client, monkeypatch):
+    adm = client.post("/api/auth/signin", json={"username": main.ADMIN_USERNAME, "password": main.ADMIN_PASSWORD})
+    assert adm.status_code == 200
+    headers = {"Authorization": f"Bearer {adm.json()['token']}"}
+
+    class FakeKotakLifecycleClient:
+        def __init__(self):
+            self.orders_sent = []
+            self.open_qty = 0
+
+        def search_scrip(self, exchange_segment="", symbol="", option_type=None, strike_price=None, **kwargs):
+            if exchange_segment == "bse_fo" and "SENSEX" in symbol.upper():
+                return [
+                    {
+                        "pSymbol": 824311,
+                        "pTrdSymbol": "SENSEX26N1281000PE",
+                        "pExchSeg": "bse_fo",
+                        "pSymbolName": "SENSEX",
+                        "pOptionType": "pe",
+                        "dStrikePrice;": 8100000.0,
+                        "pExpiryDate": "12Nov2026",
+                        "lLotSize": 20,
+                    }
+                ]
+            return []
+
+        def place_order(self, **kwargs):
+            self.orders_sent.append(kwargs)
+            tx = str(kwargs.get("transaction_type") or "B").upper()
+            q = int(float(kwargs.get("quantity") or 0))
+            if tx == "B":
+                self.open_qty += q
+            elif tx == "S":
+                self.open_qty = max(0, self.open_qty - q)
+            return {"stat": "Ok", "nOrdNo": f"KOTAK-ORD-{len(self.orders_sent)}", "stCode": 200}
+
+        def positions(self):
+            if self.open_qty <= 0:
+                return {"stat": "Ok", "data": []}
+            return {
+                "stat": "Ok",
+                "data": [
+                    {
+                        "trdSym": "SENSEX26N1281000PE",
+                        "exSeg": "bse_fo",
+                        "prod": "NRML",
+                        "tok": "824311",
+                        "flBuyQty": str(self.open_qty),
+                        "flSellQty": "0",
+                        "buyAmt": str(self.open_qty * 76.0),
+                        "sellAmt": "0.00",
+                        "ltp": "82.0",
+                    }
+                ],
+            }
+
+        def order_report(self):
+            return {
+                "stat": "Ok",
+                "data": [
+                    {
+                        "nOrdNo": "KOTAK-PEND-1",
+                        "trdSym": "SENSEX26N1281000PE",
+                        "trnsTp": "B",
+                        "qty": "20",
+                        "prod": "NRML",
+                        "prcTp": "L",
+                        "prc": "70.00",
+                        "trgPrc": "0",
+                        "ordSt": "open",
+                        "ordDtTm": "2026-11-11 12:10:00",
+                    }
+                ],
+            }
+
+    fake = FakeKotakLifecycleClient()
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", fake)
+
+    # 1. Place BUY on chart with custom SL & TP (auto_sltp=False -> Order Window custom SL/TP must still persist!)
+    res_buy = client.post(
+        "/api/orders?market=indian",
+        headers=headers,
+        json={
+            "symbol": "SENSEX 81000 PE",
+            "instrument_token": "BSE_FO|824311",
+            "exchange_segment": "bse_fo",
+            "side": "BUY",
+            "lots": 1,
+            "lot_size": 20,
+            "product": "NRML",
+            "order_type": "MKT",
+            "sl_price": 68.0,
+            "tp_price": 98.0,
+            "auto_sltp": False,
+            "user_confirmed": True,
+        },
+    )
+    assert res_buy.status_code == 200, res_buy.text
+    assert fake.open_qty == 20
+
+    # 2. Bought order immediately reflects in /api/positions and /api/orders with chart-matchable fields
+    res_pos = client.get("/api/positions?market=indian", headers=headers)
+    assert res_pos.status_code == 200
+    d_pos = res_pos.json()
+    assert d_pos["open_count"] == 1
+    assert d_pos["positions"][0]["symbol"] == "SENSEX26N1281000PE"
+    assert d_pos["positions"][0]["display_symbol"] == "SENSEX 81000 PE"
+    assert d_pos["positions"][0]["average_price"] == 76.0
+
+    res_ords = client.get("/api/orders?market=indian", headers=headers)
+    assert res_ords.status_code == 200
+    d_ords = res_ords.json()
+    assert d_ords[0]["display_symbol"] == "SENSEX 81000 PE"
+    assert d_ords[0]["price"] == 70.0
+    assert d_ords[0]["status"] == "pending"
+
+    # 3. Initial SL/TP rule exists; creating chart +TP / +SL under Kotak symbol cleanly replaces alias rule & updates
+    res_sltp = client.get("/api/sltp?market=indian", headers=headers)
+    assert res_sltp.status_code == 200
+    rules0 = res_sltp.json()
+    assert len(rules0) == 1
+    assert rules0[0]["sl_price"] == 68.0 and rules0[0]["tp_price"] == 98.0
+
+    res_create = client.post(
+        "/api/sltp?market=indian",
+        headers=headers,
+        json={
+            "symbol": "SENSEX26N1281000PE",
+            "exchange_segment": "bse_fo",
+            "product": "NRML",
+            "side": "BUY",
+            "quantity": 20,
+            "entry_price": 76.0,
+            "sl_price": 70.0,
+            "tp_price": None,
+        },
+    )
+    assert res_create.status_code == 200
+    rid = res_create.json()["rule_id"]
+
+    res_patch = client.patch(
+        f"/api/sltp/{rid}?market=indian",
+        headers=headers,
+        json={"sl_price": 71.5, "tp_price": 95.0},
+    )
+    assert res_patch.status_code == 200
+    assert res_patch.json()["sl_price"] == 71.5
+    assert res_patch.json()["tp_price"] == 95.0
+
+    # Only ONE active rule remains after alias replacement
+    rules_after = client.get("/api/sltp?market=indian", headers=headers).json()
+    assert len(rules_after) == 1 and rules_after[0]["id"] == rid
+
+    # 4. Live quote trigger check via display symbol ('SENSEX 81000 PE') matches rule stored under 'SENSEX26N1281000PE' and exits via Kotak!
+    res_trig = client.post(
+        "/api/sltp/check?market=indian",
+        headers=headers,
+        json={"symbol": "SENSEX 81000 PE", "ltp": 96.0},
+    )
+    assert res_trig.status_code == 200, res_trig.text
+    d_trig = res_trig.json()
+    assert d_trig["triggered_count"] == 1
+    assert d_trig["triggered"][0]["trigger_type"] == "TP"
+    assert len(fake.orders_sent) == 2
+    assert fake.orders_sent[-1]["transaction_type"] == "S"
+    assert fake.orders_sent[-1]["trading_symbol"] == "SENSEX26N1281000PE"
+    assert fake.orders_sent[-1]["quantity"] == "20"
+    assert fake.open_qty == 0
+
+
+
 
 
 

@@ -1862,8 +1862,10 @@ def _calculate_single_position(p: dict[str, Any], ltp: float | None = None) -> d
         except (TypeError, ValueError):
             pass
 
-    avg_buy = (total_buy_amt / (total_buy_qty * nf)) if total_buy_qty > 0 else _parse_amount(p.get("buyAvgPrc") or p.get("avgPrc"))
-    avg_sell = (total_sell_amt / (total_sell_qty * nf)) if total_sell_qty > 0 else _parse_amount(p.get("sellAvgPrc") or p.get("avgPrc"))
+    calc_buy = (total_buy_amt / (total_buy_qty * nf)) if (total_buy_qty > 0 and total_buy_amt > 0) else 0.0
+    calc_sell = (total_sell_amt / (total_sell_qty * nf)) if (total_sell_qty > 0 and total_sell_amt > 0) else 0.0
+    avg_buy = calc_buy or _parse_amount(p.get("buyAvgPrc") or p.get("avgPrc") or p.get("prc"))
+    avg_sell = calc_sell or _parse_amount(p.get("sellAvgPrc") or p.get("avgPrc") or p.get("prc"))
     avg_entry = round(avg_buy if net_qty > 0 else (avg_sell if net_qty < 0 else (avg_buy or avg_sell)), precision)
 
     if is_closed:
@@ -1899,7 +1901,7 @@ def _calculate_single_position(p: dict[str, Any], ltp: float | None = None) -> d
         "display_symbol": display_sym,
         "instrument_key": inst_key,
         "exchange": ex_raw,
-        "product": str(p.get("prod") or p.get("product") or "—"),
+        "product": str(p.get("prod") or p.get("product") or "NRML").strip() or "NRML",
         "side": side,
         "quantity": net_qty,
         "buy_qty": total_buy_qty,
@@ -3187,6 +3189,38 @@ def bridge_symbol(payload: BridgeSymbolPayload, x_bridge_token: str | None = Hea
     return {"ok": True, "selected_symbol": selected_symbol}
 
 
+def _upsert_active_sltp_rule(
+    conn: Any,
+    *,
+    account_id: str,
+    symbol: str,
+    exchange_segment: str,
+    product: str,
+    side: str,
+    quantity: int,
+    entry_price: float,
+    sl_price: float | None,
+    tp_price: float | None,
+    market_mode: str = "indian",
+) -> int:
+    """Replace any active rule for the same or alias-matched contract and insert a fresh active rule."""
+    active_rows = conn.execute(
+        "SELECT id, symbol FROM sltp_rules WHERE account_id = ? AND status = 'active'",
+        (account_id,),
+    ).fetchall()
+    replace_ids = [r["id"] for r in active_rows if _kotak_symbols_match(str(r["symbol"] or ""), symbol)]
+    if replace_ids:
+        placeholders = ",".join("?" for _ in replace_ids)
+        conn.execute(f"UPDATE sltp_rules SET status = 'replaced' WHERE id IN ({placeholders})", replace_ids)
+    eff_prod = product if str(product or "").strip().upper() in {"NRML", "MIS", "CNC"} else "NRML"
+    cur = conn.execute(
+        """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+        (utc_now(), symbol, exchange_segment, eff_prod, side, int(max(1, quantity)), float(entry_price or 0.0), sl_price, tp_price, account_id, market_mode),
+    )
+    return int(cur.lastrowid)
+
+
 def _execute_order(payload: OrderPayload):
     payload.validate_order_shape()
     if not payload.user_confirmed:
@@ -3197,14 +3231,25 @@ def _execute_order(payload: OrderPayload):
         message, broker_order_id, response = sdk_order(payload)
         row_id = add_order_record(payload, "live", "submitted", message, broker_order_id, response, account_id="KOTAK_OWNER")
         audit("live_order_submitted", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": int_qty, "order_id": broker_order_id})
-        if payload.auto_sltp and (payload.sl_price or payload.tp_price):
+        if payload.sl_price or payload.tp_price:
             try:
-                entry_p = payload.price or 0.0
+                entry_p = float(payload.price or payload.trigger_price or 0.0)
+                if entry_p <= 0 and not os.getenv("PYTEST_CURRENT_TEST"):
+                    q = _get_live_quote_data(payload.symbol, token=payload.instrument_token)
+                    entry_p = float(q.get("ltp") or 0.0) if q else 0.0
                 with db() as conn:
-                    conn.execute(
-                        """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-                           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'KOTAK_OWNER', 'indian')""",
-                        (utc_now(), payload.symbol, payload.exchange_segment, payload.product, payload.side, int_qty, entry_p, payload.sl_price, payload.tp_price),
+                    _upsert_active_sltp_rule(
+                        conn,
+                        account_id="KOTAK_OWNER",
+                        symbol=payload.symbol,
+                        exchange_segment=payload.exchange_segment,
+                        product=payload.product,
+                        side=payload.side,
+                        quantity=int_qty,
+                        entry_price=entry_p,
+                        sl_price=payload.sl_price,
+                        tp_price=payload.tp_price,
+                        market_mode="indian",
                     )
                     conn.commit()
                 audit("sltp_rule_auto_created", {
@@ -3216,14 +3261,22 @@ def _execute_order(payload: OrderPayload):
         return {"ok": True, "id": row_id, "mode": "live", "status": "submitted", "message": message, "broker_order_id": broker_order_id, "quantity": int_qty, "warning": "Broker acceptance is not the same as execution. Verify the order and trade book."}
     row_id = add_order_record(payload, "simulation", "simulated", "Simulation only — no order sent to Kotak Neo", None, {"simulated": True}, account_id="KOTAK_OWNER")
     audit("simulation_order", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": int_qty})
-    if payload.auto_sltp and (payload.sl_price or payload.tp_price):
+    if payload.sl_price or payload.tp_price:
         try:
-            entry_p = payload.price or 0.0
+            entry_p = float(payload.price or payload.trigger_price or 0.0)
             with db() as conn:
-                conn.execute(
-                    """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'KOTAK_OWNER', 'indian')""",
-                    (utc_now(), payload.symbol, payload.exchange_segment, payload.product, payload.side, int_qty, entry_p, payload.sl_price, payload.tp_price),
+                _upsert_active_sltp_rule(
+                    conn,
+                    account_id="KOTAK_OWNER",
+                    symbol=payload.symbol,
+                    exchange_segment=payload.exchange_segment,
+                    product=payload.product,
+                    side=payload.side,
+                    quantity=int_qty,
+                    entry_price=entry_p,
+                    sl_price=payload.sl_price,
+                    tp_price=payload.tp_price,
+                    market_mode="indian",
                 )
                 conn.commit()
             audit("sltp_rule_auto_created", {
@@ -3294,7 +3347,26 @@ def orders(
             raw = str(item.get("ordSt") or item.get("status") or item.get("stat") or "unknown").strip().lower()
             status = "completed" if raw in {"complete", "completed", "traded", "filled"} else "pending" if raw in {"open", "pending", "trigger pending", "validation pending", "after market order req received", "put order req received", "modify pending", "partially filled"} else "cancelled" if "cancel" in raw else "rejected" if "reject" in raw else raw.replace(" ", "_")
             order_id = str(item.get("nOrdNo") or item.get("order_id") or "")
-            normalized.append({"id": order_id, "broker_order_id": order_id, "mode": "live", "symbol": item.get("trdSym") or item.get("sym") or "—", "side": "BUY" if str(item.get("trnsTp", "")).upper() in {"B", "BUY"} else "SELL", "quantity": item.get("qty") or item.get("quantity") or 0, "product": item.get("prod") or "—", "order_type": item.get("prcTp") or "—", "status": status, "created_at": item.get("ordDtTm") or item.get("order_timestamp") or "", "message": item.get("rejRsn") or "", "cancel_allowed": status == "pending" and bool(order_id)})
+            sym_o = str(item.get("trdSym") or item.get("sym") or "—").strip()
+            prc_o = _parse_amount(item.get("avgPrc") or item.get("prc"))
+            trg_o = _parse_amount(item.get("trgPrc") or item.get("trigPrc"))
+            normalized.append({
+                "id": order_id,
+                "broker_order_id": order_id,
+                "mode": "live",
+                "symbol": sym_o,
+                "display_symbol": _format_kotak_display_symbol(sym_o),
+                "side": "BUY" if str(item.get("trnsTp", "")).upper() in {"B", "BUY"} else "SELL",
+                "quantity": item.get("qty") or item.get("quantity") or 0,
+                "product": item.get("prod") or "NRML",
+                "order_type": item.get("prcTp") or "MKT",
+                "price": prc_o if prc_o > 0 else None,
+                "trigger_price": trg_o if trg_o > 0 else None,
+                "status": status,
+                "created_at": item.get("ordDtTm") or item.get("order_timestamp") or "",
+                "message": item.get("rejRsn") or "",
+                "cancel_allowed": status == "pending" and bool(order_id),
+            })
         return normalized
 
     if not ctx["authenticated"] and not os.getenv("PYTEST_CURRENT_TEST") and not neo_authenticated:
@@ -3482,18 +3554,20 @@ def create_sltp_rule(
     seg_store = "FOREX" if is_fx_sym else payload.exchange_segment
     acc_id = ctx["account_id"] if ctx["authenticated"] else "KOTAK_OWNER"
     with db() as conn:
-        # Cancel any prior active rule for same symbol & account so dragging/replacing keeps one clean OCO rule per position
-        conn.execute(
-            "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
-            (acc_id, payload.symbol),
-        )
-        cur = conn.execute(
-            """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-            (utc_now(), payload.symbol, seg_store, payload.product, payload.side, payload.quantity, payload.entry_price, payload.sl_price, payload.tp_price, acc_id, eff_market),
+        rule_id = _upsert_active_sltp_rule(
+            conn,
+            account_id=acc_id,
+            symbol=payload.symbol,
+            exchange_segment=seg_store,
+            product=payload.product,
+            side=payload.side,
+            quantity=payload.quantity,
+            entry_price=payload.entry_price,
+            sl_price=payload.sl_price,
+            tp_price=payload.tp_price,
+            market_mode=eff_market,
         )
         conn.commit()
-        rule_id = cur.lastrowid
     audit("sltp_rule_created", {
         "rule_id": rule_id,
         "account_id": acc_id,
@@ -3571,10 +3645,11 @@ def check_sltp_rules(
 
     with db() as conn:
         if ctx["authenticated"]:
-            pending_rows = conn.execute(
-                "SELECT * FROM orders WHERE account_id = ? AND UPPER(symbol) = ? AND status = 'pending' ORDER BY id ASC",
-                (acc_id, sym_upper),
+            all_pending_rows = conn.execute(
+                "SELECT * FROM orders WHERE account_id = ? AND status = 'pending' ORDER BY id ASC",
+                (acc_id,),
             ).fetchall()
+            pending_rows = [o for o in all_pending_rows if _kotak_symbols_match(str(o["symbol"] or ""), sym_upper)]
             for o in pending_rows:
                 otype = str(o["order_type"] or "").upper()
                 side = str(o["side"] or "BUY").upper()
@@ -3619,26 +3694,31 @@ def check_sltp_rules(
                     pend_sl = req_meta.get("sl_price")
                     pend_tp = req_meta.get("tp_price")
                     if pend_sl or pend_tp:
-                        conn.execute(
-                            "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
-                            (acc_id, o["symbol"]),
-                        )
-                        conn.execute(
-                            """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-                               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-                            (utc_now(), o["symbol"], seg, o["product"], side, int(o["quantity"]), fill_p, pend_sl, pend_tp, acc_id, str(req_meta.get("market") or ctx["market_mode"])),
+                        _upsert_active_sltp_rule(
+                            conn,
+                            account_id=acc_id,
+                            symbol=o["symbol"],
+                            exchange_segment=seg,
+                            product=o["product"],
+                            side=side,
+                            quantity=int(o["quantity"]),
+                            entry_price=fill_p,
+                            sl_price=pend_sl,
+                            tp_price=pend_tp,
+                            market_mode=str(req_meta.get("market") or ctx["market_mode"]),
                         )
                     filled_pending.append({"order_id": o["id"], "symbol": o["symbol"], "side": side, "order_type": otype, "fill_price": fill_p})
             if filled_pending:
                 conn.commit()
 
         if os.getenv("PYTEST_CURRENT_TEST") and not ctx["authenticated"]:
-            rules = conn.execute("SELECT * FROM sltp_rules WHERE UPPER(symbol) = ? AND status = 'active'", (sym_upper,)).fetchall()
+            all_active_rules = conn.execute("SELECT * FROM sltp_rules WHERE status = 'active'").fetchall()
         else:
-            rules = conn.execute(
-                "SELECT * FROM sltp_rules WHERE account_id = ? AND UPPER(symbol) = ? AND status = 'active'",
-                (acc_id, sym_upper),
+            all_active_rules = conn.execute(
+                "SELECT * FROM sltp_rules WHERE account_id = ? AND status = 'active'",
+                (acc_id,),
             ).fetchall()
+        rules = [r for r in all_active_rules if _kotak_symbols_match(str(r["symbol"] or ""), sym_upper)]
 
     for r in rules:
         rule_id = r["id"]
@@ -3668,7 +3748,7 @@ def check_sltp_rules(
                 if ctx["authenticated"] and (not ctx["is_admin"] or str(seg).upper() == "FOREX" or ctx["market_mode"] == "forex"):
                     with db() as conn:
                         open_pos = get_open_positions(acc_id, conn)
-                        tgt = next((p for p in open_pos if p["trading_symbol"].upper() == sym_upper), None)
+                        tgt = next((p for p in open_pos if _kotak_symbols_match(p["trading_symbol"], sym_upper)), None)
                         mult_val = float(tgt.get("multiplier") or 1.0) if tgt else 1.0
                         exit_qty = int(tgt["quantity"]) if tgt else qty
                         seg_canon = "FOREX" if (str(seg).upper() == "FOREX" or _is_forex_symbol(r["symbol"])) else str(seg)
@@ -3695,13 +3775,14 @@ def check_sltp_rules(
                         conn.commit()
                     order_res = {"ok": True, "mode": "simulation", "price": ltp, "trigger_type": trigger_type}
                 else:
+                    eff_prod = prod if str(prod or "").strip().upper() in {"NRML", "MIS", "CNC"} else "NRML"
                     exit_payload = OrderPayload(
                         symbol=r["symbol"],
                         side=exit_side,
                         lots=1,
                         lot_size=qty,
                         exchange_segment=seg,
-                        product=prod,
+                        product=eff_prod,
                         order_type="MKT",
                         user_confirmed=True,
                     )
