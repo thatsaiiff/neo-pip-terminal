@@ -1421,6 +1421,7 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
             "message": message,
         })
         raise HTTPException(status_code=502, detail=detail)
+    _invalidate_kotak_portfolio_cache()
     return message, str(order_id) if order_id is not None else None, data
 
 
@@ -1778,6 +1779,31 @@ def _parse_amount(value: Any) -> float:
         return 0.0
 
 
+def _format_kotak_display_symbol(sym: str) -> str:
+    s_u = str(sym or "").strip().upper()
+    parsed = parse_option_sym(s_u)
+    if parsed:
+        und, strike_v, opt_t = parsed
+        return f"{und} {int(round(strike_v))} {opt_t}"
+    return re.sub(r"-(?:EQ|BE|BL|SM|BZ)$", "", s_u) or s_u
+
+
+def _kotak_symbols_match(sym_a: str, sym_b: str) -> bool:
+    a = str(sym_a or "").strip().upper()
+    b = str(sym_b or "").strip().upper()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if re.sub(r"-(?:EQ|BE|BL|SM|BZ)$", "", a) == re.sub(r"-(?:EQ|BE|BL|SM|BZ)$", "", b):
+        return True
+    pa = parse_option_sym(a)
+    pb = parse_option_sym(b)
+    if pa and pb and pa[0] == pb[0] and abs(pa[1] - pb[1]) < 0.1 and pa[2] == pb[2]:
+        return True
+    return False
+
+
 def _calculate_single_position(p: dict[str, Any], ltp: float | None = None) -> dict[str, Any]:
     buy_amt = _parse_amount(p.get("buyAmt"))
     sell_amt = _parse_amount(p.get("sellAmt"))
@@ -1830,20 +1856,25 @@ def _calculate_single_position(p: dict[str, Any], ltp: float | None = None) -> d
     pos_ltp = ltp
     if pos_ltp is None and p.get("ltp") is not None:
         try:
-            pos_ltp = float(p["ltp"])
+            cand_ltp = float(p["ltp"])
+            if cand_ltp > 0:
+                pos_ltp = cand_ltp
         except (TypeError, ValueError):
             pass
 
-    avg_buy = (total_buy_amt / (total_buy_qty * nf)) if total_buy_qty > 0 else 0.0
-    avg_sell = (total_sell_amt / (total_sell_qty * nf)) if total_sell_qty > 0 else 0.0
+    avg_buy = (total_buy_amt / (total_buy_qty * nf)) if total_buy_qty > 0 else _parse_amount(p.get("buyAvgPrc") or p.get("avgPrc"))
+    avg_sell = (total_sell_amt / (total_sell_qty * nf)) if total_sell_qty > 0 else _parse_amount(p.get("sellAvgPrc") or p.get("avgPrc"))
+    avg_entry = round(avg_buy if net_qty > 0 else (avg_sell if net_qty < 0 else (avg_buy or avg_sell)), precision)
 
     if is_closed:
         calculated_realized = round(total_sell_amt - total_buy_amt, precision)
         realized_pnl = broker_r_pnl if broker_r_pnl is not None else calculated_realized
         unrealized_pnl = 0.0
         position_pnl = realized_pnl
+        side = "BUY" if total_buy_qty >= total_sell_qty else "SELL"
     else:
         realized_pnl = broker_r_pnl if broker_r_pnl is not None else 0.0
+        side = "BUY" if net_qty > 0 else "SELL"
         if pos_ltp is not None:
             unrealized_pnl = round(((sell_amt + cf_sell_amt) - (buy_amt + cf_buy_amt)) + (net_qty * pos_ltp * nf), precision)
             position_pnl = round((total_sell_amt - total_buy_amt) + (net_qty * pos_ltp * nf), precision)
@@ -1851,17 +1882,41 @@ def _calculate_single_position(p: dict[str, Any], ltp: float | None = None) -> d
             unrealized_pnl = broker_ur_pnl
             position_pnl = broker_r_pnl if broker_r_pnl is not None else broker_ur_pnl
 
+    sym_raw = str(p.get("trdSym") or p.get("sym") or "—").strip()
+    ex_raw = str(p.get("exSeg") or p.get("exchangeSegment") or "").strip()
+    tok_raw = str(p.get("tok") or p.get("instrumentToken") or p.get("pSymbol") or "").strip()
+    inst_key = ""
+    if tok_raw and tok_raw.isdigit():
+        norm_ex = _normalize_kotak_exchange_segment(ex_raw, sym_raw)
+        inst_key = f"{norm_ex.upper()}|{tok_raw}"
+    display_sym = _format_kotak_display_symbol(sym_raw)
+    qty_abs = abs(net_qty) if not is_closed else max(total_buy_qty, total_sell_qty)
+    live_m2m = round(float(unrealized_pnl), precision) if unrealized_pnl is not None else 0.0
+
     return {
-        "symbol": p.get("trdSym") or p.get("sym") or "—",
-        "exchange": str(p.get("exSeg") or p.get("exchangeSegment") or ""),
+        "symbol": sym_raw,
+        "trading_symbol": sym_raw,
+        "display_symbol": display_sym,
+        "instrument_key": inst_key,
+        "exchange": ex_raw,
         "product": str(p.get("prod") or p.get("product") or "—"),
+        "side": side,
         "quantity": net_qty,
         "buy_qty": total_buy_qty,
         "sell_qty": total_sell_qty,
+        "total_buy_quantity": total_buy_qty,
+        "total_sell_quantity": total_sell_qty,
+        "average_price": avg_entry,
+        "avg_price": avg_entry,
         "avg_buy_price": round(avg_buy, precision),
         "avg_sell_price": round(avg_sell, precision),
-        "ltp": pos_ltp,
+        "ltp": pos_ltp if pos_ltp is not None else (avg_entry if is_closed else None),
+        "multiplier": nf,
+        "m2m": live_m2m,
         "realized_pnl": realized_pnl,
+        "realised_gross_pnl": realized_pnl,
+        "realised_net_pnl": realized_pnl,
+        "total_charges": 0.0,
         "unrealized_pnl": unrealized_pnl,
         "mtm_pnl": unrealized_pnl,
         "position_pnl": position_pnl,
@@ -4003,6 +4058,7 @@ def exit_all_positions(
                             tag="exit_all",
                         )
                         closed_positions += 1
+                        _invalidate_kotak_portfolio_cache()
                     except Exception as e:
                         errors.append(f"Exit {sym}: {str(e)}")
         except Exception as e:
@@ -4122,6 +4178,7 @@ def exit_partial_position(
                                 tag="exit_partial",
                             )
                             closed_positions += 1
+                            _invalidate_kotak_portfolio_cache()
                         except Exception as e:
                             errors.append(f"Exit partial {sym}: {str(e)}")
             except Exception as e:
@@ -4293,9 +4350,10 @@ def exit_single_position(
         try:
             pos_data = neo_client.positions()
             raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
-            live_target = next((p for p in raw_pos if str(p.get("trdSym") or p.get("sym") or "").upper() == sym.upper()), None)
+            live_target = next((p for p in raw_pos if _kotak_symbols_match(str(p.get("trdSym") or p.get("sym") or ""), sym)), None)
             if live_target:
-                net_qty = int(live_target.get("flQty") or live_target.get("netQty") or 0)
+                calc = _calculate_single_position(live_target)
+                net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
                 if net_qty != 0:
                     exit_side = "SELL" if net_qty > 0 else "BUY"
                     exit_qty = max(1, int(abs(net_qty) * pct))
@@ -4313,7 +4371,8 @@ def exit_single_position(
                         transaction_type=_kotak_tx_type(exit_side),
                         tag="manual_exit",
                     )
-                    return {"ok": True, "message": f"Live order submitted to exit {sym}"}
+                    _invalidate_kotak_portfolio_cache()
+                    return {"ok": True, "message": f"Live order submitted to exit {trd_sym}"}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to exit position {sym} on Kotak Neo: {e}")
 
@@ -4687,10 +4746,14 @@ def _resolve_upstox_instrument(symbol: str, token: str | None = None) -> tuple[s
     if not _UPSTOX_NSE_INSTRUMENTS:
         _ensure_upstox_instruments_loaded()
 
+    base_eq_sym = re.sub(r"-(?:EQ|BE|BL|SM|BZ)$", "", sym)
     if sym in _UPSTOX_INSTRUMENT_KEY_BY_SYM:
         k = _UPSTOX_INSTRUMENT_KEY_BY_SYM[sym]
-        is_opt = "NSE_FO" in k or sym_is_opt
+        is_opt = "NSE_FO" in k or "BSE_FO" in k or sym_is_opt
         return k, is_opt
+    if base_eq_sym != sym and base_eq_sym in _UPSTOX_INSTRUMENT_KEY_BY_SYM:
+        k = _UPSTOX_INSTRUMENT_KEY_BY_SYM[base_eq_sym]
+        return k, sym_is_opt
 
     if sym_is_opt:
         found_key = _find_upstox_option_instrument(sym)
@@ -6821,6 +6884,79 @@ def positions(
         }
 
     client = _require_neo_session()
+    bundle = _build_kotak_positions_bundle(client)
+    if active_tab == "closed":
+        visible = bundle["closed_positions"]
+    elif active_tab == "all":
+        visible = bundle["all_positions"]
+    else:
+        visible = bundle["open_positions"]
+
+    return {
+        "positions": visible,
+        "all_positions": bundle["all_positions"],
+        "total_today_pnl": bundle["total_today"],
+        "total_net_pnl": bundle["total_net_val"],
+        "charges": bundle["charges_info"],
+        "metrics": bundle["metrics"],
+        "win_rate": bundle["metrics"]["win_rate"],
+        "avg_r_multiple": bundle["metrics"]["avg_r_multiple"],
+        "sharpe_ratio": bundle["metrics"]["sharpe_ratio"],
+        "currency": "INR",
+        "total_realized_pnl": round(bundle["total_realized"], 2),
+        "total_unrealized_pnl": round(bundle["total_unrealized"], 2),
+        "total_mtm": bundle["total_mtm_val"],
+        "total_position_pnl": bundle["total_pos_pnl_val"],
+        "open_count": len(bundle["open_positions"]),
+        "closed_count": len(bundle["closed_positions"]),
+        "all_count": len(bundle["all_positions"]),
+        "pnl_complete": True,
+        "updated_at": utc_now(),
+    }
+
+
+_KOTAK_POS_BUNDLE_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_KOTAK_TRADES_CACHE: dict[int, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _invalidate_kotak_portfolio_cache() -> None:
+    _KOTAK_POS_BUNDLE_CACHE.clear()
+    _KOTAK_TRADES_CACHE.clear()
+
+
+def _fetch_kotak_trades_raw(client: Any) -> list[dict[str, Any]]:
+    if client is None or not hasattr(client, "trade_report"):
+        return []
+    use_cache = not bool(os.getenv("PYTEST_CURRENT_TEST"))
+    now = time.time()
+    ck = id(client)
+    if use_cache and ck in _KOTAK_TRADES_CACHE and (now - _KOTAK_TRADES_CACHE[ck][0]) < 1.2:
+        return _KOTAK_TRADES_CACHE[ck][1]
+    try:
+        trade_result = client.trade_report()
+        if isinstance(trade_result, dict) and (
+            str(trade_result.get("stCode")) in {"5203", "5200"}
+            or "no data" in str(trade_result.get("errMsg", "")).lower()
+            or "no data" in str(trade_result.get("emsg", "")).lower()
+        ):
+            rows = []
+        else:
+            trade_error = _kotak_response_error(trade_result)
+            rows = _rows_from_sdk_result(trade_result) if not trade_error else []
+    except Exception:
+        rows = []
+    if use_cache:
+        _KOTAK_TRADES_CACHE[ck] = (now, rows)
+    return rows
+
+
+def _build_kotak_positions_bundle(client: Any) -> dict[str, Any]:
+    use_cache = not bool(os.getenv("PYTEST_CURRENT_TEST"))
+    now = time.time()
+    ck = id(client)
+    if use_cache and ck in _KOTAK_POS_BUNDLE_CACHE and (now - _KOTAK_POS_BUNDLE_CACHE[ck][0]) < 1.0:
+        return _KOTAK_POS_BUNDLE_CACHE[ck][1]
+
     raw_positions = []
     try:
         response = client.positions()
@@ -6840,78 +6976,93 @@ def positions(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Kotak positions/P&L failed: {_kotak_exception_summary(exc)}") from exc
 
-    # Also check trade report for closed trades if positions is empty or closed trades needed
     trades_closed_positions: list[dict[str, Any]] = []
     try:
-        if hasattr(client, "trade_report"):
-            trade_result = client.trade_report()
-            if isinstance(trade_result, dict) and (
-                str(trade_result.get("stCode")) in {"5203", "5200"}
-                or "no data" in str(trade_result.get("errMsg", "")).lower()
-                or "no data" in str(trade_result.get("emsg", "")).lower()
-            ):
-                trades = []
-            else:
-                trade_error = _kotak_response_error(trade_result)
-                trades = _rows_from_sdk_result(trade_result) if not trade_error else []
+        trades = _fetch_kotak_trades_raw(client)
+        if trades:
+            grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for trade in trades:
+                symbol = str(trade.get("trdSym") or trade.get("sym") or "—")
+                if symbol == "—":
+                    continue
+                group_key = (symbol, str(trade.get("prod") or ""), str(trade.get("exSeg") or ""))
+                row = grouped.setdefault(group_key, {
+                    "symbol": symbol, "product": trade.get("prod") or "", "exchange": trade.get("exSeg") or "",
+                    "buy_qty": 0.0, "sell_qty": 0.0, "buy_value": 0.0, "sell_value": 0.0
+                })
+                try:
+                    qty = float(trade.get("qty") or trade.get("flQty") or trade.get("trdQty") or trade.get("fillQty") or trade.get("fldQty") or 0)
+                    price = float(trade.get("avgPrc") or trade.get("trdPrc") or trade.get("tradePrice") or trade.get("flPrc") or trade.get("prc") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if qty <= 0 or price <= 0:
+                    continue
+                trns = str(trade.get("trnsTp") or trade.get("trnsType") or "").upper()
+                if trns in {"B", "BUY"}:
+                    row["buy_qty"] += qty
+                    row["buy_value"] += qty * price
+                elif trns in {"S", "SELL"}:
+                    row["sell_qty"] += qty
+                    row["sell_value"] += qty * price
 
-            if trades:
-                grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
-                for trade in trades:
-                    symbol = str(trade.get("trdSym") or trade.get("sym") or "—")
-                    if symbol == "—":
-                        continue
-                    group_key = (symbol, str(trade.get("prod") or ""), str(trade.get("exSeg") or ""))
-                    row = grouped.setdefault(group_key, {
-                        "symbol": symbol, "product": trade.get("prod") or "", "exchange": trade.get("exSeg") or "",
-                        "buy_qty": 0.0, "sell_qty": 0.0, "buy_value": 0.0, "sell_value": 0.0
-                    })
-                    try:
-                        qty = float(trade.get("qty") or trade.get("flQty") or trade.get("trdQty") or trade.get("fillQty") or trade.get("fldQty") or 0)
-                        price = float(trade.get("avgPrc") or trade.get("trdPrc") or trade.get("tradePrice") or trade.get("flPrc") or trade.get("prc") or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if qty <= 0 or price <= 0:
-                        continue
-                    trns = str(trade.get("trnsTp") or trade.get("trnsType") or "").upper()
-                    if trns in {"B", "BUY"}:
-                        row["buy_qty"] += qty
-                        row["buy_value"] += qty * price
-                    elif trns in {"S", "SELL"}:
-                        row["sell_qty"] += qty
-                        row["sell_value"] += qty * price
-
-                for row in grouped.values():
-                    matched = min(row["buy_qty"], row["sell_qty"])
-                    if matched <= 0 or abs(row["buy_qty"] - row["sell_qty"]) > 1e-6:
-                        continue
-                    avg_buy = row["buy_value"] / row["buy_qty"] if row["buy_qty"] else 0.0
-                    avg_sell = row["sell_value"] / row["sell_qty"] if row["sell_qty"] else 0.0
-                    realized = round((avg_sell - avg_buy) * matched, 2)
-                    trades_closed_positions.append({
-                        "symbol": row["symbol"],
-                        "exchange": row["exchange"],
-                        "product": row["product"],
-                        "quantity": 0,
-                        "buy_qty": row["buy_qty"],
-                        "sell_qty": row["sell_qty"],
-                        "avg_buy_price": round(avg_buy, 2),
-                        "avg_sell_price": round(avg_sell, 2),
-                        "ltp": None,
-                        "realized_pnl": realized,
-                        "unrealized_pnl": 0.0,
-                        "mtm_pnl": 0.0,
-                        "position_pnl": realized,
-                        "closed": True,
-                        "pnl_error": None,
-                    })
+            for row in grouped.values():
+                matched = min(row["buy_qty"], row["sell_qty"])
+                if matched <= 0 or abs(row["buy_qty"] - row["sell_qty"]) > 1e-6:
+                    continue
+                avg_buy = row["buy_value"] / row["buy_qty"] if row["buy_qty"] else 0.0
+                avg_sell = row["sell_value"] / row["sell_qty"] if row["sell_qty"] else 0.0
+                realized = round((avg_sell - avg_buy) * matched, 2)
+                trades_closed_positions.append({
+                    "symbol": row["symbol"],
+                    "trading_symbol": row["symbol"],
+                    "display_symbol": _format_kotak_display_symbol(row["symbol"]),
+                    "exchange": row["exchange"],
+                    "product": row["product"],
+                    "quantity": 0,
+                    "buy_qty": row["buy_qty"],
+                    "sell_qty": row["sell_qty"],
+                    "total_buy_quantity": row["buy_qty"],
+                    "total_sell_quantity": row["sell_qty"],
+                    "average_price": round(avg_buy or avg_sell, 2),
+                    "avg_buy_price": round(avg_buy, 2),
+                    "avg_sell_price": round(avg_sell, 2),
+                    "ltp": None,
+                    "realized_pnl": realized,
+                    "realised_gross_pnl": realized,
+                    "realised_net_pnl": realized,
+                    "total_charges": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "mtm_pnl": 0.0,
+                    "m2m": 0.0,
+                    "position_pnl": realized,
+                    "closed": True,
+                    "pnl_error": None,
+                })
     except Exception:
         pass
 
+    # Enrich open Kotak positions with live non-fallback market LTP when available
+    live_ltps: dict[int, float] = {}
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        for idx_p, p in enumerate(raw_positions):
+            pre_calc = _calculate_single_position(p)
+            if pre_calc["closed"]:
+                continue
+            sym_p = str(p.get("trdSym") or p.get("sym") or "").strip()
+            tok_p = str(p.get("tok") or p.get("instrumentToken") or p.get("pSymbol") or "").strip()
+            ex_p = str(p.get("exSeg") or p.get("exchangeSegment") or "").strip()
+            tok_key = f"{_normalize_kotak_exchange_segment(ex_p, sym_p).upper()}|{tok_p}" if tok_p.isdigit() else ""
+            try:
+                q_p = _get_live_quote_data(sym_p, token=tok_key)
+                if q_p and not q_p.get("is_fallback") and float(q_p.get("ltp") or 0) > 0:
+                    live_ltps[idx_p] = float(q_p["ltp"])
+            except Exception:
+                pass
+
     all_positions: list[dict[str, Any]] = []
     seen_symbols: set[str] = set()
-    for p in raw_positions:
-        calc = _calculate_single_position(p)
+    for idx_p, p in enumerate(raw_positions):
+        calc = _calculate_single_position(p, ltp=live_ltps.get(idx_p))
         sym_key = f"{calc['symbol']}|{calc['product']}|{calc['exchange']}"
         seen_symbols.add(sym_key)
         all_positions.append(calc)
@@ -6928,45 +7079,35 @@ def positions(
     total_unrealized = sum(float(r["unrealized_pnl"]) for r in all_positions if r.get("unrealized_pnl") is not None and not r["closed"])
     total_today = round(total_realized + total_unrealized, 2)
 
-    active_tab = (tab or ("closed" if closed else "open")).lower()
-    if active_tab == "closed":
-        visible = closed_positions
-    elif active_tab == "all":
-        visible = all_positions
-    else:
-        visible = open_positions
-
     charges_info = _calculate_estimated_charges(all_positions, client=client)
     total_net_val = round(total_today - charges_info["total_charges"], 2)
 
-    # Ensure backwards compatibility with tests and UI
     total_mtm_val = round(total_unrealized, 2) if all_positions else 0
     total_pos_pnl_val = total_today if all_positions else 0
 
     closed_pnls = [float(r.get("realised_net_pnl") or r.get("realized_pnl") or 0.0) for r in closed_positions]
     metrics = compute_trade_metrics(closed_pnls, base_capital=1000000.0)
+    winning_cnt = sum(1 for v in closed_pnls if v > 0)
+    losing_cnt = sum(1 for v in closed_pnls if v < 0)
 
-    return {
-        "positions": visible,
+    bundle = {
         "all_positions": all_positions,
-        "total_today_pnl": total_today,
-        "total_net_pnl": total_net_val,
-        "charges": charges_info,
+        "open_positions": open_positions,
+        "closed_positions": closed_positions,
+        "total_realized": total_realized,
+        "total_unrealized": total_unrealized,
+        "total_today": total_today,
+        "charges_info": charges_info,
+        "total_net_val": total_net_val,
+        "total_mtm_val": total_mtm_val,
+        "total_pos_pnl_val": total_pos_pnl_val,
         "metrics": metrics,
-        "win_rate": metrics["win_rate"],
-        "avg_r_multiple": metrics["avg_r_multiple"],
-        "sharpe_ratio": metrics["sharpe_ratio"],
-        "currency": "INR",
-        "total_realized_pnl": round(total_realized, 2),
-        "total_unrealized_pnl": round(total_unrealized, 2),
-        "total_mtm": total_mtm_val,
-        "total_position_pnl": total_pos_pnl_val,
-        "open_count": len(open_positions),
-        "closed_count": len(closed_positions),
-        "all_count": len(all_positions),
-        "pnl_complete": True,
-        "updated_at": utc_now(),
+        "winning_cnt": winning_cnt,
+        "losing_cnt": losing_cnt,
     }
+    if use_cache:
+        _KOTAK_POS_BUNDLE_CACHE[ck] = (now, bundle)
+    return bundle
 
 
 # ==================== DEDICATED POSITION ACCOUNTING API ENDPOINTS ====================
@@ -7019,6 +7160,28 @@ def positions_closed(
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     allow_override = bool(ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST")))
     acc = (account_id if (account_id and allow_override) else ctx["account_id"])
+    if not account_id and ctx["is_admin"] and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None:
+        try:
+            bundle = _build_kotak_positions_bundle(neo_client)
+            closed_list = bundle["closed_positions"]
+            gross_r = round(sum(float(c.get("realized_pnl") or 0.0) for c in closed_list), 2)
+            tot_chg = float((bundle.get("charges_info") or {}).get("total_charges") or 0.0)
+            net_r = round(gross_r - tot_chg, 2)
+            return {
+                "positions": closed_list,
+                "summary": {
+                    "gross_realised_pnl": gross_r,
+                    "total_charges": tot_chg,
+                    "net_realised_pnl": net_r,
+                    "winning_positions": bundle["winning_cnt"],
+                    "losing_positions": bundle["losing_cnt"],
+                },
+                "metrics": bundle["metrics"],
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            pass
     with db() as conn:
         return get_closed_positions(acc, from_date, to_date, conn=conn)
 
@@ -7070,6 +7233,35 @@ def executions_list(
     neo_session: str | None = Cookie(default=None),
 ):
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if ctx["is_admin"] and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None:
+        raw_trades = _fetch_kotak_trades_raw(neo_client)
+        execs = []
+        for idx_t, t in enumerate(raw_trades[:max(1, min(limit, 200))]):
+            sym_t = str(t.get("trdSym") or t.get("sym") or "—")
+            side_raw = str(t.get("trnsTp") or t.get("trnsType") or "B").upper()
+            side_t = "BUY" if side_raw in {"B", "BUY"} else "SELL"
+            try:
+                qty_t = int(float(t.get("fldQty") or t.get("flQty") or t.get("trdQty") or t.get("fillQty") or t.get("qty") or 0))
+                prc_t = float(t.get("avgPrc") or t.get("trdPrc") or t.get("tradePrice") or t.get("flPrc") or t.get("prc") or 0)
+            except (TypeError, ValueError):
+                qty_t, prc_t = 0, 0.0
+            exec_id = str(t.get("flId") or t.get("trdId") or t.get("exOrdId") or t.get("nOrdNo") or f"KEX-{idx_t+1}")
+            ord_id = str(t.get("nOrdNo") or t.get("order_id") or "")
+            execs.append({
+                "id": exec_id,
+                "broker_execution_id": exec_id,
+                "order_id": ord_id,
+                "symbol": sym_t,
+                "trading_symbol": sym_t,
+                "display_symbol": _format_kotak_display_symbol(sym_t),
+                "side": side_t,
+                "quantity": qty_t,
+                "price": prc_t,
+                "product": str(t.get("prod") or "NRML"),
+                "executed_at": str(t.get("flDtTm") or t.get("exTm") or t.get("ordDtTm") or utc_now()),
+                "charges": {"total_charges": 0.0},
+            })
+        return execs
     with db() as conn:
         return get_executions(ctx["account_id"], limit, conn=conn)
 
@@ -7082,6 +7274,32 @@ def pnl_summary_api(
     neo_session: str | None = Cookie(default=None),
 ):
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if ctx["is_admin"] and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None:
+        try:
+            bundle = _build_kotak_positions_bundle(neo_client)
+            closed_list = bundle["closed_positions"]
+            gross_r = round(sum(float(c.get("realized_pnl") or 0.0) for c in closed_list), 2)
+            tot_chg = float((bundle.get("charges_info") or {}).get("total_charges") or 0.0)
+            net_r = round(gross_r - tot_chg, 2)
+            day_block = {
+                "realised_gross_pnl": gross_r,
+                "total_charges": tot_chg,
+                "realised_net_pnl": net_r,
+                "winning_trades": bundle["winning_cnt"],
+                "losing_trades": bundle["losing_cnt"],
+            }
+            return {
+                "all_time": day_block,
+                "today": day_block,
+                "total_realised_gross_pnl": gross_r,
+                "total_charges": tot_chg,
+                "total_realised_net_pnl": net_r,
+                "winning_trades": bundle["winning_cnt"],
+                "losing_trades": bundle["losing_cnt"],
+                "metrics": bundle["metrics"],
+            }
+        except Exception:
+            pass
     with db() as conn:
         return get_pnl_summary(ctx["account_id"], conn=conn)
 

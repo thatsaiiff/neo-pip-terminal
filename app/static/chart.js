@@ -399,6 +399,31 @@
     return 'NSE EQ';
   }
 
+  function parseTradeContractId(sym) {
+    const raw = String(sym || '').trim().toUpperCase();
+    if (!raw) return null;
+    const mKotak = raw.match(/^([A-Z&-]+?)\d{2}[A-Z0-9]{3}(\d{3,6})(CE|PE)$/);
+    if (mKotak) return `${mKotak[1]}|${mKotak[2]}|${mKotak[3]}`;
+    const mSpaced = raw.match(/^([A-Z&-]+?)\s+(\d{3,6})\s+(CE|PE)(?:\b|$)/);
+    if (mSpaced) return `${mSpaced[1]}|${mSpaced[2]}|${mSpaced[3]}`;
+    const mCompact = raw.match(/^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX|BANKEX).*?(\d{3,6})\s*(CE|PE)(?:\b|$)/);
+    if (mCompact) return `${mCompact[1]}|${mCompact[2]}|${mCompact[3]}`;
+    return null;
+  }
+
+  function symbolsMatchTrade(symA, symB) {
+    const a = String(symA || '').trim().toUpperCase();
+    const b = String(symB || '').trim().toUpperCase();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const baseA = a.replace(/-(?:EQ|BE|BL|SM|BZ)$/, '');
+    const baseB = b.replace(/-(?:EQ|BE|BL|SM|BZ)$/, '');
+    if (baseA === baseB) return true;
+    const idA = parseTradeContractId(a);
+    const idB = parseTradeContractId(b);
+    return Boolean(idA && idB && idA === idB);
+  }
+
   function registerSymbolMeta(sym, meta = {}) {
     const key = String(sym || '').trim().toUpperCase();
     if (!key) return;
@@ -624,25 +649,52 @@
     });
   }
 
+  const livePositionQuotes = {};
+
+  function lookupPositionLiveLtp(pos) {
+    const candidates = [pos.symbol, pos.display_symbol, pos.trading_symbol, pos.trdSym]
+      .filter(Boolean)
+      .map(s => String(s).trim().toUpperCase());
+    for (const c of candidates) {
+      if (Number(livePositionQuotes[c]) > 0) return Number(livePositionQuotes[c]);
+    }
+    const matchPane = panes.find(p => Number(p.lastLtp) > 0 && candidates.some(c => symbolsMatchTrade(p.sym, c)));
+    if (matchPane) return Number(matchPane.lastLtp);
+    for (const k of Object.keys(livePositionQuotes)) {
+      if (Number(livePositionQuotes[k]) > 0 && candidates.some(c => symbolsMatchTrade(k, c))) {
+        return Number(livePositionQuotes[k]);
+      }
+    }
+    return 0;
+  }
+
   function computeLivePosM2m(pos) {
     const symU = String(pos.symbol || pos.trading_symbol || pos.trdSym || '').trim().toUpperCase();
-    const matchPane = panes.find(p => String(p.sym || '').trim().toUpperCase() === symU && Number(p.lastLtp) > 0);
-    const avg = Number(pos.average_price || pos.avg_price || pos.avgPrc || 0);
-    const ltp = matchPane ? Number(matchPane.lastLtp) : Number(pos.ltp || avg);
-    const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(pos.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
+    const avg = Number(pos.average_price || pos.avg_price || pos.avg_buy_price || pos.avgPrc || 0);
+    const liveLtp = lookupPositionLiveLtp(pos);
+    const baseLtp = Number(pos.ltp || 0);
+    const ltp = liveLtp > 0 ? liveLtp : (baseLtp > 0 ? baseLtp : avg);
+    const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(pos.quantity) >= 0 ? 'BUY' : 'SELL')).toUpperCase();
     const qty = Math.abs(Number(pos.quantity || pos.qty || 0));
     const fx = getForexSpec(symU);
     const mult = Number(pos.multiplier || (fx && fx.multiplier) || 1.0);
-    if (matchPane && avg > 0 && qty > 0) {
+    if (liveLtp > 0 && baseLtp > 0 && pos.m2m !== undefined && pos.m2m !== null) {
+      const sign = side === 'BUY' ? 1 : -1;
+      return Number(pos.m2m) + ((liveLtp - baseLtp) * qty * mult * sign);
+    }
+    if ((liveLtp > 0 || baseLtp > 0) && avg > 0 && qty > 0) {
       return (side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult;
     }
-    return Number(pos.m2m !== undefined ? pos.m2m : ((side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult));
+    return Number(pos.m2m !== undefined && pos.m2m !== null ? pos.m2m : 0);
   }
 
   function sumSymbolOpenPnl(sym) {
     const symU = String(sym || '').trim().toUpperCase();
     if (!symU || !cachedPositions.length) return { hasOpen: false, pnl: 0 };
-    const matching = cachedPositions.filter(p => String(p.symbol || p.trading_symbol || p.trdSym || '').trim().toUpperCase() === symU);
+    const matching = cachedPositions.filter(p => {
+      const pSym = p.symbol || p.trading_symbol || p.trdSym || '';
+      return symbolsMatchTrade(pSym, symU) || (p.display_symbol && symbolsMatchTrade(p.display_symbol, symU));
+    });
     if (!matching.length) return { hasOpen: false, pnl: 0 };
     const total = matching.reduce((acc, p) => acc + computeLivePosM2m(p), 0);
     return { hasOpen: true, pnl: total };
@@ -1528,6 +1580,7 @@
       const finalP = Number(lineEl.dataset.dragPrice || 0);
       try {
         if (finalP > 0) {
+          _portfolioMutationEpoch += 1;
           rule[fieldKey] = finalP;
           handleEl.textContent = formatPillText(finalP);
           await api(`/api/sltp/${rule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
@@ -1560,8 +1613,11 @@
     }
 
     const symUpper = String(pane.sym || '').trim().toUpperCase();
-    const pos = cachedPositions.find(p => String(p.symbol || p.trading_symbol || p.trdSym || '').trim().toUpperCase() === symUpper);
-    const rules = activeSltpRules.filter(r => String(r.symbol || '').trim().toUpperCase() === symUpper && r.status === 'active');
+    const pos = cachedPositions.find(p => {
+      const pSym = p.symbol || p.trading_symbol || p.trdSym || '';
+      return symbolsMatchTrade(pSym, symUpper) || (p.display_symbol && symbolsMatchTrade(p.display_symbol, symUpper));
+    });
+    const rules = activeSltpRules.filter(r => symbolsMatchTrade(r.symbol || '', symUpper) && r.status === 'active');
 
     overlay.innerHTML = '';
     const decs = getSymbolDecimals(pane.sym);
@@ -1582,10 +1638,10 @@
 
     // 1. Entry Price Line for open position
     if (pos) {
-      const avg = Number(pos.average_price || pos.avg_price || 0);
-      const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY')).toUpperCase();
+      const avg = Number(pos.average_price || pos.avg_price || pos.avg_buy_price || 0);
+      const side = String(pos.side || (pos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(pos.quantity) >= 0 ? 'BUY' : 'SELL')).toUpperCase();
       const qtyDisp = pos.lots && isForexSym(pane.sym) ? `${pos.lots} lot` : `${Math.abs(Number(pos.quantity || 0))}`;
-      const m2m = Number(pos.m2m || 0);
+      const m2m = computeLivePosM2m(pos);
       const entryLine = createLineEl('tpl-entry', avg, false);
       if (entryLine) {
         const bg = document.createElement('div');
@@ -2144,7 +2200,10 @@
     if (pane.idx === activePaneIdx) {
       updateOrderFormPrices(ltp);
     }
+    const pSymU = String(pane.sym || '').trim().toUpperCase();
+    if (pSymU && Number.isFinite(ltp) && ltp > 0) livePositionQuotes[pSymU] = ltp;
     updateActivePanePnlBadges();
+    if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
   }
 
   const _candleClientCache = new Map();
@@ -2486,14 +2545,100 @@
   };
 
   // --- Sub-second Quotes Stream ---
+  let refreshLivePositionsDomFn = null;
   function startQuotesPolling() {
     let pollTickCount = 0;
+
+    refreshLivePositionsDomFn = () => {
+      if (!cachedPositions.length) return;
+      cachedPositions.forEach(pos => {
+        const sym = String(pos.symbol || pos.trading_symbol || pos.trdSym || '').trim();
+        const symU = sym.toUpperCase();
+        const disp = String(pos.display_symbol || '').trim().toUpperCase();
+        const pc = curSym(sym);
+        const decs = getSymbolDecimals(sym);
+        const liveLtp = lookupPositionLiveLtp(pos);
+        const avg = Number(pos.average_price || pos.avg_price || pos.avg_buy_price || pos.avgPrc || 0);
+        const effLtp = liveLtp > 0 ? liveLtp : Number(pos.ltp || avg || 0);
+        const effM2m = computeLivePosM2m(pos);
+        const isPos = effM2m >= 0;
+
+        document.querySelectorAll('#open-positions-tbody tr[data-pos-sym]').forEach(tr => {
+          const rowSym = String(tr.dataset.posSym || '').toUpperCase();
+          if (rowSym !== symU && (!disp || rowSym !== disp)) return;
+          const ltpCell = tr.querySelector('.pos-ltp-cell');
+          const m2mCell = tr.querySelector('.pos-m2m-cell');
+          if (ltpCell && effLtp > 0) {
+            const nxt = `${pc}${effLtp.toFixed(decs)}`;
+            if (ltpCell.textContent !== nxt) ltpCell.textContent = nxt;
+          }
+          if (m2mCell) {
+            const nxtM = `${isPos ? '+' : ''}${pc}${effM2m.toFixed(2)}`;
+            if (m2mCell.textContent !== nxtM) m2mCell.textContent = nxtM;
+            m2mCell.style.color = isPos ? 'var(--bull)' : 'var(--bear)';
+          }
+        });
+
+        document.querySelectorAll('#m-orders-list .m-order-card[data-pos-sym]').forEach(card => {
+          const rowSym = String(card.dataset.posSym || '').toUpperCase();
+          if (rowSym !== symU && (!disp || rowSym !== disp)) return;
+          const ltpEl = card.querySelector('.m-card-ltp');
+          const pnlEl = card.querySelector('.m-card-pnl');
+          if (ltpEl && effLtp > 0) {
+            const nxt = `${pc}${effLtp.toFixed(decs)}`;
+            if (ltpEl.textContent !== nxt) ltpEl.textContent = nxt;
+          }
+          if (pnlEl) {
+            const nxtM = `${isPos ? '+' : ''}${pc}${effM2m.toFixed(2)}`;
+            if (pnlEl.textContent !== nxtM) pnlEl.textContent = nxtM;
+            pnlEl.className = `m-card-pnl ${isPos ? 'pos' : 'neg'}`;
+          }
+        });
+      });
+
+      const visN = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+      for (let i = 0; i < visN; i += 1) {
+        const p = panes[i];
+        if (!p || !p.sym) continue;
+        const ov = $(`p${p.idx + 1}-trade-overlay`);
+        if (!ov) continue;
+        const entryTag = ov.querySelector('.tpl-entry .tpl-drag-handle');
+        if (!entryTag) continue;
+        const symU = String(p.sym || '').trim().toUpperCase();
+        const matchPos = cachedPositions.find(cp => {
+          const cpSym = cp.symbol || cp.trading_symbol || cp.trdSym || '';
+          return symbolsMatchTrade(cpSym, symU) || (cp.display_symbol && symbolsMatchTrade(cp.display_symbol, symU));
+        });
+        if (!matchPos) continue;
+        const side = String(matchPos.side || (matchPos.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(matchPos.quantity) >= 0 ? 'BUY' : 'SELL')).toUpperCase();
+        const qtyDisp = matchPos.lots && isForexSym(p.sym) ? `${matchPos.lots} lot` : `${Math.abs(Number(matchPos.quantity || 0))}`;
+        const m2m = computeLivePosM2m(matchPos);
+        const cs = curSym(p.sym);
+        const nextTxt = `${side} ${qtyDisp} (${m2m >= 0 ? '+' : ''}${cs}${m2m.toFixed(2)})`;
+        if (entryTag.textContent !== nextTxt) entryTag.textContent = nextTxt;
+      }
+    };
+
     async function tick() {
       try {
         pollTickCount += 1;
         const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
         const activePanes = panes.slice(0, visibleCount);
-        const items = activePanes.map(p => ({ symbol: p.sym, token: p.token }));
+        const items = activePanes.map(p => ({ symbol: p.sym, token: p.token || '' }));
+        const seenReq = new Set(items.map(it => String(it.symbol || '').toUpperCase()));
+        if (cachedPositions && cachedPositions.length) {
+          for (const pos of cachedPositions) {
+            if (items.length >= 20) break;
+            const posSym = String(pos.symbol || pos.trading_symbol || pos.trdSym || '').trim();
+            if (!posSym) continue;
+            const key = posSym.toUpperCase();
+            if (seenReq.has(key)) continue;
+            if (panes.slice(0, visibleCount).some(ap => symbolsMatchTrade(ap.sym, posSym))) continue;
+            seenReq.add(key);
+            items.push({ symbol: posSym, token: pos.instrument_key || '' });
+          }
+        }
+
         const res = await api('/api/chart/live-quotes', {
           method: 'POST',
           body: JSON.stringify({ items }),
@@ -2501,7 +2646,15 @@
         if (res && res.ok && res.quotes) {
           const qList = Array.isArray(res.quotes) ? res.quotes : Object.values(res.quotes);
           const qMap = res.quotes_by_symbol || {};
-          qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
+          qList.forEach(q => {
+            if (q && q.symbol) {
+              qMap[q.symbol] = q;
+              if (q.ltp && !q.is_fallback) livePositionQuotes[String(q.symbol).trim().toUpperCase()] = Number(q.ltp);
+            }
+          });
+          Object.entries(qMap).forEach(([k, q]) => {
+            if (q && q.ltp && !q.is_fallback) livePositionQuotes[String(k).trim().toUpperCase()] = Number(q.ltp);
+          });
 
           activePanes.forEach(pane => {
             const q = qMap[pane.sym];
@@ -2511,6 +2664,7 @@
               maybeCheckLiveTriggers(pane, q.ltp);
             }
           });
+          if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
         }
         if (pollTickCount % 15 === 0) {
           updateWatchlistQuotes();
@@ -4225,17 +4379,37 @@
     }
   }
 
+  let _fetchingPortfolio = false;
+  let _pendingPortfolioResync = false;
+  let _portfolioMutationEpoch = 0;
+
   async function fetchPositionsAndOrders() {
     if (!isAuthenticated) return;
+    if (_fetchingPortfolio) {
+      _pendingPortfolioResync = true;
+      return;
+    }
+    _fetchingPortfolio = true;
+    const startEpoch = _portfolioMutationEpoch;
     try {
       const mQ = `market=${encodeURIComponent(currentMarketMode)}`;
       const c = curSym();
 
-      // 1. Open Positions & SL/TP Rules
-      const [posData, sltpData] = await Promise.all([
+      // Fetch portfolio endpoints in parallel so Kotak broker calls complete together rapidly
+      const [posData, sltpData, fundsData, ordersData, closedData, pnlSummaryData, executionsData] = await Promise.all([
         api(`/api/positions?tab=open&${mQ}`).catch(() => ({ positions: [] })),
         api(`/api/sltp?${mQ}`).catch(() => ({ rules: [] })),
+        api(`/api/funds?${mQ}`).catch(() => ({})),
+        api(`/api/orders?${mQ}`).catch(() => []),
+        api(`/api/positions/closed?${mQ}`).catch(() => ({ positions: [], summary: {} })),
+        api(`/api/pnl/summary?${mQ}`).catch(() => ({})),
+        api(`/api/executions?${mQ}`).catch(() => []),
       ]);
+
+      if (_isDraggingTradeLine || startEpoch !== _portfolioMutationEpoch) {
+        _pendingPortfolioResync = true;
+        return;
+      }
 
       activeSltpRules = Array.isArray(sltpData) ? sltpData : (sltpData && Array.isArray(sltpData.rules) ? sltpData.rules : []);
 
@@ -4259,27 +4433,32 @@
             const lotsDisp = (p.lots && isForexSym(sym)) ? `${p.lots} lot` : `${qty}`;
             const decs = getSymbolDecimals(sym);
             const pc = curSym(sym);
-            const avg = Number(p.average_price || p.avg_price || p.avgPrc || 0);
-            const ltp = Number(p.ltp || avg);
-            const mult = Number(p.multiplier || 1.0);
-            const m2m = Number(p.m2m !== undefined ? p.m2m : ((side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult));
+            const avg = Number(p.average_price || p.avg_price || p.avg_buy_price || p.avgPrc || 0);
+            const liveLtp = lookupPositionLiveLtp(p);
+            const ltp = liveLtp > 0 ? liveLtp : Number(p.ltp || avg);
+            const m2m = computeLivePosM2m(p);
             const isPos = m2m >= 0;
 
             const tr = document.createElement('tr');
+            tr.dataset.posSym = sym.toUpperCase();
             tr.innerHTML = `
-              <td><b>${escapeHtml(sym)}</b></td>
+              <td class="pos-sym-cell" style="cursor:pointer;" title="Open ${escapeHtml(p.display_symbol || sym)} chart"><b>${escapeHtml(sym)}</b></td>
               <td><span class="side-badge ${side.toLowerCase()}">${side}</span></td>
               <td>${escapeHtml(p.product || 'NRML')}</td>
               <td>${escapeHtml(lotsDisp)}</td>
               <td>${pc}${avg.toFixed(decs)}</td>
-              <td>${pc}${ltp.toFixed(decs)}</td>
-              <td style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">
+              <td class="pos-ltp-cell">${pc}${ltp.toFixed(decs)}</td>
+              <td class="pos-m2m-cell" style="color: ${isPos ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">
                 ${isPos ? '+' : ''}${pc}${m2m.toFixed(2)}
               </td>
               <td>
                 <button type="button" class="pos-action-btn danger btn-pos-exit" data-sym="${escapeHtml(sym)}">Exit</button>
               </td>
             `;
+
+            tr.querySelector('.pos-sym-cell').addEventListener('click', () => {
+              addSymbolTab(p.display_symbol || sym, p.instrument_key || '');
+            });
 
             tr.querySelector('.btn-pos-exit').addEventListener('click', async () => {
               try {
@@ -4304,7 +4483,6 @@
       }
 
       // 2. Funds & Equity
-      const fundsData = await api(`/api/funds?${mQ}`).catch(() => ({}));
       cachedFunds = fundsData || {};
       const eqEl = $('f-equity');
       const fmEl = $('f-free-margin');
@@ -4331,7 +4509,6 @@
       }
 
       // 3. Orders report (Pending)
-      const ordersData = await api(`/api/orders?${mQ}`).catch(() => []);
       const pendingTbody = $('pending-orders-tbody');
       const pendingCount = $('pending-orders-count');
       const allOrders = Array.isArray(ordersData) ? ordersData : [];
@@ -4373,14 +4550,12 @@
       }
 
       // 4. Closed Positions (Accounting Lifecycles) & Performance Metrics (Win Rate / R-Mult / Sharpe)
-      const closedData = await api(`/api/positions/closed?${mQ}`).catch(() => ({ positions: [], summary: {} }));
-      const pnlSummaryData = await api(`/api/pnl/summary?${mQ}`).catch(() => ({}));
       const closedTbody = $('closed-trades-tbody');
       const closedCount = $('closed-trades-count');
 
       const closedPositions = Array.isArray(closedData) ? closedData : (closedData.positions || []);
       const closedSummary = (!Array.isArray(closedData) && closedData.summary) ? closedData.summary : {};
-      const perfMetrics = (pnlSummaryData && pnlSummaryData.metrics) ? pnlSummaryData.metrics : { win_rate: 0, avg_r_multiple: 0, sharpe_ratio: 0 };
+      const perfMetrics = (pnlSummaryData && pnlSummaryData.metrics) ? pnlSummaryData.metrics : (posData && posData.metrics ? posData.metrics : { win_rate: 0, avg_r_multiple: 0, sharpe_ratio: 0 });
       if (closedCount) closedCount.textContent = closedPositions.length;
 
       const grossEl = $('cs-gross-pnl');
@@ -4391,9 +4566,9 @@
       const rMultEl = $('cs-r-mult');
       const sharpeEl = $('cs-sharpe');
 
-      const gross = Number(closedSummary.gross_realised_pnl !== undefined ? closedSummary.gross_realised_pnl : (pnlSummaryData.total_realised_gross_pnl || 0));
-      const charges = Number(closedSummary.total_charges !== undefined ? closedSummary.total_charges : (pnlSummaryData.total_charges || 0));
-      const net = Number(closedSummary.net_realised_pnl !== undefined ? closedSummary.net_realised_pnl : (pnlSummaryData.total_realised_net_pnl || 0));
+      const gross = Number(closedSummary.gross_realised_pnl !== undefined ? closedSummary.gross_realised_pnl : (pnlSummaryData.total_realised_gross_pnl !== undefined ? pnlSummaryData.total_realised_gross_pnl : (posData.total_realized_pnl || 0)));
+      const charges = Number(closedSummary.total_charges !== undefined ? closedSummary.total_charges : (pnlSummaryData.total_charges !== undefined ? pnlSummaryData.total_charges : ((posData.charges && posData.charges.total_charges) || 0)));
+      const net = Number(closedSummary.net_realised_pnl !== undefined ? closedSummary.net_realised_pnl : (pnlSummaryData.total_realised_net_pnl !== undefined ? pnlSummaryData.total_realised_net_pnl : (gross - charges)));
       const wins = Number(closedSummary.winning_positions !== undefined ? closedSummary.winning_positions : (pnlSummaryData.winning_trades || 0));
       const losses = Number(closedSummary.losing_positions !== undefined ? closedSummary.losing_positions : (pnlSummaryData.losing_trades || 0));
       const winRateVal = Number(perfMetrics.win_rate || 0);
@@ -4439,13 +4614,13 @@
             const sym = cp.symbol || cp.trading_symbol || '—';
             const pc = curSym(sym);
             const decs = getSymbolDecimals(sym);
-            const netPnl = Number(cp.realised_net_pnl !== undefined ? cp.realised_net_pnl : (cp.realised_gross_pnl || 0));
-            const grossPnl = Number(cp.realised_gross_pnl || 0);
+            const netPnl = Number(cp.realised_net_pnl !== undefined ? cp.realised_net_pnl : (cp.realised_gross_pnl !== undefined ? cp.realised_gross_pnl : (cp.realized_pnl || 0)));
+            const grossPnl = Number(cp.realised_gross_pnl !== undefined ? cp.realised_gross_pnl : (cp.realized_pnl || 0));
             const cpCharges = Number(cp.total_charges || 0);
             const avgBuy = Number(cp.avg_buy_price || 0);
             const avgSell = Number(cp.avg_sell_price || 0);
-            const qty = Math.max(Number(cp.total_buy_quantity || 0), Number(cp.total_sell_quantity || 0));
-            const side = (cp.total_buy_quantity >= cp.total_sell_quantity ? 'BUY' : 'SELL');
+            const qty = Math.max(Number(cp.total_buy_quantity || cp.buy_qty || 0), Number(cp.total_sell_quantity || cp.sell_qty || 0));
+            const side = (Number(cp.total_buy_quantity || cp.buy_qty || 0) >= Number(cp.total_sell_quantity || cp.sell_qty || 0) ? 'BUY' : 'SELL');
             const isPos = netPnl >= 0;
             const closedTime = cp.closed_at ? (cp.closed_at.split('T')[1]?.slice(0, 8) || cp.closed_at) : 'Today';
 
@@ -4503,7 +4678,6 @@
       }
 
       // 5. Executions Ledger (Trade History)
-      const executionsData = await api(`/api/executions?${mQ}`).catch(() => []);
       const execList = Array.isArray(executionsData) ? executionsData : [];
       const historyTbody = $('trade-history-tbody');
       const historyCount = $('trade-history-count');
@@ -4557,6 +4731,12 @@
       }
     } catch (e) {
       // quiet
+    } finally {
+      _fetchingPortfolio = false;
+      if (_pendingPortfolioResync) {
+        _pendingPortfolioResync = false;
+        setTimeout(fetchPositionsAndOrders, 150);
+      }
     }
   }
 
@@ -6786,14 +6966,15 @@
             const side = (p.side || (p.direction === 'SHORT' ? 'SELL' : 'BUY') || (Number(p.quantity) > 0 ? 'BUY' : 'SELL')).toUpperCase();
             const qty = Math.abs(Number(p.quantity || p.qty || 0));
             const lotsDisp = (p.lots && isForexSym(sym)) ? `${p.lots} lot` : `${qty} qty`;
-            const avg = Number(p.average_price || p.avg_price || p.avgPrc || 0);
-            const ltp = Number(p.ltp || avg);
-            const mult = Number(p.multiplier || 1.0);
-            const m2m = Number(p.m2m !== undefined ? p.m2m : ((side === 'BUY' ? (ltp - avg) : (avg - ltp)) * qty * mult));
+            const avg = Number(p.average_price || p.avg_price || p.avg_buy_price || p.avgPrc || 0);
+            const liveLtp = lookupPositionLiveLtp(p);
+            const ltp = liveLtp > 0 ? liveLtp : Number(p.ltp || avg);
+            const m2m = computeLivePosM2m(p);
             const isPos = m2m >= 0;
 
             const card = document.createElement('div');
             card.className = 'm-order-card';
+            card.dataset.posSym = sym.toUpperCase();
             card.innerHTML = `
               <div class="m-card-top">
                 <div class="m-card-sym-wrap">
@@ -6837,7 +7018,7 @@
             }
 
             card.addEventListener('click', () => {
-              addSymbolTab(sym, '');
+              addSymbolTab(p.display_symbol || sym, p.instrument_key || '');
               switchMobileTab('chart');
             });
 
@@ -7538,7 +7719,7 @@
     startQuotesPolling();
 
     // Regular position & candle close countdown refresh
-    setInterval(fetchPositionsAndOrders, 4000);
+    setInterval(fetchPositionsAndOrders, 3000);
     setInterval(updatePaneCountdowns, 500);
   });
 })();

@@ -1637,6 +1637,137 @@ def test_kotak_contract_resolution_bse_fo_sensex_and_nse_cm_equity(client, monke
     assert fake.calls[-1]["quantity"] == "2"
 
 
+def test_kotak_live_positions_enrichment_executions_closed_and_summary(client, monkeypatch):
+    adm = client.post("/api/auth/signin", json={"username": main.ADMIN_USERNAME, "password": main.ADMIN_PASSWORD})
+    assert adm.status_code == 200
+    headers = {"Authorization": f"Bearer {adm.json()['token']}"}
+
+    open_row_no_ltp = {
+        "trdSym": "SENSEX26N1281000PE",
+        "exSeg": "bse_fo",
+        "prod": "NRML",
+        "tok": "824311",
+        "flBuyQty": "20",
+        "flSellQty": "0",
+        "buyAmt": "1100.00",
+        "sellAmt": "0.00",
+    }
+    direct_calc = main._calculate_single_position(open_row_no_ltp, ltp=75.0)
+    assert direct_calc["display_symbol"] == "SENSEX 81000 PE"
+    assert direct_calc["side"] == "BUY"
+    assert direct_calc["average_price"] == 55.0
+    assert direct_calc["ltp"] == 75.0
+    assert direct_calc["m2m"] == 400.0
+
+    class FakeKotakPortfolioClient:
+        def positions(self):
+            return {
+                "stat": "Ok",
+                "data": [
+                    {**open_row_no_ltp, "ltp": "75.0"},
+                    {
+                        "trdSym": "SENSEX26N1282000CE",
+                        "exSeg": "bse_fo",
+                        "prod": "NRML",
+                        "tok": "824322",
+                        "flBuyQty": "20",
+                        "flSellQty": "20",
+                        "buyAmt": "2000.00",
+                        "sellAmt": "2400.00",
+                    },
+                ],
+            }
+
+        def trade_report(self):
+            return {
+                "stat": "Ok",
+                "data": [
+                    {
+                        "trdSym": "SENSEX26N1281000PE",
+                        "trnsTp": "B",
+                        "fldQty": "20",
+                        "avgPrc": "55.00",
+                        "prod": "NRML",
+                        "exSeg": "bse_fo",
+                        "flId": "EX-1",
+                        "nOrdNo": "K-1",
+                        "flDtTm": "2026-11-11 10:15:00",
+                    },
+                    {
+                        "trdSym": "SENSEX26N1282000CE",
+                        "trnsTp": "B",
+                        "fldQty": "20",
+                        "avgPrc": "100.00",
+                        "prod": "NRML",
+                        "exSeg": "bse_fo",
+                        "flId": "EX-2",
+                        "nOrdNo": "K-2",
+                        "flDtTm": "2026-11-11 09:45:00",
+                    },
+                    {
+                        "trdSym": "SENSEX26N1282000CE",
+                        "trnsTp": "S",
+                        "fldQty": "20",
+                        "avgPrc": "120.00",
+                        "prod": "NRML",
+                        "exSeg": "bse_fo",
+                        "flId": "EX-3",
+                        "nOrdNo": "K-3",
+                        "flDtTm": "2026-11-11 10:05:00",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", FakeKotakPortfolioClient())
+
+    # 1. /api/positions returns enriched open Kotak positions + realized/unrealized totals
+    res_pos = client.get("/api/positions?market=indian", headers=headers)
+    assert res_pos.status_code == 200, res_pos.text
+    d_pos = res_pos.json()
+    assert d_pos["open_count"] == 1
+    assert d_pos["closed_count"] == 1
+    assert len(d_pos["positions"]) == 1
+    p0 = d_pos["positions"][0]
+    assert p0["symbol"] == "SENSEX26N1281000PE"
+    assert p0["display_symbol"] == "SENSEX 81000 PE"
+    assert p0["side"] == "BUY"
+    assert p0["average_price"] == 55.0
+    assert p0["ltp"] == 75.0
+    assert p0["m2m"] == 400.0
+    assert d_pos["total_unrealized_pnl"] == 400.0
+    assert d_pos["total_realized_pnl"] == 400.0
+
+    # 2. /api/positions/closed serves closed Kotak positions
+    res_closed = client.get("/api/positions/closed?market=indian", headers=headers)
+    assert res_closed.status_code == 200, res_closed.text
+    d_closed = res_closed.json()
+    assert len(d_closed["positions"]) == 1
+    assert d_closed["positions"][0]["symbol"] == "SENSEX26N1282000CE"
+    assert d_closed["positions"][0]["realized_pnl"] == 400.0
+    assert d_closed["summary"]["gross_realised_pnl"] == 400.0
+
+    # 3. /api/executions serves Kotak fills
+    res_exec = client.get("/api/executions?market=indian", headers=headers)
+    assert res_exec.status_code == 200, res_exec.text
+    d_exec = res_exec.json()
+    assert len(d_exec) == 3
+    assert d_exec[0]["display_symbol"] == "SENSEX 81000 PE"
+    assert d_exec[0]["side"] == "BUY"
+    assert d_exec[0]["quantity"] == 20
+    assert d_exec[0]["price"] == 55.0
+
+    # 4. /api/pnl/summary aggregates live Kotak realized P&L and win/loss counts
+    res_sum = client.get("/api/pnl/summary?market=indian", headers=headers)
+    assert res_sum.status_code == 200, res_sum.text
+    d_sum = res_sum.json()
+    assert d_sum["total_realised_gross_pnl"] == 400.0
+    assert d_sum["winning_trades"] == 1
+    assert d_sum["losing_trades"] == 0
+
+
+
 
 
 
