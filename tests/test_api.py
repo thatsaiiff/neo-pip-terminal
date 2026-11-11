@@ -1470,6 +1470,68 @@ def test_indian_intraday_candles_merged_for_1m_and_sensex(client, monkeypatch):
     assert rolled[-1]["high"] == 4043.25
 
 
+def test_admin_kotak_limits_pascal_case_list_and_errors(client, monkeypatch):
+    adm = client.post("/api/auth/signin", json={"username": main.ADMIN_USERNAME, "password": main.ADMIN_PASSWORD})
+    assert adm.status_code == 200
+    adm_tok = adm.json()["token"]
+    headers = {"Authorization": f"Bearer {adm_tok}"}
+
+    class FakeKotakClient:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def limits(self):
+            return self.payload
+
+    # 1. Kotak Neo v2 PascalCase string fields with commas
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(
+        main,
+        "neo_client",
+        FakeKotakClient({
+            "stat": "Ok",
+            "Category": "CLIENT_SPECIAL",
+            "Net": "1,25,430.75",
+            "CollateralValue": "50,000.00",
+            "MarginUsed": "12,000.25",
+            "NotionalCash": "0",
+        }),
+    )
+    res = client.get("/api/funds?market=indian", headers=headers)
+    assert res.status_code == 200
+    d = res.json()
+    assert d["ok"] is True and d["funds_error"] is False
+    assert d["available_cash"] == 125430.75
+    assert d["available_margin"] == 125430.75
+    assert d["collateral"] == 50000.0
+    assert d["used_margin"] == 12000.25
+    assert d["total_equity"] == 137431.0  # Net + MarginUsed without double-counting CollateralValue
+
+    # 2. Raw list payload with NotionalCash + RmsPayInAmt (Net absent)
+    monkeypatch.setattr(
+        main,
+        "neo_client",
+        FakeKotakClient([
+            {"Category": "CLIENT_SPECIAL", "NotionalCash": "40,000.00", "RmsPayInAmt": "10000", "MarginUsed": "5000", "CollateralValue": "0"}
+        ]),
+    )
+    res_list = client.get("/api/limits?market=indian", headers=headers)
+    assert res_list.status_code == 200
+    d2 = res_list.json()
+    assert d2["ok"] is True
+    assert d2["available_cash"] == 45000.0
+    assert d2["used_margin"] == 5000.0
+
+    # 3. Kotak error payload surfaces real broker error instead of misleading 0.0
+    monkeypatch.setattr(main, "neo_client", FakeKotakClient({"stat": "Not_Ok", "emsg": "IP not whitelisted"}))
+    res_err = client.get("/api/funds?market=indian", headers=headers)
+    assert res_err.status_code == 200
+    d3 = res_err.json()
+    assert d3["ok"] is False and d3["funds_error"] is True
+    assert "IP not whitelisted" in d3["error"]
+
+
+
 
 
 

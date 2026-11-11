@@ -3464,6 +3464,126 @@ def check_sltp_rules(
     }
 
 
+def _to_limit_float(val: Any) -> float | None:
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        f = float(val)
+        return f if math.isfinite(f) else None
+    s = str(val).strip().replace(",", "").replace("₹", "").replace("INR", "").strip()
+    if not s or s in {"-", "--", "NA", "N/A", "null", "None"}:
+        return None
+    try:
+        f = float(s)
+        return f if math.isfinite(f) else None
+    except Exception:
+        return None
+
+
+def _parse_kotak_limits(resp: Any) -> tuple[dict[str, float] | None, str | None]:
+    """Normalize Kotak Neo v1/v2 limits() payloads (PascalCase, camelCase, lists, or wrapped dicts)."""
+    if resp is None:
+        return None, "Empty response from Kotak limits API"
+    if isinstance(resp, dict):
+        err = _kotak_response_error(resp)
+        if err:
+            return None, err
+
+    rows = _rows_from_sdk_result(resp)
+    candidates: list[dict[str, Any]] = [r for r in rows if isinstance(r, dict)]
+    if isinstance(resp, dict) and resp not in candidates:
+        candidates.append(resp)
+    if not candidates:
+        return None, "Unrecognized response format from Kotak limits API"
+
+    for row in candidates:
+        err = _kotak_response_error(row)
+        if err and "stat" in {str(k).lower() for k in row.keys()} and str(row.get("stat", "")).lower() != "ok":
+            return None, err
+
+    limit_markers = {
+        "availablemargin", "availablecash", "net", "netcashavailable", "availmargin",
+        "cash", "totcashbal", "cashbalance", "clearcash", "openingcash",
+        "notionalcash", "nationalcash", "rmspayinamt", "collateralvalue", "collateral",
+        "totcollateral", "rmscollateral", "marginused", "marginutilized", "utilisedmargin",
+    }
+
+    chosen_norm: dict[str, Any] | None = None
+    best_score = -1
+    for row in candidates:
+        norm = {str(k).strip().lower(): v for k, v in row.items()}
+        matched = [k for k in norm if k in limit_markers and _to_limit_float(norm[k]) is not None]
+        if not matched:
+            continue
+        cat = str(norm.get("category") or "").strip().upper()
+        non_zero = sum(1 for k in matched if abs(_to_limit_float(norm[k]) or 0.0) > 0)
+        score = (100 if cat in {"CLIENT_SPECIAL", "ALL", ""} else 0) + non_zero * 10 + len(matched)
+        if score > best_score:
+            best_score = score
+            chosen_norm = norm
+
+    if chosen_norm is None:
+        sample_keys = sorted({str(k) for r in candidates for k in r.keys()})[:12]
+        return None, f"No numeric balance fields in Kotak limits payload (keys: {sample_keys})"
+
+    def _pick(*keys: str) -> tuple[str | None, float | None]:
+        for k in keys:
+            if k in chosen_norm:
+                v = _to_limit_float(chosen_norm[k])
+                if v is not None:
+                    return k, v
+        return None, None
+
+    _, collateral = _pick("collateralvalue", "collateral", "totcollateral", "rmscollateral", "noncashcollateral", "collatval")
+    _, margin_used = _pick("marginused", "marginutilized", "utilisedmargin", "utilizedmargin", "marginscripbasketprsnt", "blockedmargin")
+    collateral_val = collateral or 0.0
+    margin_used_val = margin_used or 0.0
+
+    net_key, net_val = _pick(
+        "availablemargin", "availablecash", "net", "netcashavailable",
+        "availmargin", "cashmarginavailable", "availablebalance", "availablebalanceamt",
+    )
+    _, cash_comp = _pick(
+        "cash", "totcashbal", "cashbalance", "clearcash", "openingcash",
+        "openingbalance", "ledgerbalance", "netcash",
+    )
+    _, notional = _pick("notionalcash", "nationalcash", "adhocmargin", "adhoclimit", "adhoc")
+    _, payin = _pick("rmspayinamt", "payinamt", "payin")
+    _, payout = _pick("rmspayoutamt", "payoutamt", "payout")
+
+    if net_val is not None:
+        if (
+            net_key == "net"
+            and net_val == 0.0
+            and margin_used_val == 0.0
+            and (payout or 0.0) == 0.0
+            and (cash_comp or 0.0) > 0.0
+        ):
+            cash = float(cash_comp)
+            used_rms_net = False
+        else:
+            cash = float(net_val)
+            used_rms_net = net_key in {"net", "netcashavailable"}
+    elif cash_comp is not None:
+        cash = float(cash_comp)
+        used_rms_net = False
+    else:
+        cash = max(
+            0.0,
+            (notional or 0.0) + (payin or 0.0) + collateral_val - margin_used_val - (payout or 0.0),
+        )
+        used_rms_net = False
+
+    # Kotak RMS "Net" already includes usable collateral and deducts margin_used.
+    total_equity = round(cash + margin_used_val, 2) if used_rms_net else round(cash + collateral_val, 2)
+    return {
+        "cash": round(cash, 2),
+        "collateral": round(collateral_val, 2),
+        "margin_used": round(margin_used_val, 2),
+        "total_equity": total_equity,
+    }, None
+
+
 @app.get("/api/funds")
 @app.get("/api/limits")
 def account_limits(
@@ -3477,38 +3597,39 @@ def account_limits(
     # Admin live Kotak balance when in Indian mode and Kotak is connected (or in live deploy)
     if ctx["is_admin"] and ctx["market_mode"] == "indian":
         client = _require_neo_session() if (neo_authenticated and neo_client is not None) else None
+        limits_error: str | None = None
         if client is not None and hasattr(client, "limits"):
             try:
                 resp = client.limits()
-                if isinstance(resp, dict) and not _kotak_response_error(resp):
-                    items = _rows_from_sdk_result(resp)
-                    first = items[0] if items else resp
-                    cash = float(first.get("availableMargin") or first.get("net") or first.get("cash") or first.get("totCashBal") or 0.0)
-                    collateral = float(first.get("collateral") or first.get("totCollateral") or 0.0)
-                    margin_used = float(first.get("marginUtilized") or first.get("utilisedMargin") or 0.0)
+                parsed, err = _parse_kotak_limits(resp)
+                if parsed is not None:
                     return {
                         "ok": True,
                         "funds_error": False,
-                        "available_cash": cash,
-                        "available_margin": cash,
-                        "collateral": collateral,
-                        "margin_utilized": margin_used,
-                        "used_margin": margin_used,
-                        "total_equity": cash + collateral,
+                        "available_cash": parsed["cash"],
+                        "available_margin": parsed["cash"],
+                        "collateral": parsed["collateral"],
+                        "margin_utilized": parsed["margin_used"],
+                        "used_margin": parsed["margin_used"],
+                        "total_equity": parsed["total_equity"],
                         "currency": "INR",
                         "mode": "live",
                         "is_demo": False,
                         "updated_at": utc_now(),
                     }
+                limits_error = err or "Unable to parse Kotak funds response"
+                print(f"[Kotak limits parse issue] {limits_error}", flush=True)
             except Exception as e:
-                logger.warning(f"Kotak limits error: {e}")
+                limits_error = _kotak_exception_summary(e)
+                print(f"[Kotak limits error] {e}", flush=True)
 
-        if not os.getenv("PYTEST_CURRENT_TEST"):
+        if not os.getenv("PYTEST_CURRENT_TEST") or (client is not None and limits_error):
+            err_msg = limits_error or "Connect Kotak Neo (TOTP & MPIN) to fetch live funds"
             return {
                 "ok": False,
                 "funds_error": True,
-                "error": "Connect Kotak Neo (TOTP & MPIN) to fetch live funds",
-                "detail": "Kotak Neo session not connected yet",
+                "error": err_msg,
+                "detail": limits_error or "Kotak Neo session not connected yet",
                 "available_cash": 0.0,
                 "available_margin": 0.0,
                 "collateral": 0.0,

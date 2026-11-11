@@ -999,12 +999,19 @@
     if (!state.siteAuthenticated) return;
     try {
       const data = await api('/api/limits');
-      const funds = Number(data.available_cash ?? data.total_margin ?? 0);
+      const funds = Number(data.available_cash ?? data.available_margin ?? data.total_margin ?? 0);
       state.availableFunds = funds;
       const pill = $('scalper-funds-pill');
       if (pill) {
-        pill.textContent = `Funds: ${money(funds)}`;
-        pill.classList.toggle('low-funds', funds <= 0);
+        if (data && data.funds_error) {
+          pill.textContent = 'Funds: Connect Kotak';
+          pill.title = data.error || 'Connect Kotak Neo to fetch live funds';
+          pill.classList.add('low-funds');
+        } else {
+          pill.textContent = `Funds: ${money(funds)}`;
+          pill.title = 'Available cash balance';
+          pill.classList.toggle('low-funds', funds <= 0);
+        }
       }
     } catch (_) {}
   }

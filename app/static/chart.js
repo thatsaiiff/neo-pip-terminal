@@ -4049,6 +4049,7 @@
         if (eqEl) { eqEl.textContent = errText; eqEl.setAttribute('style', errStyle); }
         if (fmEl) { fmEl.textContent = errText; fmEl.setAttribute('style', errStyle); }
         if (muEl) { muEl.textContent = fmtMoney(0); }
+        if (typeof updateMobileAccountsView === 'function') updateMobileAccountsView();
       } else if (fundsData && fundsData.available_margin !== undefined) {
         const avail = Number(fundsData.available_margin);
         const used = Number(fundsData.used_margin || 0);
@@ -4057,6 +4058,7 @@
         if (eqEl) { eqEl.textContent = fmtMoney(equity); eqEl.removeAttribute('style'); }
         if (fmEl) { fmEl.textContent = fmtMoney(avail); fmEl.removeAttribute('style'); }
         if (muEl) { muEl.textContent = fmtMoney(used); }
+        if (typeof updateMobileAccountsView === 'function') updateMobileAccountsView();
       }
 
       // 3. Orders report (Pending)
