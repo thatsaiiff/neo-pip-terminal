@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord17">
+  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord18">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -168,6 +168,10 @@
           <span class="rail-fx">ƒx</span>
           <span class="rail-label">Ind</span>
         </button>
+        <button type="button" id="rail-btn-draw" class="ex-rail-btn" title="Chart Drawing Tools">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          <span class="rail-label">Draw</span>
+        </button>
         <button type="button" id="rail-btn-guide" class="ex-rail-btn" title="Setup Guide">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15z"/></svg>
           <span class="rail-label">Docs</span>
@@ -269,22 +273,62 @@
 
           <!-- Technical Indicators Dropdown -->
           <div class="indicators-wrap">
-            <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn compact-fx-btn" title="TradingView Technical Indicators">
+            <button type="button" id="btn-indicators-dropdown" class="ex-toolbar-btn fx-btn compact-fx-btn" title="TradingView Technical Indicators & EMA Settings">
               <span class="fx-icon">ƒx</span>
               <span class="fx-lbl">Ind</span>
             </button>
             <div id="indicators-menu" class="indicators-menu hidden">
-              <div class="ind-menu-header">TradingView Technical Indicators</div>
+              <div class="ind-menu-header">Indicators &amp; Strategy Settings</div>
+              <div class="ind-param-row">
+                <label class="ind-menu-item ind-param-check">
+                  <input type="checkbox" id="chk-ind-ema9" checked>
+                  <span class="dot-ind cyan"></span>
+                  <span id="lbl-ind-ema-fast">EMA 9 (Fast)</span>
+                </label>
+                <div class="ind-num-wrap" title="Fast EMA Period">
+                  <input type="number" id="inp-ema-fast-period" class="ind-num-input" min="1" max="500" step="1" value="9" aria-label="Fast EMA period">
+                </div>
+              </div>
+              <div class="ind-param-row">
+                <label class="ind-menu-item ind-param-check">
+                  <input type="checkbox" id="chk-ind-ema21" checked>
+                  <span class="dot-ind orange"></span>
+                  <span id="lbl-ind-ema-slow">EMA 15 (Slow)</span>
+                </label>
+                <div class="ind-num-wrap" title="Slow EMA Period">
+                  <input type="number" id="inp-ema-slow-period" class="ind-num-input" min="1" max="500" step="1" value="15" aria-label="Slow EMA period">
+                </div>
+              </div>
+              <div class="ind-preset-row">
+                <span class="ind-preset-lbl">Presets:</span>
+                <button type="button" class="ind-preset-btn active" data-fast="9" data-slow="15">9 / 15</button>
+                <button type="button" class="ind-preset-btn" data-fast="9" data-slow="21">9 / 21</button>
+                <button type="button" class="ind-preset-btn" data-fast="5" data-slow="20">5 / 20</button>
+                <button type="button" class="ind-preset-btn" data-fast="20" data-slow="50">20 / 50</button>
+              </div>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-ema9" checked>
-                <span class="dot-ind cyan"></span>
-                <span>EMA 9 (Fast Trend)</span>
+                <input type="checkbox" id="chk-ind-crossover" checked>
+                <span class="dot-ind green"></span>
+                <span id="lbl-ind-crossover">EMA 9/15 Crossover Signals</span>
               </label>
+              <div class="ind-menu-divider"></div>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-ema21" checked>
-                <span class="dot-ind orange"></span>
-                <span>EMA 21 (Pullback Trend)</span>
+                <input type="checkbox" id="chk-ind-vpvr">
+                <span class="dot-ind yellow"></span>
+                <span>Volume Profile (POC/VAH/VAL)</span>
               </label>
+              <div class="ind-vpvr-config" id="vpvr-config-row">
+                <select id="sel-vpvr-mode" class="ind-mini-select" aria-label="Volume Profile Mode">
+                  <option value="visible">Visible Range</option>
+                  <option value="session">Session (Daily)</option>
+                </select>
+                <div class="ind-va-wrap" title="Value Area % (default 70%)">
+                  <span>VA</span>
+                  <input type="number" id="inp-vpvr-va" class="ind-num-input" min="10" max="99" step="1" value="70" aria-label="Value Area percentage">
+                  <span>%</span>
+                </div>
+              </div>
+              <div class="ind-menu-divider"></div>
               <label class="ind-menu-item">
                 <input type="checkbox" id="chk-ind-vwap">
                 <span class="dot-ind purple"></span>
@@ -296,16 +340,10 @@
                 <span>Supertrend (10, 3)</span>
               </label>
               <label class="ind-menu-item">
-                <input type="checkbox" id="chk-ind-vpvr">
-                <span class="dot-ind yellow"></span>
-                <span>VPVR (Volume Profile POC)</span>
-              </label>
-              <label class="ind-menu-item">
                 <input type="checkbox" id="chk-ind-vol">
                 <span class="dot-ind gray"></span>
                 <span>Volume Histogram</span>
               </label>
-              <div class="ind-menu-divider"></div>
               <label class="ind-menu-item">
                 <input type="checkbox" id="chk-ind-bb">
                 <span class="dot-ind blue"></span>
@@ -323,6 +361,12 @@
               </label>
             </div>
           </div>
+
+          <!-- Chart Drawing Tools Toggle -->
+          <button type="button" id="btn-draw-toggle" class="ex-toolbar-btn fx-btn compact-fx-btn" title="Toggle Chart Drawing Tools (Trendlines, Fib, Channels)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <span class="fx-lbl">Draw</span>
+          </button>
         </div>
 
         <div class="tb-right">
@@ -463,6 +507,93 @@
             </div>
           </div>
         </section>
+
+        <!-- Floating Chart Drawing Palette (Toggleable vertical/compact bar inside chart stage) -->
+        <div id="chart-draw-palette" class="chart-draw-palette hidden" role="toolbar" aria-label="Chart Drawing Tools">
+          <button type="button" class="draw-tool-btn active" data-draw-tool="cursor" title="Cursor / Select Drawing">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-6 1.5L10 19z"/></svg>
+            <span class="dt-lbl">Select</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="trendline" title="Trendline">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="19" x2="20" y2="5"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></svg>
+            <span class="dt-lbl">Trend</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="hline" title="Horizontal Line">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><circle cx="12" cy="12" r="2"/></svg>
+            <span class="dt-lbl">H-Line</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="vline" title="Vertical Line">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="3" x2="12" y2="21"/><circle cx="12" cy="12" r="2"/></svg>
+            <span class="dt-lbl">V-Line</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="ray" title="Ray">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="18" x2="21" y2="4"/><circle cx="6" cy="17" r="2"/><polyline points="15 4 21 4 21 10"/></svg>
+            <span class="dt-lbl">Ray</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="extline" title="Extended Line">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="20" x2="21" y2="4"/><circle cx="8.5" cy="15" r="1.8"/><circle cx="15.5" cy="9" r="1.8"/></svg>
+            <span class="dt-lbl">Extend</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="rect" title="Rectangle">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>
+            <span class="dt-lbl">Rect</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="price_range" title="Price Range Measure">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14M5 18h14M12 7v10M9 10l3-3 3 3M9 14l3 3 3-3"/></svg>
+            <span class="dt-lbl">Range</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="fib_retracement" title="Fibonacci Retracement">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9"><line x1="3" y1="5" x2="21" y2="5"/><line x1="3" y1="10" x2="21" y2="10" stroke-dasharray="3 2"/><line x1="3" y1="14" x2="21" y2="14"/><line x1="3" y1="19" x2="21" y2="19"/></svg>
+            <span class="dt-lbl">Fib Ret</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="fib_extension" title="Fibonacci Extension">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9"><line x1="3" y1="18" x2="21" y2="18"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6" stroke-dasharray="3 2"/><polyline points="4 17 10 11 16 14"/></svg>
+            <span class="dt-lbl">Fib Ext</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="fib_trend" title="Trend-Based Fib Extension (3 pts)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="3 18 9 10 14 14 21 5"/><line x1="12" y1="5" x2="22" y2="5" stroke-dasharray="2 2"/></svg>
+            <span class="dt-lbl">Fib ABC</span>
+          </button>
+          <button type="button" class="draw-tool-btn" data-draw-tool="channel" title="Parallel Channel (3 pts)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="15" x2="17" y2="4"/><line x1="7" y1="20" x2="21" y2="9"/><line x1="5" y1="17.5" x2="19" y2="6.5" stroke-dasharray="3 2"/></svg>
+            <span class="dt-lbl">Channel</span>
+          </button>
+          <div class="draw-palette-sep"></div>
+          <button type="button" id="btn-draw-keep" class="draw-tool-btn draw-util-btn" title="Stay in Drawing Mode">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <span class="dt-lbl">Lock</span>
+          </button>
+          <button type="button" id="btn-draw-undo" class="draw-tool-btn draw-util-btn" title="Undo Last Drawing">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+            <span class="dt-lbl">Undo</span>
+          </button>
+          <button type="button" id="btn-draw-clear" class="draw-tool-btn draw-util-btn danger" title="Clear All Drawings on Chart">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+            <span class="dt-lbl">Clear</span>
+          </button>
+        </div>
+
+        <!-- Draft Instruction Pill -->
+        <div id="drawing-draft-hint" class="drawing-draft-hint hidden">
+          <span id="drawing-draft-hint-text">Click chart to place point</span>
+          <button type="button" id="btn-cancel-draw-draft" class="btn-cancel-draft">Cancel</button>
+        </div>
+
+        <!-- Selected Drawing Style & Delete Mini-Toolbar -->
+        <div id="drawing-style-bar" class="drawing-style-bar hidden">
+          <span id="dsb-tool-name" class="dsb-label">Trendline</span>
+          <div class="dsb-colors">
+            <button type="button" class="dsb-color-btn" data-color="#ffb703" style="background:#ffb703" title="Gold"></button>
+            <button type="button" class="dsb-color-btn" data-color="#00d2d3" style="background:#00d2d3" title="Cyan"></button>
+            <button type="button" class="dsb-color-btn" data-color="#3b82f6" style="background:#3b82f6" title="Blue"></button>
+            <button type="button" class="dsb-color-btn" data-color="#00b074" style="background:#00b074" title="Green"></button>
+            <button type="button" class="dsb-color-btn" data-color="#ff4757" style="background:#ff4757" title="Red"></button>
+            <button type="button" class="dsb-color-btn" data-color="#f0f3f8" style="background:#f0f3f8" title="White"></button>
+          </div>
+          <button type="button" id="btn-dsb-width" class="dsb-chip-btn" title="Cycle Stroke Width">1.8px</button>
+          <button type="button" id="btn-dsb-dash" class="dsb-chip-btn" title="Toggle Solid / Dashed">Solid</button>
+          <button type="button" id="btn-dsb-delete" class="dsb-chip-btn danger" title="Delete Drawing (Del)">Delete</button>
+        </div>
 
         <!-- Floating Y-Axis '+' Quick Order Menu -->
         <div id="chart-plus-order-menu" class="chart-plus-order-menu hidden">
@@ -1955,6 +2086,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
 
   <script src="/static/lightweight-charts.js"></script>
   <script src="/static/trade-sounds.js?v=20261111-sfx1"></script>
-  <script src="/static/chart.js?v=20261111-ord17"></script>
+  <script src="/static/chart-indicators.js?v=20261111-ind1"></script>
+  <script src="/static/chart-drawings.js?v=20261111-drw1"></script>
+  <script src="/static/chart.js?v=20261111-ord18"></script>
 </body>
 </html>

@@ -5,18 +5,51 @@
 
   const $ = id => document.getElementById(id);
 
-  // Indicators State (TradingView Technicals - Default ONLY EMA 9 & EMA 21)
-  const indicators = {
-    showEma9: true,
-    showEma21: true,
+  // Indicators & Strategy Config (persisted via NeoChartIndicators, default EMA 9 / EMA 15 + 70% Value Area)
+  const ChartInd = window.NeoChartIndicators || null;
+  const ChartDraw = window.NeoChartDrawings || null;
+  const indConfig = ChartInd ? ChartInd.loadIndicatorConfig() : {
+    showEmaFast: true,
+    showEmaSlow: true,
+    showCrossoverSignals: true,
+    emaFastPeriod: 9,
+    emaSlowPeriod: 15,
+    showEmaMid: false,
+    emaMidPeriod: 50,
+    showEmaLong: false,
+    emaLongPeriod: 200,
     showVwap: false,
     showSupertrend: false,
     showVpvr: false,
+    vpvrMode: 'visible',
+    vpvrVaPct: 70,
+    vpvrBins: 36,
     showVol: false,
     showBb: false,
-    showEma50: false,
-    showEma200: false,
   };
+  const indicators = {
+    get showEma9() { return indConfig.showEmaFast; },
+    set showEma9(v) { indConfig.showEmaFast = Boolean(v); },
+    get showEma21() { return indConfig.showEmaSlow; },
+    set showEma21(v) { indConfig.showEmaSlow = Boolean(v); },
+    get showCrossoverSignals() { return indConfig.showCrossoverSignals; },
+    set showCrossoverSignals(v) { indConfig.showCrossoverSignals = Boolean(v); },
+    get showVwap() { return indConfig.showVwap; },
+    set showVwap(v) { indConfig.showVwap = Boolean(v); },
+    get showSupertrend() { return indConfig.showSupertrend; },
+    set showSupertrend(v) { indConfig.showSupertrend = Boolean(v); },
+    get showVpvr() { return indConfig.showVpvr; },
+    set showVpvr(v) { indConfig.showVpvr = Boolean(v); },
+    get showVol() { return indConfig.showVol; },
+    set showVol(v) { indConfig.showVol = Boolean(v); },
+    get showBb() { return indConfig.showBb; },
+    set showBb(v) { indConfig.showBb = Boolean(v); },
+    get showEma50() { return indConfig.showEmaMid; },
+    set showEma50(v) { indConfig.showEmaMid = Boolean(v); },
+    get showEma200() { return indConfig.showEmaLong; },
+    set showEma200(v) { indConfig.showEmaLong = Boolean(v); },
+  };
+  const symbolEmaSignals = {};
 
   // Auth, User Isolation & Market Session State
   let ownerToken = localStorage.getItem('neo_owner_token') || '';
@@ -832,8 +865,11 @@
     window.addEventListener(evt, recordUserActivity, { passive: true });
   });
 
-  // --- Technical Math (TradingView Indicators) ---
+  // --- Technical Math (TradingView Indicators, Crossover Strategy & Volume Profile) ---
   function calculateEMA(candles, period, decimals = 2) {
+    if (ChartInd && typeof ChartInd.calculateEMA === 'function') {
+      return ChartInd.calculateEMA(candles, period, decimals);
+    }
     if (!candles || candles.length < period) return [];
     const k = 2 / (period + 1);
     const factor = Math.pow(10, Math.min(6, Math.max(2, Number(decimals) || 2)));
@@ -949,101 +985,44 @@
     return { upper, basis, lower };
   }
 
-  function computeVPVR(visibleCandles) {
-    if (!visibleCandles || visibleCandles.length < 5) return { bins: [], pocPrice: null, maxVol: 0 };
-    let minP = Infinity;
-    let maxP = -Infinity;
-    visibleCandles.forEach(c => {
-      if (c.low < minP) minP = c.low;
-      if (c.high > maxP) maxP = c.high;
-    });
-    if (minP >= maxP) return { bins: [], pocPrice: null, maxVol: 0 };
+  const drawingMgr = ChartDraw
+    ? ChartDraw.createDrawingManager({
+        getDecimals: sym => getSymbolDecimals(sym),
+        getCurrency: sym => curSym(sym),
+        getActivePane: () => getActivePane(),
+        onStateChange: st => {
+          if (typeof updateDrawingUiStateFn === 'function') updateDrawingUiStateFn(st);
+        },
+      })
+    : null;
+  let updateDrawingUiStateFn = null;
 
-    const binCount = 30;
-    const binSize = (maxP - minP) / binCount;
-    const bins = Array.from({ length: binCount }, (_, i) => ({
-      priceLow: minP + i * binSize,
-      priceHigh: minP + (i + 1) * binSize,
-      priceMid: minP + (i + 0.5) * binSize,
-      buyVol: 0,
-      sellVol: 0,
-      totalVol: 0,
-    }));
-
-    visibleCandles.forEach(c => {
-      const vol = c.volume || 100;
-      const isBull = c.close >= c.open;
-      const binIdx = Math.min(binCount - 1, Math.max(0, Math.floor((c.close - minP) / binSize)));
-      if (isBull) bins[binIdx].buyVol += vol;
-      else bins[binIdx].sellVol += vol;
-      bins[binIdx].totalVol += vol;
-    });
-
-    let maxVol = 0;
-    let pocPrice = null;
-    bins.forEach(b => {
-      if (b.totalVol > maxVol) {
-        maxVol = b.totalVol;
-        pocPrice = b.priceMid;
-      }
-    });
-
-    return { bins, pocPrice, maxVol };
+  function computeVPVR(visibleCandles, allCandles = null) {
+    if (ChartInd && typeof ChartInd.computeVolumeProfile === 'function') {
+      const src = indConfig.vpvrMode === 'session' && Array.isArray(allCandles) && allCandles.length
+        ? allCandles
+        : visibleCandles;
+      return ChartInd.computeVolumeProfile(src, {
+        mode: indConfig.vpvrMode,
+        valueAreaPct: indConfig.vpvrVaPct,
+        binCount: indConfig.vpvrBins,
+        marketMode: currentMarketMode,
+      });
+    }
+    return { mode: 'visible', valueAreaPct: 70, profiles: [] };
   }
 
   function renderVPVR(pane) {
-    const canvas = pane.vpvrCanvas;
-    const ctx = pane.vpvrCtx;
-    if (!canvas || !ctx || !indicators.showVpvr || !pane.candleSeries) {
-      if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!pane) return;
+    if (ChartInd && typeof ChartInd.renderVolumeProfile === 'function') {
+      ChartInd.renderVolumeProfile(pane, pane.vpvrData, {
+        enabled: indConfig.showVpvr,
+        decimals: getSymbolDecimals(pane.sym),
+      });
       return;
     }
-
-    const rect = canvas.getBoundingClientRect();
-    if (canvas.width !== rect.width || canvas.height !== rect.height) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-    }
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const { bins, pocPrice, maxVol } = pane.vpvrData;
-    if (!bins.length || maxVol === 0) return;
-
-    const maxBarW = canvas.width - 15;
-    bins.forEach(b => {
-      const yTop = pane.candleSeries.priceToCoordinate(b.priceHigh);
-      const yBot = pane.candleSeries.priceToCoordinate(b.priceLow);
-      if (yTop === null || yBot === null) return;
-      const y = Math.min(yTop, yBot);
-      const h = Math.max(2, Math.abs(yBot - yTop));
-
-      const buyW = (b.buyVol / maxVol) * maxBarW;
-      const sellW = (b.sellVol / maxVol) * maxBarW;
-      const xRight = canvas.width;
-
-      ctx.fillStyle = 'rgba(0, 176, 116, 0.45)';
-      ctx.fillRect(xRight - (buyW + sellW), y, buyW, h - 0.5);
-
-      ctx.fillStyle = 'rgba(255, 71, 87, 0.45)';
-      ctx.fillRect(xRight - sellW, y, sellW, h - 0.5);
-    });
-
-    if (pocPrice !== null) {
-      const yPOC = pane.candleSeries.priceToCoordinate(pocPrice);
-      if (yPOC !== null) {
-        ctx.strokeStyle = '#ffb703';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 2]);
-        ctx.beginPath();
-        ctx.moveTo(0, yPOC);
-        ctx.lineTo(canvas.width, yPOC);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.fillStyle = '#ffb703';
-        ctx.font = '9px DM Mono';
-        ctx.fillText(`POC: ${pocPrice.toFixed(2)}`, 6, yPOC - 3);
-      }
+    if (pane.vpvrCtx && pane.vpvrCanvas) {
+      pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
     }
   }
 
@@ -1080,6 +1059,7 @@
         pane.chart.applyOptions({ width: w, height: h });
       }
       renderVPVR(pane);
+      if (drawingMgr) drawingMgr.renderPane(pane);
     }
   }
 
@@ -1240,19 +1220,27 @@
       canvasWrap.addEventListener('mouseleave', () => {
         if (plusBtn) plusBtn.classList.add('hidden');
       });
-      canvasWrap.addEventListener('wheel', () => requestAnimationFrame(() => renderPaneTradeLines(pane)), { passive: true });
+      canvasWrap.addEventListener('wheel', () => requestAnimationFrame(() => {
+        renderPaneTradeLines(pane);
+        if (drawingMgr) drawingMgr.renderPane(pane);
+      }), { passive: true });
     }
 
-    // Visible logical range change for VPVR + Draggable Chart Trade Lines sync
+    if (drawingMgr) {
+      drawingMgr.bindPaneInteractions(pane);
+    }
+
+    // Visible logical range change for VPVR, Drawings & Draggable Chart Trade Lines sync
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
       renderPaneTradeLines(pane);
-      if (indicators.showVpvr && pane.candles.length) {
+      if (drawingMgr) drawingMgr.renderPane(pane);
+      if (indConfig.showVpvr && pane.candles.length) {
         const range = chart.timeScale().getVisibleLogicalRange();
         if (range) {
           const fromIdx = Math.max(0, Math.floor(range.from));
           const toIdx = Math.min(pane.candles.length - 1, Math.ceil(range.to));
           const visible = pane.candles.slice(fromIdx, toIdx + 1);
-          pane.vpvrData = computeVPVR(visible);
+          pane.vpvrData = computeVPVR(visible, pane.candles);
           renderVPVR(pane);
         }
       }
@@ -1273,6 +1261,7 @@
               pane.chart.applyOptions({ width: w, height: h });
             }
             renderVPVR(pane);
+            if (drawingMgr) drawingMgr.renderPane(pane);
             renderPaneTradeLines(pane);
           }
         }
@@ -1916,12 +1905,29 @@
     });
   }
 
+  function syncWatchlistSignalBadge(sym, sig) {
+    if (!sym || !sig || sig === 'NEUTRAL') return;
+    const symU = String(sym).trim().toUpperCase();
+    symbolEmaSignals[symU] = sig;
+    document.querySelectorAll('.ex-inst-row').forEach(row => {
+      const symEl = row.querySelector('.sym-main');
+      if (!symEl || symEl.textContent.trim().toUpperCase() !== symU) return;
+      const badge = row.querySelector('.sig-badge');
+      if (badge) {
+        badge.className = `sig-badge ${sig.toLowerCase()}`;
+        badge.textContent = `${sig === 'BUY' ? '▲' : '▼'} ${sig}`;
+      }
+    });
+  }
+
   function clearPaneChartData(pane) {
     if (!pane) return;
     pane.candles = [];
     pane.volumes = [];
     pane.activeBar = null;
-    pane.vpvrData = { bins: [], pocPrice: null, maxVol: 0 };
+    pane.emaSignal = null;
+    pane.vpvrData = { mode: indConfig.vpvrMode, valueAreaPct: indConfig.vpvrVaPct, profiles: [] };
+    try { if (pane.candleSeries) pane.candleSeries.setMarkers([]); } catch (_) {}
     [
       pane.candleSeries,
       pane.volSeries,
@@ -1942,31 +1948,48 @@
     if (pane.vpvrCtx && pane.vpvrCanvas) {
       pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
     }
+    if (drawingMgr) drawingMgr.renderPane(pane);
   }
 
   function applyPaneIndicators(pane) {
     if (!pane || !pane.chart || !pane.candleSeries || !pane.candles.length) return;
     const decs = getSymbolDecimals(pane.sym);
+    const fastP = indConfig.emaFastPeriod;
+    const slowP = indConfig.emaSlowPeriod;
 
-    if (indicators.showEma9) pane.ema9Series.setData(calculateEMA(pane.candles, 9, decs));
+    if (indConfig.showEmaFast) pane.ema9Series.setData(calculateEMA(pane.candles, fastP, decs));
     else pane.ema9Series.setData([]);
 
-    if (indicators.showEma21) pane.ema21Series.setData(calculateEMA(pane.candles, 21, decs));
+    if (indConfig.showEmaSlow) pane.ema21Series.setData(calculateEMA(pane.candles, slowP, decs));
     else pane.ema21Series.setData([]);
 
-    if (indicators.showEma50) pane.ema50Series.setData(calculateEMA(pane.candles, 50, decs));
+    if (indConfig.showEmaMid) pane.ema50Series.setData(calculateEMA(pane.candles, indConfig.emaMidPeriod, decs));
     else pane.ema50Series.setData([]);
 
-    if (indicators.showEma200) pane.ema200Series.setData(calculateEMA(pane.candles, 200, decs));
+    if (indConfig.showEmaLong) pane.ema200Series.setData(calculateEMA(pane.candles, indConfig.emaLongPeriod, decs));
     else pane.ema200Series.setData([]);
 
-    if (indicators.showVwap) pane.vwapSeries.setData(calculateVWAP(pane.candles));
+    // Dynamic EMA Crossover Signals & Strategy Trend State (always uses active fastP / slowP)
+    if (ChartInd && typeof ChartInd.calculateEMACrossoverSignals === 'function') {
+      const sig = ChartInd.calculateEMACrossoverSignals(pane.candles, fastP, slowP, decs);
+      pane.emaSignal = sig;
+      if (sig.latestSignal && sig.latestSignal !== 'NEUTRAL') {
+        syncWatchlistSignalBadge(pane.sym, sig.latestSignal);
+      }
+      if (indConfig.showCrossoverSignals && indConfig.showEmaFast && indConfig.showEmaSlow) {
+        try { pane.candleSeries.setMarkers(sig.markers || []); } catch (_) {}
+      } else {
+        try { pane.candleSeries.setMarkers([]); } catch (_) {}
+      }
+    }
+
+    if (indConfig.showVwap) pane.vwapSeries.setData(calculateVWAP(pane.candles));
     else pane.vwapSeries.setData([]);
 
-    if (indicators.showSupertrend) pane.supertrendSeries.setData(calculateSupertrend(pane.candles, 10, 3));
+    if (indConfig.showSupertrend) pane.supertrendSeries.setData(calculateSupertrend(pane.candles, 10, 3));
     else pane.supertrendSeries.setData([]);
 
-    if (indicators.showBb) {
+    if (indConfig.showBb) {
       const bb = calculateBollingerBands(pane.candles, 20, 2);
       pane.bbUpperSeries.setData(bb.upper);
       pane.bbBasisSeries.setData(bb.basis);
@@ -1977,7 +2000,7 @@
       pane.bbLowerSeries.setData([]);
     }
 
-    if (indicators.showVol) {
+    if (indConfig.showVol) {
       pane.volSeries.setData(
         pane.volumes.map(v => ({
           time: v.time,
@@ -1989,12 +2012,23 @@
       pane.volSeries.setData([]);
     }
 
-    if (indicators.showVpvr) {
-      pane.vpvrData = computeVPVR(pane.candles.slice(-100));
+    if (indConfig.showVpvr) {
+      let visible = pane.candles.slice(-120);
+      try {
+        const rng = pane.chart.timeScale().getVisibleLogicalRange();
+        if (rng && Number.isFinite(rng.from) && Number.isFinite(rng.to)) {
+          const fromIdx = Math.max(0, Math.floor(rng.from));
+          const toIdx = Math.min(pane.candles.length - 1, Math.ceil(rng.to));
+          if (toIdx > fromIdx) visible = pane.candles.slice(fromIdx, toIdx + 1);
+        }
+      } catch (_) {}
+      pane.vpvrData = computeVPVR(visible, pane.candles);
       renderVPVR(pane);
     } else if (pane.vpvrCtx && pane.vpvrCanvas) {
       pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
     }
+
+    if (drawingMgr) drawingMgr.renderPane(pane);
   }
 
   function updatePaneHeaderQuote(pane, open, high, low, close) {
@@ -2288,10 +2322,30 @@
         try { series.update(arr[arr.length - 1]); } catch (_) {}
       }
     };
-    updateEma(indicators.showEma9, pane.ema9Series, 9);
-    updateEma(indicators.showEma21, pane.ema21Series, 21);
-    updateEma(indicators.showEma50, pane.ema50Series, 50);
-    updateEma(indicators.showEma200, pane.ema200Series, 200);
+    updateEma(indConfig.showEmaFast, pane.ema9Series, indConfig.emaFastPeriod);
+    updateEma(indConfig.showEmaSlow, pane.ema21Series, indConfig.emaSlowPeriod);
+    updateEma(indConfig.showEmaMid, pane.ema50Series, indConfig.emaMidPeriod);
+    updateEma(indConfig.showEmaLong, pane.ema200Series, indConfig.emaLongPeriod);
+    if (ChartInd && typeof ChartInd.calculateEMACrossoverSignals === 'function') {
+      const sig = ChartInd.calculateEMACrossoverSignals(pane.candles, indConfig.emaFastPeriod, indConfig.emaSlowPeriod, decs);
+      pane.emaSignal = sig;
+      if (sig.latestSignal && sig.latestSignal !== 'NEUTRAL') {
+        syncWatchlistSignalBadge(pane.sym, sig.latestSignal);
+      }
+      if (indConfig.showCrossoverSignals && indConfig.showEmaFast && indConfig.showEmaSlow) {
+        try { pane.candleSeries.setMarkers(sig.markers || []); } catch (_) {}
+      }
+    }
+    if (indConfig.showVpvr && pane.candleSeries) {
+      try {
+        const rng = pane.chart && pane.chart.timeScale().getVisibleLogicalRange();
+        const fromIdx = rng ? Math.max(0, Math.floor(rng.from)) : Math.max(0, pane.candles.length - 120);
+        const toIdx = rng ? Math.min(pane.candles.length - 1, Math.ceil(rng.to)) : pane.candles.length - 1;
+        pane.vpvrData = computeVPVR(pane.candles.slice(fromIdx, toIdx + 1), pane.candles);
+        renderVPVR(pane);
+      } catch (_) {}
+    }
+    if (drawingMgr) drawingMgr.renderPane(pane);
     if (indicators.showVol && pane.volSeries && pane.activeBar) {
       try {
         pane.volSeries.update({
@@ -3410,6 +3464,14 @@
     syncTradeButtonsForActivePane();
     if (p.lastLtp) updateOrderFormPrices(p.lastLtp);
     updateActivePanePnlBadges();
+    if (drawingMgr && typeof updateDrawingUiStateFn === 'function') {
+      updateDrawingUiStateFn({
+        activeTool: drawingMgr.getActiveTool(),
+        keepDrawingMode: drawingMgr.getKeepMode(),
+        selectedDrawing: drawingMgr.getSelectedDrawing(p),
+        draft: null,
+      });
+    }
   }
 
   function ensureSecondaryPaneSymbols(reset = false) {
@@ -3954,7 +4016,7 @@
           </div>
         </td>
         <td>
-          <span class="sig-badge ${inst.signal.toLowerCase()}">${inst.signal === 'BUY' ? '▲' : '▼'} ${inst.signal}</span>
+          <span class="sig-badge ${(symbolEmaSignals[inst.symbol.toUpperCase()] || inst.signal).toLowerCase()}">${(symbolEmaSignals[inst.symbol.toUpperCase()] || inst.signal) === 'BUY' ? '▲' : '▼'} ${symbolEmaSignals[inst.symbol.toUpperCase()] || inst.signal}</span>
         </td>
         <td>
           <button type="button" class="btn-price-bid" data-sym="${escapeHtml(inst.symbol)}" title="Sell @ Bid">—</button>
@@ -5767,9 +5829,9 @@
     function positionIndicatorsMenu(triggerEl) {
       if (!menu) return;
       const rect = (triggerEl || btn || railBtn).getBoundingClientRect();
-      const menuWidth = 270;
-      const left = Math.max(10, Math.min(rect.left, window.innerWidth - menuWidth - 10));
-      const top = Math.min(rect.bottom + 6, window.innerHeight - 340);
+      const menuWidth = Math.min(288, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+      const top = Math.max(48, Math.min(rect.bottom + 6, window.innerHeight - Math.min(460, window.innerHeight * 0.78)));
       menu.style.position = 'fixed';
       menu.style.top = `${top}px`;
       menu.style.left = `${left}px`;
@@ -5812,6 +5874,7 @@
     const mapping = [
       { id: 'chk-ind-ema9', key: 'showEma9' },
       { id: 'chk-ind-ema21', key: 'showEma21' },
+      { id: 'chk-ind-crossover', key: 'showCrossoverSignals' },
       { id: 'chk-ind-vwap', key: 'showVwap' },
       { id: 'chk-ind-supertrend', key: 'showSupertrend' },
       { id: 'chk-ind-vpvr', key: 'showVpvr' },
@@ -5821,16 +5884,135 @@
       { id: 'chk-ind-ema200', key: 'showEma200' },
     ];
 
+    const inpFast = $('inp-ema-fast-period');
+    const inpSlow = $('inp-ema-slow-period');
+    const lblFast = $('lbl-ind-ema-fast');
+    const lblSlow = $('lbl-ind-ema-slow');
+    const lblCross = $('lbl-ind-crossover');
+    const selVpMode = $('sel-vpvr-mode');
+    const inpVaPct = $('inp-vpvr-va');
+    const presetBtns = document.querySelectorAll('.ind-preset-btn');
+
+    function syncIndicatorLabelsAndPersist(recompute = true) {
+      if (ChartInd) {
+        const clean = ChartInd.saveIndicatorConfig(indConfig);
+        Object.assign(indConfig, clean);
+      }
+      if (lblFast) lblFast.textContent = `EMA ${indConfig.emaFastPeriod} (Fast)`;
+      if (lblSlow) lblSlow.textContent = `EMA ${indConfig.emaSlowPeriod} (Slow)`;
+      if (lblCross) lblCross.textContent = `EMA ${indConfig.emaFastPeriod}/${indConfig.emaSlowPeriod} Crossover Signals`;
+      if (inpFast && Number(inpFast.value) !== indConfig.emaFastPeriod) inpFast.value = indConfig.emaFastPeriod;
+      if (inpSlow && Number(inpSlow.value) !== indConfig.emaSlowPeriod) inpSlow.value = indConfig.emaSlowPeriod;
+      if (selVpMode) selVpMode.value = indConfig.vpvrMode;
+      if (inpVaPct && Number(inpVaPct.value) !== indConfig.vpvrVaPct) inpVaPct.value = indConfig.vpvrVaPct;
+      presetBtns.forEach(pb => {
+        const f = Number(pb.dataset.fast);
+        const s = Number(pb.dataset.slow);
+        pb.classList.toggle('active', f === indConfig.emaFastPeriod && s === indConfig.emaSlowPeriod);
+      });
+      if (recompute) {
+        panes.forEach(applyPaneIndicators);
+      }
+    }
+
     mapping.forEach(({ id, key }) => {
       const el = $(id);
       if (el) {
         el.checked = indicators[key];
         el.addEventListener('change', () => {
           indicators[key] = el.checked;
-          panes.forEach(applyPaneIndicators);
+          syncIndicatorLabelsAndPersist(true);
         });
       }
     });
+
+    const handleEmaPeriodChange = (inpEl, propKey, fallbackVal) => {
+      if (!inpEl) return;
+      const applyVal = (clampInput) => {
+        const raw = Number(inpEl.value);
+        if (!Number.isFinite(raw) || raw < 1) {
+          if (!clampInput) return;
+          indConfig[propKey] = fallbackVal;
+          inpEl.value = fallbackVal;
+        } else {
+          indConfig[propKey] = ChartInd ? ChartInd.sanitizePeriod(raw, fallbackVal) : Math.max(1, Math.min(500, Math.round(raw)));
+          if (clampInput) inpEl.value = indConfig[propKey];
+        }
+        syncIndicatorLabelsAndPersist(true);
+      };
+      inpEl.addEventListener('input', () => applyVal(false));
+      inpEl.addEventListener('change', () => applyVal(true));
+      inpEl.addEventListener('click', e => e.stopPropagation());
+    };
+
+    handleEmaPeriodChange(inpFast, 'emaFastPeriod', 9);
+    handleEmaPeriodChange(inpSlow, 'emaSlowPeriod', 15);
+
+    presetBtns.forEach(pb => {
+      pb.addEventListener('click', e => {
+        e.stopPropagation();
+        const f = Number(pb.dataset.fast);
+        const s = Number(pb.dataset.slow);
+        if (f > 0 && s > 0) {
+          indConfig.emaFastPeriod = f;
+          indConfig.emaSlowPeriod = s;
+          if (inpFast) inpFast.value = f;
+          if (inpSlow) inpSlow.value = s;
+          syncIndicatorLabelsAndPersist(true);
+        }
+      });
+    });
+
+    if (selVpMode) {
+      selVpMode.addEventListener('change', () => {
+        indConfig.vpvrMode = selVpMode.value === 'session' ? 'session' : 'visible';
+        syncIndicatorLabelsAndPersist(true);
+      });
+    }
+
+    if (inpVaPct) {
+      const applyVa = (clampInput) => {
+        const raw = Number(inpVaPct.value);
+        if (!Number.isFinite(raw) || raw < 10) {
+          if (!clampInput) return;
+          indConfig.vpvrVaPct = 70;
+          inpVaPct.value = 70;
+        } else {
+          indConfig.vpvrVaPct = ChartInd ? ChartInd.sanitizeVaPct(raw, 70) : Math.max(10, Math.min(99, Math.round(raw)));
+          if (clampInput) inpVaPct.value = indConfig.vpvrVaPct;
+        }
+        syncIndicatorLabelsAndPersist(true);
+      };
+      inpVaPct.addEventListener('input', () => applyVa(false));
+      inpVaPct.addEventListener('change', () => applyVa(true));
+      inpVaPct.addEventListener('click', e => e.stopPropagation());
+    }
+
+    syncIndicatorLabelsAndPersist(false);
+
+    window._chartEngineApi = {
+      getIndConfig: () => ({ ...indConfig }),
+      setEmaPeriods: (fast, slow) => {
+        indConfig.emaFastPeriod = ChartInd ? ChartInd.sanitizePeriod(fast, 9) : Number(fast);
+        indConfig.emaSlowPeriod = ChartInd ? ChartInd.sanitizePeriod(slow, 15) : Number(slow);
+        if (inpFast) inpFast.value = indConfig.emaFastPeriod;
+        if (inpSlow) inpSlow.value = indConfig.emaSlowPeriod;
+        syncIndicatorLabelsAndPersist(true);
+      },
+      setVpvrConfig: (opts = {}) => {
+        if (opts.enabled !== undefined) {
+          indConfig.showVpvr = Boolean(opts.enabled);
+          if ($('chk-ind-vpvr')) $('chk-ind-vpvr').checked = indConfig.showVpvr;
+        }
+        if (opts.mode) indConfig.vpvrMode = opts.mode === 'session' ? 'session' : 'visible';
+        if (opts.valueAreaPct !== undefined) indConfig.vpvrVaPct = ChartInd ? ChartInd.sanitizeVaPct(opts.valueAreaPct, 70) : Number(opts.valueAreaPct);
+        syncIndicatorLabelsAndPersist(true);
+      },
+      getActivePaneSignals: () => getActivePane().emaSignal || null,
+      getActivePaneVpvr: () => getActivePane().vpvrData || null,
+      getDrawingManager: () => drawingMgr,
+      syncAllIndicators: () => syncIndicatorLabelsAndPersist(true),
+    };
 
     // Active pane selection (in 2 or 3 chart split layout — captures clicks & taps even on canvas!)
     document.querySelectorAll('.chart-pane').forEach((paneEl, idx) => {
@@ -7102,6 +7284,166 @@
     syncUi();
   }
 
+  function setupDrawingToolbar() {
+    if (!drawingMgr) return;
+    const palette = $('chart-draw-palette');
+    const railDraw = $('rail-btn-draw');
+    const tbDraw = $('btn-draw-toggle');
+    const draftHint = $('drawing-draft-hint');
+    const draftHintTxt = $('drawing-draft-hint-text');
+    const btnCancelDraft = $('btn-cancel-draw-draft');
+    const styleBar = $('drawing-style-bar');
+    const dsbName = $('dsb-tool-name');
+    const btnWidth = $('btn-dsb-width');
+    const btnDash = $('btn-dsb-dash');
+    const btnDelete = $('btn-dsb-delete');
+    const btnKeep = $('btn-draw-keep');
+    const btnUndo = $('btn-draw-undo');
+    const btnClear = $('btn-draw-clear');
+    const toolBtns = document.querySelectorAll('.draw-tool-btn[data-draw-tool]');
+    const colorBtns = document.querySelectorAll('.dsb-color-btn');
+
+    function togglePalette(forceOpen = null) {
+      if (!palette) return;
+      const open = forceOpen !== null ? Boolean(forceOpen) : palette.classList.contains('hidden');
+      palette.classList.toggle('hidden', !open);
+      if (railDraw) railDraw.classList.toggle('active', open);
+      if (tbDraw) tbDraw.classList.toggle('active', open);
+    }
+
+    if (railDraw) railDraw.addEventListener('click', () => togglePalette());
+    if (tbDraw) tbDraw.addEventListener('click', () => togglePalette());
+
+    updateDrawingUiStateFn = st => {
+      if (!st) return;
+      toolBtns.forEach(b => {
+        b.classList.toggle('active', b.dataset.drawTool === st.activeTool);
+      });
+      if (btnKeep) btnKeep.classList.toggle('active', Boolean(st.keepDrawingMode));
+
+      if (draftHint && draftHintTxt) {
+        if (st.activeTool && st.activeTool !== 'cursor') {
+          const def = drawingMgr.TOOL_DEFS[st.activeTool];
+          const placed = st.draft && Array.isArray(st.draft.points) ? st.draft.points.length : 0;
+          const total = def ? def.points : 2;
+          draftHintTxt.textContent = placed > 0
+            ? `${def.label}: Point ${placed + 1}/${total}`
+            : (def ? def.hint : 'Click chart to draw');
+          draftHint.classList.remove('hidden');
+        } else {
+          draftHint.classList.add('hidden');
+        }
+      }
+
+      if (styleBar) {
+        const sel = st.selectedDrawing;
+        if (sel) {
+          const def = drawingMgr.TOOL_DEFS[sel.type];
+          if (dsbName) dsbName.textContent = def ? def.label : sel.type;
+          if (btnWidth) btnWidth.textContent = `${Number(sel.lineWidth || 1.75)}px`;
+          if (btnDash) btnDash.textContent = sel.dashed ? 'Dashed' : 'Solid';
+          colorBtns.forEach(cb => {
+            cb.classList.toggle('active', String(cb.dataset.color || '').toLowerCase() === String(sel.color || '#ffb703').toLowerCase());
+          });
+          styleBar.classList.remove('hidden');
+        } else {
+          styleBar.classList.add('hidden');
+        }
+      }
+    };
+
+    toolBtns.forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.setTool(btn.dataset.drawTool || 'cursor');
+      });
+    });
+
+    if (btnKeep) {
+      btnKeep.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.setKeepMode(!drawingMgr.getKeepMode());
+      });
+    }
+    if (btnUndo) {
+      btnUndo.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.undoLast(getActivePane());
+      });
+    }
+    if (btnClear) {
+      btnClear.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.clearSymbolDrawings(getActivePane());
+        toast('Cleared chart drawings');
+      });
+    }
+    if (btnCancelDraft) {
+      btnCancelDraft.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.setTool('cursor');
+      });
+    }
+
+    colorBtns.forEach(cb => {
+      cb.addEventListener('click', e => {
+        e.stopPropagation();
+        const c = cb.dataset.color;
+        if (!c) return;
+        drawingMgr.setDefaultColor(c);
+        drawingMgr.updateSelectedStyle(getActivePane(), { color: c });
+      });
+    });
+    if (btnWidth) {
+      const widths = [1.25, 1.75, 2.5, 3.5];
+      btnWidth.addEventListener('click', e => {
+        e.stopPropagation();
+        const sel = drawingMgr.getSelectedDrawing(getActivePane());
+        if (!sel) return;
+        const cur = Number(sel.lineWidth) || 1.75;
+        const idx = widths.findIndex(w => Math.abs(w - cur) < 0.2);
+        const next = widths[(idx + 1) % widths.length];
+        drawingMgr.updateSelectedStyle(getActivePane(), { lineWidth: next });
+      });
+    }
+    if (btnDash) {
+      btnDash.addEventListener('click', e => {
+        e.stopPropagation();
+        const sel = drawingMgr.getSelectedDrawing(getActivePane());
+        if (!sel) return;
+        drawingMgr.updateSelectedStyle(getActivePane(), { dashed: !sel.dashed });
+      });
+    }
+    if (btnDelete) {
+      btnDelete.addEventListener('click', e => {
+        e.stopPropagation();
+        drawingMgr.deleteSelected(getActivePane());
+      });
+    }
+
+    document.addEventListener('keydown', e => {
+      const tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Escape') {
+        if (drawingMgr.getActiveTool() !== 'cursor') {
+          drawingMgr.setTool('cursor');
+        }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (drawingMgr.getSelectedId()) {
+          e.preventDefault();
+          drawingMgr.deleteSelected(getActivePane());
+        }
+      }
+    });
+
+    updateDrawingUiStateFn({
+      activeTool: drawingMgr.getActiveTool(),
+      keepDrawingMode: drawingMgr.getKeepMode(),
+      selectedDrawing: drawingMgr.getSelectedDrawing(getActivePane()),
+      draft: null,
+    });
+  }
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
     if (typeof window.resetViewportZoomTo100 === 'function') {
@@ -7129,6 +7471,7 @@
     setupLegalModal();
     setupSoundControls();
     setupIndicatorsMenu();
+    setupDrawingToolbar();
     setupTokenModal();
     setupKeysModal();
     setupGuestProfileModal();
