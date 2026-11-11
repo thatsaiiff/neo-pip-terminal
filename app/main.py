@@ -337,6 +337,7 @@ def _kotak_exception_summary(exc: Exception) -> str:
 
 class OrderPayload(BaseModel):
     symbol: str = Field(min_length=1, max_length=64)
+    instrument_token: str | None = Field(default=None, max_length=128)
     side: Literal["BUY", "SELL"]
     lots: float = Field(ge=0.01, le=1000)
     lot_size: int = Field(ge=1, le=100000)
@@ -1134,6 +1135,218 @@ def require_bridge_token(token: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid bridge token")
 
 
+_KOTAK_SCRIP_LOOKUP_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_KOTAK_SCRIP_CACHE_LOCK = threading.Lock()
+
+
+def _normalize_kotak_exchange_segment(seg: str | None, symbol: str = "", instrument_token: str | None = None) -> str:
+    tok_u = str(instrument_token or "").strip().upper()
+    sym_u = str(symbol or "").strip().upper()
+    s_raw = str(seg or "").strip().lower().replace("-", "_")
+    s_map = {
+        "nse_fo": "nse_fo", "nsefo": "nse_fo",
+        "bse_fo": "bse_fo", "bsefo": "bse_fo",
+        "nse_cm": "nse_cm", "nsecm": "nse_cm", "nse_eq": "nse_cm",
+        "bse_cm": "bse_cm", "bsecm": "bse_cm", "bse_eq": "bse_cm",
+        "mcx_fo": "mcx_fo", "mcxfo": "mcx_fo", "mcx": "mcx_fo",
+    }
+    norm = s_map.get(s_raw, s_raw or "nse_fo")
+    if tok_u.startswith("BSE_FO|"):
+        return "bse_fo"
+    if tok_u.startswith("NSE_FO|"):
+        return "nse_fo"
+    if tok_u.startswith("MCX_FO|"):
+        return "mcx_fo"
+    if tok_u.startswith("BSE_EQ|") or tok_u.startswith("BSE_CM|"):
+        return "bse_cm"
+    if tok_u.startswith("NSE_EQ|") or tok_u.startswith("NSE_CM|"):
+        return "nse_cm"
+    is_fo = bool(_is_option_symbol(sym_u) or re.search(r"\bFUT\b", sym_u) or "FO" in norm)
+    if is_fo and ("SENSEX" in sym_u or "BANKEX" in sym_u or "SX50" in sym_u):
+        return "bse_fo"
+    if "SENSEX" in sym_u or "BANKEX" in sym_u:
+        return "bse_fo"
+    return norm if norm in {"nse_cm", "bse_cm", "nse_fo", "bse_fo", "mcx_fo"} else "nse_fo"
+
+
+def _kotak_tx_type(side: str) -> str:
+    return "B" if str(side or "").strip().upper() in {"B", "BUY"} else "S"
+
+
+def _parse_display_expiry_date(symbol: str) -> datetime | None:
+    sym_u = str(symbol or "").strip().upper()
+    m1 = re.search(r"\b(\d{1,2})\s+([A-Z]{3})\s+(\d{2,4})\b", sym_u)
+    if m1:
+        yr = m1.group(3)
+        if len(yr) == 2:
+            yr = f"20{yr}"
+        try:
+            return datetime.strptime(f"{int(m1.group(1)):02d}{m1.group(2)}{yr}", "%d%b%Y")
+        except Exception:
+            pass
+    m2 = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", sym_u)
+    if m2:
+        try:
+            return datetime.strptime(m2.group(1), "%Y-%m-%d")
+        except Exception:
+            pass
+    return None
+
+
+def _parse_kotak_row_expiry(raw_exp: Any) -> datetime | None:
+    txt = str(raw_exp or "").strip()
+    if not txt:
+        return None
+    for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d", "%d %b %Y"):
+        try:
+            return datetime.strptime(txt, fmt)
+        except Exception:
+            pass
+    if txt.isdigit():
+        try:
+            return datetime.fromtimestamp(int(txt))
+        except Exception:
+            pass
+    return None
+
+
+def _search_kotak_cached(client: Any, seg: str, root: str, option_type: str | None = None, strike_str: str | None = None) -> list[dict[str, Any]]:
+    cache_key = (seg, f"{root}|{option_type or ''}|{strike_str or ''}")
+    now = time.time()
+    with _KOTAK_SCRIP_CACHE_LOCK:
+        cached = _KOTAK_SCRIP_LOOKUP_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < 180.0:
+            return cached[1]
+    kwargs: dict[str, Any] = {"exchange_segment": seg, "symbol": root}
+    if option_type:
+        kwargs["option_type"] = option_type
+    if strike_str:
+        kwargs["strike_price"] = strike_str
+    try:
+        res = client.search_scrip(**kwargs)
+        rows = _rows_from_sdk_result(res)
+    except Exception:
+        rows = []
+    if rows:
+        with _KOTAK_SCRIP_CACHE_LOCK:
+            _KOTAK_SCRIP_LOOKUP_CACHE[cache_key] = (now, rows)
+    return rows
+
+
+def _resolve_kotak_order_contract(
+    client: Any,
+    symbol: str,
+    exchange_segment: str,
+    instrument_token: str | None = None,
+    lot_size: int = 1,
+) -> tuple[str, str, int]:
+    sym_u = str(symbol or "").strip().upper()
+    norm_seg = _normalize_kotak_exchange_segment(exchange_segment, sym_u, instrument_token)
+    eff_lot = max(1, int(lot_size or 1))
+    if client is None or not hasattr(client, "search_scrip"):
+        return norm_seg, sym_u, eff_lot
+
+    tok_suffix = ""
+    tok_raw = str(instrument_token or "").strip()
+    if "|" in tok_raw:
+        cand = tok_raw.split("|", 1)[1].strip()
+        if cand.isdigit():
+            tok_suffix = cand
+
+    parsed_opt = parse_option_sym(sym_u)
+    if not parsed_opt:
+        m_opt = re.search(r"^(NIFTY|BANKNIFTY|FINNIFTY|SENSEX|MIDCPNIFTY|BANKEX|[A-Z&-]{2,14})\s*(\d{3,6})\s*(CE|PE)\b", sym_u)
+        if m_opt:
+            parsed_opt = (m_opt.group(1), float(m_opt.group(2)), m_opt.group(3))
+
+    # 1. Derivative Option contract resolution (e.g. SENSEX 85000 CE 12 NOV 26 -> SENSEX26N1285000CE)
+    if parsed_opt and norm_seg in {"nse_fo", "bse_fo", "mcx_fo"}:
+        und, strike_v, opt_t = parsed_opt
+        strike_int = int(round(strike_v))
+        rows = _search_kotak_cached(client, norm_seg, und, option_type=opt_t, strike_str=str(strike_int))
+        if not rows and " " not in sym_u:
+            rows = _search_kotak_cached(client, norm_seg, sym_u)
+        if rows:
+            target_exp = _parse_display_expiry_date(sym_u)
+            today_dt = datetime.now(IST_TZ).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            scored: list[tuple[int, datetime, dict[str, Any]]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                trd = str(row.get("pTrdSymbol") or row.get("trading_symbol") or "").strip().upper()
+                if not trd:
+                    continue
+                r_opt = str(row.get("pOptionType") or row.get("option_type") or "").strip().upper()
+                if r_opt and r_opt != opt_t:
+                    continue
+                raw_stk = row.get("dStrikePrice;") or row.get("pStrikePrice") or row.get("strike_price")
+                if raw_stk is not None:
+                    try:
+                        sv = float(raw_stk)
+                        if abs(sv - strike_v) >= 0.5 and abs(sv - strike_v * 100.0) >= 1.0:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                p_sym = str(row.get("pSymbol") or "").strip()
+                exp_dt = _parse_kotak_row_expiry(row.get("pExpiryDate") or row.get("expiry")) or datetime(2099, 12, 31)
+                if tok_suffix and p_sym == tok_suffix:
+                    priority = 0
+                elif trd == sym_u:
+                    priority = 1
+                elif target_exp is not None and exp_dt.date() == target_exp.date():
+                    priority = 2
+                elif exp_dt >= today_dt:
+                    priority = 3
+                else:
+                    priority = 9
+                scored.append((priority, exp_dt, row))
+            if scored:
+                scored.sort(key=lambda item: (item[0], item[1]))
+                best = scored[0][2]
+                best_trd = str(best.get("pTrdSymbol") or best.get("trading_symbol") or sym_u).strip().upper()
+                best_seg = _normalize_kotak_exchange_segment(best.get("pExchSeg") or norm_seg, best_trd, instrument_token)
+                try:
+                    best_lot = int(float(best.get("lLotSize") or best.get("lot_size") or eff_lot))
+                except (ValueError, TypeError):
+                    best_lot = eff_lot
+                return best_seg, best_trd, max(1, best_lot)
+
+    # 2. Cash Equity resolution (e.g. RELIANCE -> RELIANCE-EQ on nse_cm)
+    if norm_seg in {"nse_cm", "bse_cm"}:
+        base = re.sub(r"-(?:EQ|BE|BL|SM|BZ)$", "", sym_u)
+        rows = _search_kotak_cached(client, norm_seg, base)
+        if rows:
+            best_row = None
+            best_rank = 99
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                trd = str(row.get("pTrdSymbol") or row.get("trading_symbol") or "").strip().upper()
+                if not trd:
+                    continue
+                grp = str(row.get("pGroup") or "").strip().upper()
+                s_name = str(row.get("pSymbolName") or "").strip().upper()
+                p_sym = str(row.get("pSymbol") or "").strip()
+                if tok_suffix and p_sym == tok_suffix:
+                    rank = 0
+                elif trd == sym_u:
+                    rank = 1
+                elif trd == f"{base}-EQ":
+                    rank = 2
+                elif s_name == base and grp in {"EQ", "A", "B", ""}:
+                    rank = 3
+                else:
+                    rank = 10
+                if rank < best_rank:
+                    best_rank = rank
+                    best_row = row
+            if best_row is not None and best_rank <= 3:
+                best_trd = str(best_row.get("pTrdSymbol") or sym_u).strip().upper()
+                return norm_seg, best_trd, max(1, eff_lot)
+
+    return norm_seg, sym_u, eff_lot
+
+
 def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
     global neo_client, neo_authenticated, neo_egress_ip
     if neo_client is None or not neo_authenticated:
@@ -1151,16 +1364,24 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
             if neo_session_ip and normalized_current_ip != ipaddress.ip_address(neo_session_ip).compressed:
                 neo_authenticated = False
                 raise HTTPException(status_code=409, detail=f"Your public IP changed after this Kotak session was created (login {neo_session_ip}, current {current_ip}). No order was sent. Restore the static IP, then reconnect.")
-            int_qty = max(1, int(round(payload.lots * payload.lot_size)))
+            kotak_seg, kotak_sym, kotak_lot = _resolve_kotak_order_contract(
+                neo_client,
+                payload.symbol,
+                payload.exchange_segment,
+                instrument_token=payload.instrument_token,
+                lot_size=payload.lot_size,
+            )
+            eff_lot = kotak_lot if (kotak_lot > 1 and (payload.lot_size != kotak_lot and int(round(payload.lots * payload.lot_size)) % kotak_lot != 0)) else payload.lot_size
+            int_qty = max(1, int(round(payload.lots * eff_lot)))
             result = neo_client.place_order(
-                exchange_segment=payload.exchange_segment,
+                exchange_segment=kotak_seg,
                 product=payload.product,
                 price=str(payload.price or 0),
                 order_type=payload.order_type,
                 quantity=str(int_qty),
                 validity=payload.validity,
-                trading_symbol=payload.symbol,
-                transaction_type="B" if payload.side == "BUY" else "S",
+                trading_symbol=kotak_sym,
+                transaction_type=_kotak_tx_type(payload.side),
                 trigger_price=str(payload.trigger_price or 0),
                 tag=f"NP{secrets.token_hex(10).upper()}",
             )
@@ -3768,15 +3989,17 @@ def exit_all_positions(
                     seg = calc.get("exchange") or "nse_fo"
                     prod = calc.get("product") or "MIS"
                     try:
+                        ex_s = _normalize_kotak_exchange_segment(seg, sym)
+                        trd_s = str(p.get("trdSym") or sym).strip()
                         client.place_order(
-                            exchange_segment=seg.upper().replace("_", ""),
+                            exchange_segment=ex_s,
                             product=prod.upper(),
                             price="0",
                             order_type="MKT",
                             quantity=str(int(abs(qty))),
                             validity="DAY",
-                            trading_symbol=sym,
-                            transaction_type=exit_side,
+                            trading_symbol=trd_s,
+                            transaction_type=_kotak_tx_type(exit_side),
                             tag="exit_all",
                         )
                         closed_positions += 1
@@ -3885,15 +4108,17 @@ def exit_partial_position(
                         seg = calc.get("exchange") or "nse_fo"
                         prod = calc.get("product") or "MIS"
                         try:
+                            ex_s = _normalize_kotak_exchange_segment(seg, sym)
+                            trd_s = str(p.get("trdSym") or sym).strip()
                             client.place_order(
-                                exchange_segment=seg.upper().replace("_", ""),
+                                exchange_segment=ex_s,
                                 product=prod.upper(),
                                 price="0",
                                 order_type="MKT",
                                 quantity=str(partial_qty),
                                 validity="DAY",
-                                trading_symbol=sym,
-                                transaction_type=exit_side,
+                                trading_symbol=trd_s,
+                                transaction_type=_kotak_tx_type(exit_side),
                                 tag="exit_partial",
                             )
                             closed_positions += 1
@@ -4075,7 +4300,8 @@ def exit_single_position(
                     exit_side = "SELL" if net_qty > 0 else "BUY"
                     exit_qty = max(1, int(abs(net_qty) * pct))
                     prod = live_target.get("prod") or "NRML"
-                    ex_seg = live_target.get("exSeg") or "nse_fo"
+                    ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg"), sym)
+                    trd_sym = str(live_target.get("trdSym") or sym).strip()
                     neo_client.place_order(
                         exchange_segment=ex_seg,
                         product=prod,
@@ -4083,8 +4309,8 @@ def exit_single_position(
                         order_type="MKT",
                         quantity=str(exit_qty),
                         validity="DAY",
-                        trading_symbol=sym,
-                        transaction_type=exit_side,
+                        trading_symbol=trd_sym,
+                        transaction_type=_kotak_tx_type(exit_side),
                         tag="manual_exit",
                     )
                     return {"ok": True, "message": f"Live order submitted to exit {sym}"}
@@ -6019,14 +6245,16 @@ def chart_search(q: str = "", market: str | None = None):
                     sym_title = c.get("trading_symbol") or f"{underlying} {int(strike_val)} {c.get('instrument_type')}"
                     if sym_title not in seen_symbols:
                         seen_symbols.add(sym_title)
+                        ikey_str = str(c.get("instrument_key") or "")
+                        seg_str = str(c.get("segment") or ("BSE_FO" if (underlying in {"SENSEX", "BANKEX"} or ikey_str.startswith("BSE_FO|")) else "NSE_FO")).upper()
                         results.append({
                             "symbol": sym_title,
                             "name": f"{underlying} {int(c.get('strike_price', strike_val))} {c.get('instrument_type')} ({c.get('expiry')})",
-                            "segment": "NSE_FO",
+                            "segment": seg_str,
                             "type": f"OPT {c.get('instrument_type')}",
                             "strike": str(c.get("strike_price")),
-                            "token": c.get("instrument_key"),
-                            "lot_size": int(c.get("lot_size") or 65),
+                            "token": ikey_str,
+                            "lot_size": int(c.get("lot_size") or (20 if underlying == "SENSEX" else 65)),
                         })
 
         if _UPSTOX_NSE_INSTRUMENTS:
@@ -6089,11 +6317,11 @@ def chart_search(q: str = "", market: str | None = None):
                     results.append({
                         "symbol": sym_title,
                         "name": f"{und} {stk} {('CALL' if t == 'CE' else 'PUT')}",
-                        "segment": "NSE_FO",
+                        "segment": "BSE_FO" if und in {"SENSEX", "BANKEX"} else "NSE_FO",
                         "type": f"OPT {t}",
                         "strike": str(stk),
                         "token": "",
-                        "lot_size": 30 if und == "BANKNIFTY" else (10 if und == "SENSEX" else 65),
+                        "lot_size": 30 if und == "BANKNIFTY" else (20 if und == "SENSEX" else 65),
                     })
 
     # 3. Search all 85,000+ Upstox NSE Equities & Indices (rank liquid F&O names first)
@@ -6273,8 +6501,11 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
                         p_diff = round(p_ltp - p_prev, 2)
                         p_pct = round((p_diff / p_prev) * 100, 2) if p_prev > 0 else 0.0
 
+                        oc_default_lot = 30 if und_name == "BANKNIFTY" else (20 if und_name == "SENSEX" else (60 if und_name == "FINNIFTY" else (120 if und_name == "MIDCPNIFTY" else 65)))
+                        oc_lot = int(contracts[0].get("lot_size") or oc_default_lot) if contracts else oc_default_lot
                         rows.append({
                             "strike": strike,
+                            "lot_size": oc_lot,
                             "call": {
                                 "instrument_key": call_opt.get("instrument_key", ""),
                                 "symbol": f"{und_name} {int(strike)} CE",

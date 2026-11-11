@@ -159,7 +159,7 @@
             position: 'belowBar',
             color: '#00d084',
             shape: 'arrowUp',
-            text: `▲ ${fastP}/${slowP}`,
+            text: '',
           });
         } else if (prev.fast >= prev.slow && cur.fast < cur.slow) {
           events.push({ time: cur.time, side: 'SELL', fast: cur.fast, slow: cur.slow });
@@ -168,7 +168,7 @@
             position: 'aboveBar',
             color: '#ff4757',
             shape: 'arrowDown',
-            text: `▼ ${fastP}/${slowP}`,
+            text: '',
           });
         }
       }
@@ -180,7 +180,7 @@
     return { markers: boundedMarkers, events, latestSignal, fastVal, slowVal, lastCrossTime };
   }
 
-  function computeSingleVolumeProfile(candlesSlice, valueAreaPct = 70, binCount = 36) {
+  function computeSingleVolumeProfile(candlesSlice, valueAreaPct = 70, binCount = 36, opts = {}) {
     if (!candlesSlice || candlesSlice.length === 0) {
       return {
         bins: [],
@@ -196,11 +196,13 @@
         startTime: null,
         endTime: null,
         usedSyntheticActivity: false,
+        noVolumeData: Boolean(opts && opts.isIndex),
       };
     }
 
     const vaPct = sanitizeVaPct(valueAreaPct, 70);
     const nBins = sanitizeBins(binCount, 36);
+    const isIndex = Boolean(opts && opts.isIndex);
     let minP = Infinity;
     let maxP = -Infinity;
     let hasRealVol = false;
@@ -215,8 +217,29 @@
     }
 
     if (!Number.isFinite(minP) || !Number.isFinite(maxP)) {
-      return computeSingleVolumeProfile([], vaPct, nBins);
+      return computeSingleVolumeProfile([], vaPct, nBins, opts);
     }
+
+    // Indices typically have 0 reported volume: do not fabricate fake Volume Profile bars on index spot.
+    if (isIndex || !hasRealVol) {
+      return {
+        bins: [],
+        pocPrice: null,
+        vahPrice: null,
+        valPrice: null,
+        pocIdx: -1,
+        vaLowIdx: -1,
+        vaHighIdx: -1,
+        maxVol: 0,
+        totalVol: 0,
+        valueAreaPct: vaPct,
+        startTime: candlesSlice[0].time,
+        endTime: candlesSlice[candlesSlice.length - 1].time,
+        usedSyntheticActivity: false,
+        noVolumeData: true,
+      };
+    }
+
     if (maxP <= minP) {
       const pad = Math.max(0.05, Math.abs(minP) * 0.001);
       minP -= pad;
@@ -243,9 +266,8 @@
       const lo = Number(c.low);
       const op = Number(c.open);
       const cl = Number(c.close);
-      const rawVol = Number(c.volume || 0);
-      const effVol = hasRealVol ? Math.max(0, rawVol) : Math.max(10, Math.round(((hi - lo) / binSize + 1) * 25));
-      if (effVol <= 0) continue;
+      const effVol = Math.max(0, Number(c.volume || 0));
+      if (effVol <= 0 || !Number.isFinite(hi) || !Number.isFinite(lo)) continue;
 
       const startBin = Math.max(0, Math.min(nBins - 1, Math.floor((lo - minP) / binSize)));
       const endBin = Math.max(startBin, Math.min(nBins - 1, Math.floor((hi - minP) / binSize)));
@@ -366,21 +388,27 @@
     const vaPct = sanitizeVaPct(opts.valueAreaPct, 70);
     const nBins = sanitizeBins(opts.binCount, 36);
     const marketMode = opts.marketMode || 'indian';
+    const isIndex = Boolean(opts.isIndex);
 
     if (!candles || !candles.length) {
-      return { mode, valueAreaPct: vaPct, profiles: [] };
+      return { mode, valueAreaPct: vaPct, profiles: [], noVolumeData: isIndex };
+    }
+
+    if (isIndex) {
+      return { mode, valueAreaPct: vaPct, profiles: [], noVolumeData: true };
     }
 
     if (mode === 'visible') {
-      const p = computeSingleVolumeProfile(candles, vaPct, nBins);
+      const p = computeSingleVolumeProfile(candles, vaPct, nBins, { isIndex });
       return {
         mode,
         valueAreaPct: vaPct,
         profiles: p.bins.length ? [p] : [],
+        noVolumeData: Boolean(p.noVolumeData),
       };
     }
 
-    // Session-based Volume Profile: group visible candles by trading session day
+    // Session-based Volume Profile: group candles by trading session day
     const groups = new Map();
     for (let i = 0; i < candles.length; i++) {
       const c = candles[i];
@@ -392,7 +420,7 @@
     const profiles = [];
     groups.forEach((slice, sessionKey) => {
       if (slice.length >= 2) {
-        const p = computeSingleVolumeProfile(slice, vaPct, nBins);
+        const p = computeSingleVolumeProfile(slice, vaPct, nBins, { isIndex });
         if (p.bins.length && p.totalVol > 0) {
           p.sessionKey = sessionKey;
           profiles.push(p);
@@ -401,10 +429,12 @@
     });
 
     if (!profiles.length) {
-      const p = computeSingleVolumeProfile(candles, vaPct, nBins);
-      if (p.bins.length) {
+      const p = computeSingleVolumeProfile(candles, vaPct, nBins, { isIndex });
+      if (p.bins.length && p.totalVol > 0) {
         p.sessionKey = getSessionKey(candles[0].time, marketMode);
         profiles.push(p);
+      } else {
+        return { mode, valueAreaPct: vaPct, profiles: [], noVolumeData: true };
       }
     }
 
@@ -412,6 +442,7 @@
       mode,
       valueAreaPct: vaPct,
       profiles: profiles.slice(-8), // Up to 8 recent visible sessions cleanly
+      noVolumeData: false,
     };
   }
 
@@ -517,10 +548,19 @@
       return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const cssW = Math.floor(rect.width || 0);
-    const cssH = Math.floor(rect.height || 0);
+    // Measure plot area from wrapper + chart timeScale().width() (never from <canvas> itself,
+    // which as a replaced element would grow exponentially on DPR>=2 displays).
+    const wrapEl = pane.canvasWrap || canvas.parentElement || canvas;
+    const wrapRect = wrapEl.getBoundingClientRect();
+    const ts = pane.chart && pane.chart.timeScale ? pane.chart.timeScale() : null;
+    const tsW = ts && typeof ts.width === 'function' ? Math.floor(ts.width() || 0) : 0;
+    const rawW = tsW > 20 ? tsW : Math.floor((wrapRect.width || 0) - 56);
+    const cssW = Math.max(0, Math.min(Math.floor(wrapRect.width || rawW), rawW));
+    const cssH = Math.floor(wrapRect.height || 0);
     if (cssW < 20 || cssH < 20) return;
+
+    if (canvas.style.width !== `${cssW}px`) canvas.style.width = `${cssW}px`;
+    if (canvas.style.height !== `${cssH}px`) canvas.style.height = `${cssH}px`;
 
     const dpr = Math.min(2, global.devicePixelRatio || 1);
     const targetW = Math.floor(cssW * dpr);
@@ -532,9 +572,23 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    if (!vpData || !vpData.profiles || !vpData.profiles.length) return;
+    if (!vpData || vpData.noVolumeData || !vpData.profiles || !vpData.profiles.length) {
+      if (vpData && vpData.noVolumeData) {
+        ctx.save();
+        ctx.font = '600 10px "DM Mono", monospace';
+        const note = 'VP: No volume data (Index)';
+        const nw = ctx.measureText(note).width + 14;
+        ctx.fillStyle = 'rgba(14, 17, 23, 0.85)';
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.fillRect(10, 10, nw, 20);
+        ctx.strokeRect(10, 10, nw, 20);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(note, 17, 23);
+        ctx.restore();
+      }
+      return;
+    }
     const decs = Number(opts.decimals) || 2;
-    const ts = pane.chart && pane.chart.timeScale ? pane.chart.timeScale() : null;
 
     const timeToCoordExact = (targetTime) => {
       if (!ts || !pane.candles || !pane.candles.length) return null;

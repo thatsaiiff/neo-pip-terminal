@@ -365,15 +365,50 @@
     return tokU.includes('_INDEX|') || metaSeg.includes('INDEX');
   }
 
+  function inferOrderExchangeSegment(sym, token = '', meta = null) {
+    const raw = String(sym || '').trim().toUpperCase();
+    const m = meta || symbolMeta[raw] || {};
+    const mSeg = String(m.segment || '').toUpperCase();
+    const tokU = String(token || '').toUpperCase();
+    if (isForexSym(raw) || mSeg === 'FOREX' || tokU.startsWith('FOREX|')) return 'forex';
+    const isFo = Boolean(isOptionSymbol(raw) || /\bFUT\b/i.test(raw) || mSeg.includes('_FO'));
+    if (tokU.startsWith('BSE_FO|') || mSeg === 'BSE_FO') return 'bse_fo';
+    if (tokU.startsWith('BSE_CM|') || tokU.startsWith('BSE_EQ|') || mSeg === 'BSE_CM') return isFo ? 'bse_fo' : 'bse_cm';
+    if (tokU.startsWith('MCX_FO|') || mSeg === 'MCX_FO') return 'mcx_fo';
+    if (tokU.startsWith('NSE_FO|') || mSeg === 'NSE_FO') return 'nse_fo';
+    if (isFo) {
+      if (raw.includes('SENSEX') || raw.includes('BANKEX') || raw.includes('SX50')) return 'bse_fo';
+      return 'nse_fo';
+    }
+    return 'nse_cm';
+  }
+
+  function inferDisplaySegmentLabel(sym, token = '', segment = '') {
+    const raw = String(sym || '').trim().toUpperCase();
+    const segU = String(segment || (symbolMeta[raw] && symbolMeta[raw].segment) || '').toUpperCase();
+    const tokU = String(token || '').toUpperCase();
+    if (isForexSym(raw) || segU === 'FOREX' || tokU.startsWith('FOREX|')) return 'FOREX';
+    if (isIndexSpotSymbol(raw, token, segment)) {
+      return (tokU.startsWith('BSE_') || segU.startsWith('BSE_') || raw.includes('SENSEX') || raw.includes('BANKEX')) ? 'BSE INDEX' : 'NSE INDEX';
+    }
+    const ex = inferOrderExchangeSegment(raw, token, { segment: segU });
+    if (ex === 'bse_fo') return 'BSE F&O';
+    if (ex === 'nse_fo') return 'NSE F&O';
+    if (ex === 'bse_cm') return 'BSE EQ';
+    if (ex === 'mcx_fo') return 'MCX F&O';
+    return 'NSE EQ';
+  }
+
   function registerSymbolMeta(sym, meta = {}) {
     const key = String(sym || '').trim().toUpperCase();
     if (!key) return;
     const prev = symbolMeta[key] || {};
+    const inferredDefault = (key.includes('SENSEX') || key.includes('BANKEX')) && isOptionSymbol(key) ? 'BSE_FO' : (isOptionSymbol(key) ? 'NSE_FO' : '');
     symbolMeta[key] = {
       ...prev,
       ...meta,
       lotSize: Number(meta.lotSize || meta.lot_size || prev.lotSize || 0) || prev.lotSize || 0,
-      segment: meta.segment || prev.segment || (isOptionSymbol(key) ? 'NSE_FO' : ''),
+      segment: meta.segment || prev.segment || inferredDefault,
     };
   }
 
@@ -547,13 +582,29 @@
     openTabs[0].isOption = panes[0].isOption;
   }
 
-  function toast(msg, duration = 3000) {
+  let _toastTimer = null;
+  function toast(msg, durationOrKind = 3200) {
     const el = $('toast');
     const txt = $('toast-message');
     if (!el || !txt) return;
-    txt.textContent = msg;
+    const text = String(msg || '');
+    const isErr = durationOrKind === 'error' || text.startsWith('❌') || /failed|rejected|error/i.test(text);
+    const isOk = !isErr && (durationOrKind === 'success' || text.startsWith('✅'));
+    const duration = typeof durationOrKind === 'number' && Number.isFinite(durationOrKind)
+      ? durationOrKind
+      : (isErr ? 6500 : 3500);
+    if (_toastTimer) {
+      clearTimeout(_toastTimer);
+      _toastTimer = null;
+    }
+    el.classList.toggle('toast-error', isErr);
+    el.classList.toggle('toast-success', isOk);
+    txt.textContent = text;
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), duration);
+    _toastTimer = setTimeout(() => {
+      el.classList.remove('show');
+      _toastTimer = null;
+    }, duration);
   }
 
   function refreshAllPaneTimezones() {
@@ -845,12 +896,13 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (res.status === 401 && !path.startsWith('/api/auth/')) {
+      const detailStr = String(data.detail || '');
+      if (res.status === 401 && !path.startsWith('/api/auth/') && !/kotak|broker/i.test(detailStr)) {
         if (typeof window._handleLogoutFn === 'function' && isAuthenticated) {
           window._handleLogoutFn('Session ended. Please sign in again.');
         }
       }
-      throw new Error(data.detail || `HTTP ${res.status}`);
+      throw new Error(detailStr || `HTTP ${res.status}`);
     }
     return data;
   }
@@ -997,7 +1049,7 @@
     : null;
   let updateDrawingUiStateFn = null;
 
-  function computeVPVR(visibleCandles, allCandles = null) {
+  function computeVPVR(visibleCandles, allCandles = null, isIndex = false) {
     if (ChartInd && typeof ChartInd.computeVolumeProfile === 'function') {
       const src = indConfig.vpvrMode === 'session' && Array.isArray(allCandles) && allCandles.length
         ? allCandles
@@ -1007,9 +1059,32 @@
         valueAreaPct: indConfig.vpvrVaPct,
         binCount: indConfig.vpvrBins,
         marketMode: currentMarketMode,
+        isIndex: Boolean(isIndex),
       });
     }
-    return { mode: 'visible', valueAreaPct: 70, profiles: [] };
+    return { mode: 'visible', valueAreaPct: 70, profiles: [], noVolumeData: Boolean(isIndex) };
+  }
+
+  function syncPaneVpvrFromChartRange(pane) {
+    if (!pane || !pane.chart || !pane.candleSeries) return;
+    if (!indConfig.showVpvr || !pane.candles || !pane.candles.length) {
+      if (pane.vpvrCtx && pane.vpvrCanvas) {
+        pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
+      }
+      return;
+    }
+    let visible = pane.candles.slice(-120);
+    try {
+      const rng = pane.chart.timeScale().getVisibleLogicalRange();
+      if (rng && Number.isFinite(rng.from) && Number.isFinite(rng.to)) {
+        const fromIdx = Math.max(0, Math.floor(rng.from));
+        const toIdx = Math.min(pane.candles.length - 1, Math.ceil(rng.to));
+        if (toIdx >= fromIdx && toIdx >= 0) visible = pane.candles.slice(fromIdx, toIdx + 1);
+      }
+    } catch (_) {}
+    const isIdx = isIndexSpotSymbol(pane.sym, pane.token);
+    pane.vpvrData = computeVPVR(visible, pane.candles, isIdx);
+    renderVPVR(pane);
   }
 
   function renderVPVR(pane) {
@@ -1235,14 +1310,7 @@
       renderPaneTradeLines(pane);
       if (drawingMgr) drawingMgr.renderPane(pane);
       if (indConfig.showVpvr && pane.candles.length) {
-        const range = chart.timeScale().getVisibleLogicalRange();
-        if (range) {
-          const fromIdx = Math.max(0, Math.floor(range.from));
-          const toIdx = Math.min(pane.candles.length - 1, Math.ceil(range.to));
-          const visible = pane.candles.slice(fromIdx, toIdx + 1);
-          pane.vpvrData = computeVPVR(visible, pane.candles);
-          renderVPVR(pane);
-        }
+        syncPaneVpvrFromChartRange(pane);
       }
     });
 
@@ -1328,11 +1396,11 @@
       const isFx = Boolean(fx) || currentMarketMode === 'forex';
       const lotSize = fx ? fx.qty_per_lot : getIndexLotSize(sym);
       const meta = symbolMeta[String(sym || '').trim().toUpperCase()] || {};
-      const isFo = Boolean(pane.isOption || isOptionSymbol(sym) || /\bFUT\b/i.test(sym) || String(meta.segment || '').toUpperCase().includes('_FO'));
-      const seg = isFx ? 'forex' : (isFo ? 'nse_fo' : 'nse_cm');
+      const seg = isFx ? 'forex' : inferOrderExchangeSegment(sym, pane.token, meta);
 
       const payload = {
         symbol: sym,
+        instrument_token: pane.token || '',
         exchange_segment: seg,
         side,
         lots: selectedLots,
@@ -1563,7 +1631,7 @@
                 method: 'POST',
                 body: JSON.stringify({
                   symbol: pane.sym,
-                  exchange_segment: fx ? 'forex' : 'nse_fo',
+                  exchange_segment: fx ? 'forex' : inferOrderExchangeSegment(pane.sym, pane.token),
                   product: pos.product || 'NRML',
                   side,
                   quantity: Math.abs(Number(pos.quantity || 1)),
@@ -2013,17 +2081,7 @@
     }
 
     if (indConfig.showVpvr) {
-      let visible = pane.candles.slice(-120);
-      try {
-        const rng = pane.chart.timeScale().getVisibleLogicalRange();
-        if (rng && Number.isFinite(rng.from) && Number.isFinite(rng.to)) {
-          const fromIdx = Math.max(0, Math.floor(rng.from));
-          const toIdx = Math.min(pane.candles.length - 1, Math.ceil(rng.to));
-          if (toIdx > fromIdx) visible = pane.candles.slice(fromIdx, toIdx + 1);
-        }
-      } catch (_) {}
-      pane.vpvrData = computeVPVR(visible, pane.candles);
-      renderVPVR(pane);
+      syncPaneVpvrFromChartRange(pane);
     } else if (pane.vpvrCtx && pane.vpvrCanvas) {
       pane.vpvrCtx.clearRect(0, 0, pane.vpvrCanvas.width, pane.vpvrCanvas.height);
     }
@@ -2165,7 +2223,7 @@
     });
     pane.candles = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 
-    const isIndexInst = ikey.startsWith('NSE_INDEX|') || ikey.startsWith('BSE_INDEX|');
+    const isIndexInst = isIndexSpotSymbol(pane.sym, ikey);
     pane.volumes = pane.candles.map(c => ({
       time: c.time,
       value: isIndexInst ? 0 : (c.volume || 0),
@@ -2177,12 +2235,21 @@
 
     requestAnimationFrame(() => {
       if (!pane.chart || reqId !== pane._reqId) return;
-      resizePaneChart(pane);
       try {
         pane.chart.priceScale('right').applyOptions({ autoScale: true });
         if (!opts || !opts.silent) pane.chart.timeScale().fitContent();
-        renderPaneTradeLines(pane);
       } catch (_) {}
+      resizePaneChart(pane);
+      renderPaneTradeLines(pane);
+      syncPaneVpvrFromChartRange(pane);
+      if (drawingMgr) drawingMgr.renderPane(pane);
+      // Lightweight Charts commits its auto-scaled Y-axis coordinates on the following paint frame
+      requestAnimationFrame(() => {
+        if (!pane.chart || reqId !== pane._reqId) return;
+        syncPaneVpvrFromChartRange(pane);
+        renderPaneTradeLines(pane);
+        if (drawingMgr) drawingMgr.renderPane(pane);
+      });
     });
 
     const lastBar = pane.candles[pane.candles.length - 1];
@@ -2337,13 +2404,7 @@
       }
     }
     if (indConfig.showVpvr && pane.candleSeries) {
-      try {
-        const rng = pane.chart && pane.chart.timeScale().getVisibleLogicalRange();
-        const fromIdx = rng ? Math.max(0, Math.floor(rng.from)) : Math.max(0, pane.candles.length - 120);
-        const toIdx = rng ? Math.min(pane.candles.length - 1, Math.ceil(rng.to)) : pane.candles.length - 1;
-        pane.vpvrData = computeVPVR(pane.candles.slice(fromIdx, toIdx + 1), pane.candles);
-        renderVPVR(pane);
-      } catch (_) {}
+      syncPaneVpvrFromChartRange(pane);
     }
     if (drawingMgr) drawingMgr.renderPane(pane);
     if (indicators.showVol && pane.volSeries && pane.activeBar) {
@@ -2475,7 +2536,7 @@
     if (s.includes('BANKNIFTY')) return 30;
     if (s.includes('MIDCPNIFTY')) return 120;
     if (s.includes('FINNIFTY')) return 60;
-    if (s.includes('SENSEX')) return 10;
+    if (s.includes('SENSEX')) return 20;
     if (s.includes('BANKEX')) return 30;
     if (s.includes('NIFTY')) return 65;
     return 1;
@@ -2662,15 +2723,7 @@
       const lotSize = fx ? fx.qty_per_lot : getIndexLotSize(sym);
       const qty = Math.max(1, Math.round(selectedLots * lotSize));
       const meta = symbolMeta[String(sym || '').trim().toUpperCase()] || {};
-      const isFo = Boolean(
-        !isFx && (
-          targetPane.isOption ||
-          isOptionSymbol(sym) ||
-          /\bFUT\b/i.test(sym) ||
-          String(meta.segment || '').toUpperCase().includes('_FO')
-        )
-      );
-      const seg = isFx ? 'forex' : (isFo ? 'nse_fo' : 'nse_cm');
+      const seg = isFx ? 'forex' : inferOrderExchangeSegment(sym, targetPane.token, meta);
       const ltp = Number(targetPane.lastLtp || 0);
       const decs = fx ? fx.decimals : 2;
       const cs = curSym(sym);
@@ -2699,6 +2752,7 @@
 
       const payload = {
         symbol: sym,
+        instrument_token: targetPane.token || '',
         exchange_segment: seg,
         side,
         lots: selectedLots,
@@ -3441,11 +3495,7 @@
     if (!p) return;
 
     const meta = symbolMeta[String(p.sym || '').trim().toUpperCase()] || {};
-    const segUpper = String(meta.segment || '').toUpperCase();
-    const isFx = isForexSym(p.sym) || segUpper === 'FOREX';
-    const isOpt = !isFx && (p.isOption || isOptionSymbol(p.sym));
-    const isFo = !isFx && Boolean(isOpt || /\bFUT\b/i.test(p.sym) || segUpper.includes('_FO'));
-    const segLabel = isFx ? 'FOREX' : (isFo ? 'NSE F&O' : (isIndexSpotSymbol(p.sym, p.token) ? 'NSE INDEX' : 'NSE EQ'));
+    const segLabel = inferDisplaySegmentLabel(p.sym, p.token, meta.segment || '');
 
     if ($('chart-active-sym')) $('chart-active-sym').textContent = p.sym;
     if ($('chart-active-seg')) $('chart-active-seg').textContent = segLabel;
@@ -3518,12 +3568,11 @@
     const segUpper = String(segment || '').toUpperCase();
     const isFx = isForexSym(cleanSym) || segUpper === 'FOREX';
     const isOpt = !isFx && isOptionSymbol(cleanSym);
-    const isFo = !isFx && Boolean(isOpt || /\bFUT\b/i.test(cleanSym) || segUpper.includes('_FO'));
-    const segLabel = isFx ? 'FOREX' : (isFo ? 'NSE F&O' : (isIndexSpotSymbol(cleanSym, token, segment) ? 'NSE INDEX' : 'NSE EQ'));
+    const segLabel = inferDisplaySegmentLabel(cleanSym, token, segment);
 
     p.sym = cleanSym;
     p.token = token || (isFx ? `FOREX|${normFxSym(cleanSym)}` : '');
-    p.isOption = !isFx && (isOpt || segUpper === 'NSE_FO' || /\bFUT\b/i.test(cleanSym));
+    p.isOption = !isFx && (isOpt || segUpper.includes('_FO') || /\bFUT\b/i.test(cleanSym));
     p.lastLtp = null;
     p.prevClose = null;
     p._userPicked = true;
@@ -3602,8 +3651,7 @@
     const p1Tf = $('p1-tf');
     const pane1El = $('pane-1');
     const p1SegBadge = pane1El ? pane1El.querySelector('.pane-seg') : null;
-    const isIdxSym = String(selected.token || '').includes('_INDEX') || ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX'].includes(selected.symbol.toUpperCase());
-    const segLabel = isFx ? 'FOREX' : (isFo ? 'NSE F&O' : (isIdxSym ? 'NSE INDEX' : 'NSE EQ'));
+    const segLabel = inferDisplaySegmentLabel(selected.symbol, selected.token, selected.segment || meta.segment || '');
 
     if (symTitle) symTitle.textContent = selected.symbol;
     if (symSeg) symSeg.textContent = segLabel;
@@ -3728,7 +3776,7 @@
       token: token || (isFx ? `FOREX|${normFxSym(cleanSym)}` : ''),
       interval: '1m',
       rangeDays: 5,
-      isOption: !isFx && (isOpt || segUpper === 'NSE_FO' || /\bFUT\b/i.test(cleanSym)),
+      isOption: !isFx && (isOpt || segUpper.includes('_FO') || /\bFUT\b/i.test(cleanSym)),
       segment: segment || (isFx ? 'FOREX' : ''),
     });
     // Mobile Fix #3: close all other tabs except the last two on mobile screens
@@ -4665,11 +4713,15 @@
             </td>
           `;
 
+          const undU = String(underlying || '').toUpperCase();
+          const rowLot = Number(row.lot_size || 0) || getIndexLotSize(callSym || undU);
+
           // Click Call LTP
           const callBtn = tr.querySelector('.call-ltp');
           if (callBtn) {
             callBtn.addEventListener('click', () => {
-              addSymbolTab(callSym, callTok, 0, 'NSE_FO');
+              const cSeg = (undU.includes('SENSEX') || undU.includes('BANKEX') || String(callTok).toUpperCase().startsWith('BSE_FO|')) ? 'BSE_FO' : 'NSE_FO';
+              addSymbolTab(callSym, callTok, rowLot, cSeg);
               closeModal();
               toast(`Loaded ${callSym} chart & ticket`);
             });
@@ -4679,7 +4731,8 @@
           const putBtn = tr.querySelector('.put-ltp');
           if (putBtn) {
             putBtn.addEventListener('click', () => {
-              addSymbolTab(putSym, putTok, 0, 'NSE_FO');
+              const pSeg = (undU.includes('SENSEX') || undU.includes('BANKEX') || String(putTok).toUpperCase().startsWith('BSE_FO|')) ? 'BSE_FO' : 'NSE_FO';
+              addSymbolTab(putSym, putTok, rowLot, pSeg);
               closeModal();
               toast(`Loaded ${putSym} chart & ticket`);
             });

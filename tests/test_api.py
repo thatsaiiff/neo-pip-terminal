@@ -1531,6 +1531,112 @@ def test_admin_kotak_limits_pascal_case_list_and_errors(client, monkeypatch):
     assert "IP not whitelisted" in d3["error"]
 
 
+def test_kotak_contract_resolution_bse_fo_sensex_and_nse_cm_equity(client, monkeypatch):
+    class FakeKotakScripClient:
+        def __init__(self):
+            self.calls = []
+            self.searches = []
+
+        def search_scrip(self, exchange_segment="", symbol="", option_type=None, strike_price=None, **kwargs):
+            self.searches.append((exchange_segment, symbol, option_type, strike_price))
+            if exchange_segment == "bse_fo" and "SENSEX" in symbol.upper():
+                return [
+                    {
+                        "pSymbol": 824344,
+                        "pTrdSymbol": "SENSEX26N1285000CE",
+                        "pExchSeg": "bse_fo",
+                        "pSymbolName": "SENSEX",
+                        "pOptionType": "ce",
+                        "dStrikePrice;": 8500000.0,
+                        "pExpiryDate": "12Nov2026",
+                        "lLotSize": 20,
+                    }
+                ]
+            if exchange_segment == "nse_cm" and "RELIANCE" in symbol.upper():
+                return [
+                    {
+                        "pSymbol": 2885,
+                        "pTrdSymbol": "RELIANCE-EQ",
+                        "pExchSeg": "nse_cm",
+                        "pSymbolName": "RELIANCE",
+                        "pGroup": "EQ",
+                        "lLotSize": 1,
+                    }
+                ]
+            return []
+
+        def place_order(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"stat": "Ok", "nOrdNo": f"KOTAK-{len(self.calls)}", "stCode": 200}
+
+    fake = FakeKotakScripClient()
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "neo_client", fake)
+
+    # 1. Even if caller sent nse_fo + display symbol + stale lot_size=10, backend resolves bse_fo + SENSEX26N1285000CE + qty=20
+    res_ce = client.post(
+        "/api/orders",
+        json={
+            "symbol": "SENSEX 85000 CE 12 NOV 26",
+            "instrument_token": "BSE_FO|824344",
+            "exchange_segment": "nse_fo",
+            "side": "BUY",
+            "lots": 1,
+            "lot_size": 10,
+            "product": "NRML",
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    assert res_ce.status_code == 200, res_ce.text
+    assert fake.calls[-1]["exchange_segment"] == "bse_fo"
+    assert fake.calls[-1]["trading_symbol"] == "SENSEX26N1285000CE"
+    assert fake.calls[-1]["quantity"] == "20"
+    assert fake.calls[-1]["transaction_type"] == "B"
+
+    # 2. Sell 85000 CE at Market resolves cleanly too
+    res_ce_sell = client.post(
+        "/api/orders",
+        json={
+            "symbol": "SENSEX 85000 CE",
+            "instrument_token": "BSE_FO|824344",
+            "exchange_segment": "bse_fo",
+            "side": "SELL",
+            "lots": 1,
+            "lot_size": 20,
+            "product": "NRML",
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    assert res_ce_sell.status_code == 200, res_ce_sell.text
+    assert fake.calls[-1]["exchange_segment"] == "bse_fo"
+    assert fake.calls[-1]["trading_symbol"] == "SENSEX26N1285000CE"
+    assert fake.calls[-1]["quantity"] == "20"
+    assert fake.calls[-1]["transaction_type"] == "S"
+
+    # 3. Equity display symbol resolves to -EQ trading symbol on nse_cm
+    res_eq = client.post(
+        "/api/orders",
+        json={
+            "symbol": "RELIANCE",
+            "instrument_token": "NSE_EQ|INE002A01018",
+            "exchange_segment": "nse_cm",
+            "side": "BUY",
+            "lots": 2,
+            "lot_size": 1,
+            "product": "MIS",
+            "order_type": "MKT",
+            "user_confirmed": True,
+        },
+    )
+    assert res_eq.status_code == 200, res_eq.text
+    assert fake.calls[-1]["exchange_segment"] == "nse_cm"
+    assert fake.calls[-1]["trading_symbol"] == "RELIANCE-EQ"
+    assert fake.calls[-1]["quantity"] == "2"
+
+
 
 
 

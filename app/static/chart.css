@@ -1142,8 +1142,7 @@ body.ex-theme-dark {
   position: absolute;
   top: 0;
   left: 0;
-  right: 56px;
-  width: auto;
+  width: calc(100% - 56px);
   height: 100%;
   pointer-events: none;
   z-index: 5;
@@ -2485,25 +2484,45 @@ body.ex-theme-dark {
 /* Toast */
 .toast {
   position: fixed;
-  bottom: 40px;
+  bottom: 44px;
   left: 50%;
   transform: translateX(-50%);
   background: var(--bg-card);
   border: 1px solid var(--border-hover);
   color: #fff;
-  padding: 8px 16px;
+  padding: 9px 18px;
   border-radius: 20px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-  font-size: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.72);
+  font-size: 12.5px;
   font-weight: 600;
+  max-width: min(92vw, 520px);
+  text-align: center;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
-  z-index: 300;
+  z-index: 100000;
+}
+
+.toast.toast-error {
+  background: rgba(127, 29, 29, 0.96);
+  border-color: #ef4444;
+  color: #fee2e2;
+}
+
+.toast.toast-success {
+  background: rgba(6, 78, 59, 0.96);
+  border-color: #10b981;
+  color: #d1fae5;
 }
 
 .toast.show {
   opacity: 1;
+}
+
+@media (max-width: 768px) {
+  .toast {
+    bottom: 84px;
+  }
 }
 
 /* Header Option Chain Button (beside funds) */
