@@ -1,3 +1,4 @@
+import time
 import pytest
 from fastapi.testclient import TestClient
 
@@ -2009,6 +2010,119 @@ def test_upstox_v3_feed_decoder_and_realtime_sensex_quotes(client, monkeypatch):
     assert qm["SENSEX"]["is_fallback"] is False
     assert qm["SENSEX 82300 CE"]["ltp"] == 294.75
     assert qm["SENSEX 82300 CE"]["volume"] == 39682560
+
+
+def test_audit_hardening_rate_limiter_and_diagnostics(client, monkeypatch):
+    """Verify security rate limiter and admin diagnostics observability endpoints."""
+    # 1. Diagnostics endpoint requires admin access
+    unauth = client.get("/api/admin/diagnostics")
+    assert unauth.status_code == 403
+
+    # With admin token
+    admin_tok = "audit_admin_token_test"
+    main._ACTIVE_OWNER_SESSIONS[admin_tok] = {
+        "created_at": time.time(),
+        "last_active": time.time(),
+        "email": main.ADMIN_EMAIL,
+        "is_admin": True,
+    }
+    diag = client.get("/api/admin/diagnostics", headers={"X-Owner-Token": admin_tok})
+    assert diag.status_code == 200
+    d_data = diag.json()
+    assert d_data["ok"] is True
+    assert "broker_session" in d_data
+    assert "market_data_feed" in d_data
+    assert "database_metrics" in d_data
+    assert d_data["database_metrics"]["wal_enabled"] is True
+    assert d_data["database_metrics"]["foreign_keys_enabled"] is True
+
+    # 2. Rate limiter sliding window function test
+    test_key = "test_rate_ip_1"
+    assert main.check_rate_limit(test_key, max_calls=3, window_seconds=10.0) is True
+    assert main.check_rate_limit(test_key, max_calls=3, window_seconds=10.0) is True
+    assert main.check_rate_limit(test_key, max_calls=3, window_seconds=10.0) is True
+    # 4th call exceeds limit
+    assert main.check_rate_limit(test_key, max_calls=3, window_seconds=10.0) is False
+
+    # 3. Verify security headers in response
+    health_resp = client.get("/api/health")
+    assert health_resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert health_resp.headers.get("X-Frame-Options") in {"DENY", "SAMEORIGIN"}
+    assert "X-Request-ID" in health_resp.headers
+
+
+def test_mcx_and_commodity_option_strike_and_sltp_live_execution(client, monkeypatch):
+    """Verify 3-digit and commodity option strikes parse correctly and SL/TP executes live order."""
+    # 1. Test MCX commodity option strike parsing
+    from app.main import parse_option_sym, _normalize_kotak_exchange_segment
+    p_ng = parse_option_sym("NATURALGAS 240 PE")
+    assert p_ng == ("NATURALGAS", 240.0, "PE")
+    p_cop = parse_option_sym("COPPER 810 CE")
+    assert p_cop == ("COPPER", 810.0, "CE")
+    p_crude = parse_option_sym("CRUDEOIL 6200 CE")
+    assert p_crude == ("CRUDEOIL", 6200.0, "CE")
+
+    # Segment mapping to mcx_fo
+    seg_ng = _normalize_kotak_exchange_segment("mcx", "NATURALGAS 240 PE")
+    assert seg_ng == "mcx_fo"
+    seg_crude = _normalize_kotak_exchange_segment("mcx_fo", "CRUDEOIL 6200 CE")
+    assert seg_crude == "mcx_fo"
+
+    # 2. Test live SL/TP trigger executing market exit order
+    called_order = []
+    class MockNeoClient:
+        def positions(self):
+            return {
+                "stat": "Ok",
+                "data": [{
+                    "trdSym": "CRUDEOIL26NOV6200CE",
+                    "exSeg": "mcx_fo",
+                    "prod": "NRML",
+                    "netQty": "100",
+                    "flBuyQty": "100",
+                    "flSellQty": "0",
+                    "buyAmt": "20000",
+                    "sellAmt": "0",
+                }]
+            }
+        def place_order(self, **kwargs):
+            called_order.append(kwargs)
+            return {"stat": "Ok", "nOrdNo": "999888777", "emsg": "Order submitted"}
+
+    monkeypatch.setattr(main, "neo_client", MockNeoClient())
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+
+    with main.db() as conn:
+        conn.execute("DELETE FROM sltp_rules WHERE account_id = 'KOTAK_OWNER'")
+        main._upsert_active_sltp_rule(
+            conn,
+            account_id="KOTAK_OWNER",
+            symbol="CRUDEOIL 6200 CE",
+            exchange_segment="mcx_fo",
+            product="NRML",
+            side="BUY",
+            quantity=100,
+            entry_price=200.0,
+            sl_price=180.0,
+            tp_price=250.0,
+            market_mode="indian",
+        )
+        conn.commit()
+
+    # Trigger with LTP 175.0 (SL hit: <= 180.0)
+    res = client.post("/api/sltp/check", json={"symbol": "CRUDEOIL 6200 CE", "ltp": 175.0})
+    assert res.status_code == 200
+    r_data = res.json()
+    assert r_data["triggered_count"] == 1
+    assert r_data["triggered"][0]["trigger_type"] == "SL"
+    # Confirm Kotak live place_order was invoked with SELL 100
+    assert len(called_order) == 1
+    assert called_order[0]["transaction_type"] == "S"
+    assert called_order[0]["quantity"] == "100"
+    assert called_order[0]["exchange_segment"] == "mcx_fo"
+
+
 
 
 

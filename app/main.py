@@ -9,6 +9,7 @@ import re
 import secrets
 import sqlite3
 import struct
+import threading
 import time
 import asyncio
 import uuid
@@ -42,6 +43,7 @@ from app.accounting import (
 )
 
 IST_TZ = zoneinfo.ZoneInfo("Asia/Kolkata")
+_SERVER_START_TIME = time.time()
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -54,6 +56,33 @@ LAN_ACCESS_TOKEN = os.getenv("LAN_ACCESS_TOKEN", "").strip()
 NEO_ENVIRONMENT = os.getenv("NEO_ENVIRONMENT", "prod")
 NEO_FORCE_IPV4 = os.getenv("NEO_FORCE_IPV4", "true").strip().lower() == "true"
 CLOUD_DEPLOYMENT = os.getenv("CLOUD_DEPLOYMENT", "false").strip().lower() == "true" or bool(os.getenv("RAILWAY_ENVIRONMENT")) or bool(os.getenv("RAILWAY_PROJECT_ID")) or bool(os.getenv("RENDER"))
+ALLOWED_ORIGINS = {
+    "https://neo-pip-terminal.vercel.app",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+}
+if os.getenv("ALLOWED_ORIGINS"):
+    for _o in os.getenv("ALLOWED_ORIGINS", "").split(","):
+        if _o.strip():
+            ALLOWED_ORIGINS.add(_o.strip().rstrip("/"))
+
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_LIMIT_TRACKER: dict[str, list[float]] = {}
+
+def check_rate_limit(key: str, max_calls: int = 10, window_seconds: float = 60.0) -> bool:
+    """Sliding-window rate limiter. Returns True if request is allowed, False if limit exceeded."""
+    now = time.time()
+    with _RATE_LIMIT_LOCK:
+        calls = _RATE_LIMIT_TRACKER.get(key, [])
+        calls = [t for t in calls if now - t < window_seconds]
+        if len(calls) >= max_calls:
+            _RATE_LIMIT_TRACKER[key] = calls
+            return False
+        calls.append(now)
+        _RATE_LIMIT_TRACKER[key] = calls
+        return True
 
 neo_client: Any | None = None
 neo_authenticated = False
@@ -81,6 +110,8 @@ def db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
@@ -181,8 +212,13 @@ def init_db() -> None:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {decl}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_account ON orders(account_id, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_order_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sltp_account_status ON sltp_rules(account_id, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_acc_inst ON executions(account_id, instrument_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_position_matches_pos ON position_matches(position_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_charges_exec ON charges(execution_id)")
         conn.commit()
 
 
@@ -238,6 +274,7 @@ async def lifespan(_: FastAPI):
             NEO_CONSUMER_KEY = saved_ck
     if UPSTOX_ACCESS_TOKEN and not os.getenv("PYTEST_CURRENT_TEST"):
         _subscribe_upstox_keys(_UPSTOX_CORE_WS_KEYS)
+    _ensure_server_sltp_daemon()
     yield
 
 
@@ -1166,6 +1203,9 @@ def _normalize_kotak_exchange_segment(seg: str | None, symbol: str = "", instrum
     if tok_u.startswith("NSE_EQ|") or tok_u.startswith("NSE_CM|"):
         return "nse_cm"
     is_fo = bool(_is_option_symbol(sym_u) or re.search(r"\bFUT\b", sym_u) or "FO" in norm)
+    mcx_commodities = {"CRUDEOIL", "NATURALGAS", "GOLD", "SILVER", "COPPER", "ZINC", "LEAD", "ALUMINIUM", "NICKEL", "COTTON", "MENTHAOIL", "MCX"}
+    if any(c in sym_u for c in mcx_commodities):
+        return "mcx_fo"
     if is_fo and ("SENSEX" in sym_u or "BANKEX" in sym_u or "SX50" in sym_u):
         return "bse_fo"
     if "SENSEX" in sym_u or "BANKEX" in sym_u:
@@ -1393,8 +1433,10 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
             raise
         except Exception as exc:
             # Do not retry: order may have reached the broker despite a transport exception.
-            audit("live_order_ambiguous_or_failed", {"symbol": payload.symbol, "side": payload.side, "quantity": int(round(payload.lots * payload.lot_size)), "error_type": type(exc).__name__})
-            raise HTTPException(status_code=502, detail=f"Broker call failed or outcome is uncertain ({type(exc).__name__}). Check Kotak Neo order book before trying again.") from exc
+            ambig_msg = f"Broker call failed or outcome is uncertain ({type(exc).__name__}). Check Kotak Neo order book before trying again."
+            row_id = add_order_record(payload, "live", "UNKNOWN", ambig_msg, None, {"error_type": type(exc).__name__, "ambiguous": True}, account_id="KOTAK_OWNER")
+            audit("live_order_ambiguous_or_failed", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": int(round(payload.lots * payload.lot_size)), "error_type": type(exc).__name__, "state": "UNKNOWN"})
+            raise HTTPException(status_code=502, detail=ambig_msg) from exc
     data = result if isinstance(result, dict) else {"result": str(result)}
     # Kotak responses commonly use `emsg`, but some rejection responses use `errMsg`.
     # Do not reduce those actionable messages to the opaque fallback `Not_Ok`.
@@ -1432,22 +1474,33 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
 @app.middleware("http")
 async def local_only(request: Request, call_next):
     origin = request.headers.get("origin")
+    req_id = request.headers.get("x-request-id") or secrets.token_hex(8)
+
+    # Validate CORS origin against allowlist
+    effective_origin: str | None = None
+    if origin:
+        clean_origin = origin.rstrip("/")
+        if clean_origin in ALLOWED_ORIGINS or (clean_origin.startswith("chrome-extension://") and request.url.path == "/api/bridge/symbol"):
+            effective_origin = origin
+
     if CLOUD_DEPLOYMENT:
         if request.method == "OPTIONS":
             cors_headers = {
-                "Access-Control-Allow-Origin": origin or "*",
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Bridge-Token",
+                "Access-Control-Allow-Origin": effective_origin or "null",
+                "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Bridge-Token, X-Owner-Token, X-Request-ID",
                 "Access-Control-Allow-Credentials": "true",
             }
             return JSONResponse(status_code=200, content={"ok": True}, headers=cors_headers)
         response = await call_next(request)
-        if origin:
-            response.headers["Access-Control-Allow-Origin"] = origin
+        if effective_origin:
+            response.headers["Access-Control-Allow-Origin"] = effective_origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-Request-ID"] = req_id
         return response
 
     host = request.headers.get("host", "").split(":")[0].strip("[]").lower()
@@ -1492,8 +1545,9 @@ async def local_only(request: Request, call_next):
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Request-ID"] = req_id
     return response
 
 
@@ -2183,11 +2237,17 @@ def instrument_quote(payload: InstrumentQuotePayload):
 @app.post("/api/auth/login")
 def auth_login(
     payload: LoginPayload,
+    request: Request,
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
     global neo_client, neo_authenticated, neo_egress_ip, neo_session_ip
+    client_ip = request.client.host if request.client else "unknown"
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        if not check_rate_limit(f"kotak_login_{client_ip}", max_calls=6, window_seconds=60.0):
+            audit("rate_limit_exceeded", {"endpoint": "/api/auth/login", "ip": client_ip})
+            raise HTTPException(status_code=429, detail="Too many Kotak Neo connection attempts. Please wait 1 minute before retrying.")
     existing_tok = _extract_auth_token(x_owner_token, authorization, neo_session)
     if not os.getenv("PYTEST_CURRENT_TEST") and not is_owner_request(existing_tok):
         raise HTTPException(status_code=403, detail="Only Terminal Admin can connect live Kotak Neo API.")
@@ -2546,7 +2606,13 @@ def auth_signup(payload: SignupPayload, response: Response):
 
 
 @app.post("/api/auth/signin")
-def auth_signin(payload: SigninPayload, response: Response):
+def auth_signin(payload: SigninPayload, response: Response, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        if not check_rate_limit(f"signin_{client_ip}", max_calls=12, window_seconds=60.0):
+            audit("rate_limit_exceeded", {"endpoint": "/api/auth/signin", "ip": client_ip})
+            raise HTTPException(status_code=429, detail="Too many login attempts. Please wait 1 minute before trying again.")
+
     ident = (payload.username or "").strip()
     ident_lower = ident.lower()
     pw = payload.password or ""
@@ -2787,6 +2853,63 @@ def admin_users_analytics(
         "users": analytics,
         "total_users": len(analytics),
         "overall_metrics": {"total_trades": len(combined_pnls), **overall},
+    }
+
+
+@app.get("/api/admin/diagnostics")
+def admin_diagnostics(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    token = _extract_auth_token(x_owner_token, authorization, neo_session)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=False)
+    is_admin_sess = bool(ctx["authenticated"] and ctx["is_admin"]) or is_owner_request(token)
+    if not is_admin_sess:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+    now = time.time()
+    upstox_sub_count = len(_UPSTOX_WS_QUOTES) if "_UPSTOX_WS_QUOTES" in globals() else 0
+    stale_count = 0
+    if "_UPSTOX_WS_QUOTES" in globals():
+        for k, v in _UPSTOX_WS_QUOTES.items():
+            if now - v.get("time", 0) > 5.0:
+                stale_count += 1
+
+    with db() as conn:
+        order_count = conn.execute("SELECT COUNT(*) as c FROM orders").fetchone()["c"]
+        exec_count = conn.execute("SELECT COUNT(*) as c FROM executions").fetchone()["c"]
+        audit_count = conn.execute("SELECT COUNT(*) as c FROM audit_events").fetchone()["c"]
+
+    import sys
+    return {
+        "ok": True,
+        "service": "neo-pip-trading-terminal",
+        "timestamp": utc_now(),
+        "uptime_seconds": round(now - _SERVER_START_TIME, 1) if "_SERVER_START_TIME" in globals() else 0.0,
+        "environment": NEO_ENVIRONMENT,
+        "cloud_deployment": CLOUD_DEPLOYMENT,
+        "python_version": sys.version.split()[0],
+        "broker_session": {
+            "authenticated": neo_authenticated,
+            "session_ip": neo_session_ip,
+            "egress_ip": neo_egress_ip,
+            "live_trading_enabled": LIVE_TRADING_ENABLED,
+        },
+        "market_data_feed": {
+            "provider": "Upstox V3 WebSocket + Protobuf",
+            "active_subscriptions": upstox_sub_count,
+            "stale_subscriptions": stale_count,
+            "ws_active": bool(_UPSTOX_WS_ACTIVE) if "_UPSTOX_WS_ACTIVE" in globals() else False,
+        },
+        "database_metrics": {
+            "path": str(DB_PATH),
+            "total_orders": order_count,
+            "total_executions": exec_count,
+            "total_audit_events": audit_count,
+            "wal_enabled": True,
+            "foreign_keys_enabled": True,
+        },
     }
 
 
@@ -3773,19 +3896,54 @@ def check_sltp_rules(
                     order_res = {"ok": True, "mode": "simulation", "price": ltp, "trigger_type": trigger_type}
                 else:
                     eff_prod = prod if str(prod or "").strip().upper() in {"NRML", "MIS", "CNC"} else "NRML"
-                    exit_payload = OrderPayload(
-                        symbol=r["symbol"],
-                        side=exit_side,
-                        lots=1,
-                        lot_size=qty,
-                        exchange_segment=seg,
-                        product=eff_prod,
-                        order_type="MKT",
-                        user_confirmed=True,
-                    )
-                    order_res = _execute_order(exit_payload)
+                    exited_live_position = False
+                    if neo_authenticated and neo_client is not None and hasattr(neo_client, "positions"):
+                        try:
+                            pos_data = neo_client.positions()
+                            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
+                            live_target = next((p for p in raw_pos if _kotak_symbols_match(str(p.get("trdSym") or p.get("sym") or ""), r["symbol"])), None)
+                            if live_target:
+                                calc = _calculate_single_position(live_target)
+                                net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
+                                if net_qty != 0:
+                                    live_exit_side = "SELL" if net_qty > 0 else "BUY"
+                                    live_exit_qty = int(abs(net_qty))
+                                    live_prod = live_target.get("prod") or eff_prod
+                                    live_ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg") or seg, r["symbol"])
+                                    live_trd_sym = str(live_target.get("trdSym") or r["symbol"]).strip()
+                                    order_res = neo_client.place_order(
+                                        exchange_segment=live_ex_seg,
+                                        product=live_prod,
+                                        price="0",
+                                        order_type="MKT",
+                                        quantity=str(live_exit_qty),
+                                        validity="DAY",
+                                        trading_symbol=live_trd_sym,
+                                        transaction_type=_kotak_tx_type(live_exit_side),
+                                        tag=f"SLTP_{trigger_type}",
+                                    )
+                                    _invalidate_kotak_portfolio_cache()
+                                    exited_live_position = True
+                        except Exception as e_pos:
+                            audit("sltp_live_position_query_failed", {"rule_id": rule_id, "error": str(e_pos)})
+
+                    if not exited_live_position:
+                        exit_payload = OrderPayload(
+                            symbol=r["symbol"],
+                            side=exit_side,
+                            lots=1,
+                            lot_size=qty,
+                            exchange_segment=seg,
+                            product=eff_prod,
+                            order_type="MKT",
+                            user_confirmed=True,
+                        )
+                        order_res = _execute_order(exit_payload)
             except Exception as e:
                 audit("sltp_execution_failed", {"rule_id": rule_id, "error": str(e)})
+                # Do NOT mark rule as triggered if the broker exit call threw an exception!
+                # Leaving rule active ensures it will retry on next tick instead of abandoning position!
+                continue
 
             with db() as conn:
                 conn.execute(
@@ -3816,6 +3974,46 @@ def check_sltp_rules(
         "triggered_count": len(triggered_rules),
         "triggered": triggered_rules,
     }
+
+
+def _run_server_side_sltp_check():
+    """Server-side autonomous SL/TP check daemon.
+    Iterates over all active SL/TP rules and checks against latest live quotes
+    even if user browser or chart tab is closed or throttled."""
+    try:
+        with db() as conn:
+            active_rules = conn.execute("SELECT * FROM sltp_rules WHERE status = 'active'").fetchall()
+        if not active_rules:
+            return
+        # Group by symbol to minimize quote lookups
+        symbols = {str(r["symbol"]).strip().upper() for r in active_rules if r["symbol"]}
+        for sym in symbols:
+            q = _get_live_quote_data(sym)
+            ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
+            if ltp > 0:
+                payload = SltpCheckPayload(symbol=sym, ltp=ltp)
+                check_sltp_rules(payload, x_owner_token=None)
+    except Exception:
+        pass
+
+
+def _server_sltp_loop():
+    while True:
+        try:
+            time.sleep(1.0)
+            _run_server_side_sltp_check()
+        except Exception:
+            pass
+
+_SERVER_SLTP_THREAD = None
+def _ensure_server_sltp_daemon():
+    global _SERVER_SLTP_THREAD
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if _SERVER_SLTP_THREAD is None or not _SERVER_SLTP_THREAD.is_alive():
+        _SERVER_SLTP_THREAD = threading.Thread(target=_server_sltp_loop, daemon=True, name="ServerSltpDaemon")
+        _SERVER_SLTP_THREAD.start()
+
 
 
 def _to_limit_float(val: Any) -> float | None:
@@ -4758,18 +4956,18 @@ def _get_upstox_option_contracts(underlying: str = "NIFTY") -> list[dict[str, An
 
 def parse_option_sym(s: str) -> tuple[str, float, str] | None:
     s_clean = s.upper().strip()
-    # 1. NSE format: e.g. NIFTY26N0925000CE or BANKNIFTY26N1352500PE
-    m = re.match(r"^([A-Z]+)\d{2}[A-Z0-9]{3}(\d{4,5})(CE|PE)$", s_clean)
+    # 1. NSE/BSE/MCX format: e.g. NIFTY26N0925000CE or CRUDEOIL26NOV6200CE or SENSEX26N1282400PE
+    m = re.match(r"^([A-Z]+)\d{2}[A-Z0-9]{3}(\d{3,6})(CE|PE)$", s_clean)
     if m:
         return m.group(1), float(m.group(2)), m.group(3)
-    # 2. Space separated: e.g. NIFTY 25000 CE (09 NOV)
-    m2 = re.search(r"([A-Z]+)\s+(\d{4,5})\s+(CE|PE)", s_clean)
+    # 2. Space separated: e.g. NIFTY 25000 CE (09 NOV), NATURALGAS 240 PE, CRUDEOIL 6200 CE
+    m2 = re.search(r"([A-Z]+)\s+(\d{3,6})\s+(CE|PE)", s_clean)
     if m2:
         return m2.group(1), float(m2.group(2)), m2.group(3)
-    # 3. Strike + CE/PE: e.g. 24950 PE or 25000CE
-    m3 = re.search(r"(\d{4,5})\s*(CE|PE)", s_clean)
+    # 3. Strike + CE/PE: e.g. 24950 PE or 25000CE or 240 PE
+    m3 = re.search(r"(\d{3,6})\s*(CE|PE)", s_clean)
     if m3:
-        und = "BANKNIFTY" if "BANK" in s_clean else ("SENSEX" if "SENSEX" in s_clean else "NIFTY")
+        und = "BANKNIFTY" if "BANK" in s_clean else ("SENSEX" if "SENSEX" in s_clean else ("CRUDEOIL" if "CRUDE" in s_clean else ("NATURALGAS" if "NATURAL" in s_clean else "NIFTY")))
         return und, float(m3.group(1)), m3.group(2)
     return None
 
@@ -6717,7 +6915,16 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
 
 @app.get("/api/chart/live-quote")
 def live_quote(symbol: str = "NIFTY", token: str | None = None):
-    return _get_live_quote_data(symbol, token)
+    q = _get_live_quote_data(symbol, token)
+    if isinstance(q, dict) and "time" in q:
+        t_val = q.get("time") or 0
+        now_sec = time.time()
+        # If timestamp is more than 15s in the past during active market hours, flag staleness
+        if t_val > 0 and (now_sec - t_val) > 15.0 and _is_indian_market_open():
+            q["is_stale"] = True
+        else:
+            q["is_stale"] = False
+    return q
 
 
 class LiveQuotesBatchPayload(BaseModel):
