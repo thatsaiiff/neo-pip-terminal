@@ -1939,6 +1939,79 @@ def test_kotak_live_order_reflects_and_sltp_places_updates_and_triggers(client, 
     assert fake.open_qty == 0
 
 
+def test_upstox_v3_feed_decoder_and_realtime_sensex_quotes(client, monkeypatch):
+    import struct
+    import time
+
+    def _varint(n: int) -> bytes:
+        out = bytearray()
+        while True:
+            b = n & 0x7F
+            n >>= 7
+            out.append(b | (0x80 if n else 0))
+            if not n:
+                return bytes(out)
+
+    def _pb_var(fn: int, v: int) -> bytes:
+        return _varint((fn << 3) | 0) + _varint(v)
+
+    def _pb_dbl(fn: int, v: float) -> bytes:
+        return _varint((fn << 3) | 1) + struct.pack("<d", v)
+
+    def _pb_bytes(fn: int, raw: bytes) -> bytes:
+        return _varint((fn << 3) | 2) + _varint(len(raw)) + raw
+
+    # Construct authentic Upstox V3 protobuf binary frame with BSE_INDEX|SENSEX (indexFF) & BSE_FO|822068 (marketFF)
+    sensex_ltpc = _pb_dbl(1, 81988.45) + _pb_var(2, 1794383000123) + _pb_dbl(4, 81106.65)
+    sensex_d1 = _pb_bytes(1, b"1d") + _pb_dbl(2, 82248.68) + _pb_dbl(3, 82520.40) + _pb_dbl(4, 81955.16) + _pb_dbl(5, 81988.45) + _pb_var(7, 1794335400000)
+    sensex_idx_ff = _pb_bytes(1, sensex_ltpc) + _pb_bytes(2, _pb_bytes(1, sensex_d1))
+    sensex_feed = _pb_bytes(2, _pb_bytes(2, sensex_idx_ff))
+    sensex_entry = _pb_bytes(1, b"BSE_INDEX|SENSEX") + _pb_bytes(2, sensex_feed)
+
+    ce_ltpc = _pb_dbl(1, 294.75) + _pb_var(2, 1794383000456) + _pb_var(3, 20) + _pb_dbl(4, 196.75)
+    ce_d1 = _pb_bytes(1, b"1d") + _pb_dbl(2, 341.70) + _pb_dbl(3, 607.60) + _pb_dbl(4, 278.00) + _pb_dbl(5, 294.75) + _pb_var(6, 39682560) + _pb_var(7, 1794335400000)
+    ce_mkt_ff = _pb_bytes(1, ce_ltpc) + _pb_bytes(4, _pb_bytes(1, ce_d1)) + _pb_var(6, 39682560)
+    ce_feed = _pb_bytes(2, _pb_bytes(1, ce_mkt_ff))
+    ce_entry = _pb_bytes(1, b"BSE_FO|822068") + _pb_bytes(2, ce_feed)
+
+    frame = _pb_var(1, 1) + _pb_bytes(2, sensex_entry) + _pb_bytes(2, ce_entry) + _pb_var(3, 1794383000500)
+    msg_type, cur_ts, decoded = main.decode_upstox_v3_feed(frame)
+    assert msg_type == 1 and cur_ts == 1794383000500
+    assert decoded["BSE_INDEX|SENSEX"]["ltp"] == 81988.45
+    assert decoded["BSE_INDEX|SENSEX"]["prev_close"] == 81106.65
+    assert decoded["BSE_INDEX|SENSEX"]["high"] == 82520.40
+    assert decoded["BSE_FO|822068"]["ltp"] == 294.75
+    assert decoded["BSE_FO|822068"]["volume"] == 39682560
+
+    # Wire live WS cache into Upstox hub -> /api/chart/live-quotes must serve instant ticks without calling outdated _cached_indices
+    ws_map = {}
+    now = time.time()
+    for k, v in decoded.items():
+        ws_map[k] = {**v, "received_at": now}
+    monkeypatch.setattr(main, "_UPSTOX_WS_QUOTES", ws_map)
+    monkeypatch.setattr(main, "_UPSTOX_WS_SUBSCRIBED_KEYS", {"BSE_INDEX|SENSEX", "BSE_FO|822068"})
+    monkeypatch.setattr(main, "_upstox_ws_connected", True)
+    monkeypatch.setattr(main, "_upstox_ws_connected_at", now - 5.0)
+    monkeypatch.setattr(main, "_live_quote_cache", {})
+    monkeypatch.setattr(main, "UPSTOX_ACCESS_TOKEN", "test-upstox-token")
+    # Put an old stale price in _cached_indices and prove live WS beats it!
+    monkeypatch.setattr(main, "_cached_indices", [{"name": "SENSEX", "ltp": 80000.0, "change": 0.0, "change_percent": 0.0}])
+    monkeypatch.setattr(main, "_cached_indices_ts", now - 100.0)
+
+    res = client.post(
+        "/api/chart/live-quotes",
+        json={"items": [{"symbol": "SENSEX", "token": "BSE_INDEX|SENSEX"}, {"symbol": "SENSEX 82300 CE", "token": "BSE_FO|822068"}]},
+    )
+    assert res.status_code == 200
+    qm = res.json()["quotes_by_symbol"]
+    assert qm["SENSEX"]["ltp"] == 81988.45
+    assert qm["SENSEX"]["source"] == "upstox_ws_v3"
+    assert qm["SENSEX"]["is_fallback"] is False
+    assert qm["SENSEX 82300 CE"]["ltp"] == 294.75
+    assert qm["SENSEX 82300 CE"]["volume"] == 39682560
+
+
+
 
 
 

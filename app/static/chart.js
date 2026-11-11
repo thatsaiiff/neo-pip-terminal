@@ -1675,11 +1675,27 @@
             if (hi > lo) span = (hi - lo) * 0.28;
           }
           const delta = Math.max(span || (ref * 0.003), decs >= 4 ? 0.0008 : (decs === 3 ? 0.05 : 0.8));
-          const defSl = Number((side === 'BUY' ? ref - delta : ref + delta).toFixed(decs));
-          const defTp = Number((side === 'BUY' ? ref + delta * 1.25 : ref - delta * 1.25).toFixed(decs));
+          let defSl = Number((side === 'BUY' ? ref - delta : ref + delta).toFixed(decs));
+          let defTp = Number((side === 'BUY' ? ref + delta * 1.25 : ref - delta * 1.25).toFixed(decs));
+          // Keep default spawned SL/TP visibly inside the current canvas viewport so user can always grab & drag it
+          const clampVisiblePrice = (pVal) => {
+            if (!pane.candleSeries) return pVal;
+            const yChk = pane.candleSeries.priceToCoordinate(Number(pVal));
+            if (yChk !== null && Number.isFinite(yChk) && yChk >= 18 && yChk <= wrapH - 30) return pVal;
+            const safeY = (yChk !== null && Number.isFinite(yChk))
+              ? Math.max(24, Math.min(Math.max(40, wrapH - 36), yChk))
+              : Math.round(wrapH * 0.5);
+            const cPr = pane.candleSeries.coordinateToPrice(safeY);
+            return (cPr && Number.isFinite(cPr) && cPr > 0) ? Number(cPr.toFixed(decs)) : pVal;
+          };
+          if (targetPrice === null) {
+            defSl = clampVisiblePrice(defSl);
+            defTp = clampVisiblePrice(defTp);
+          }
           const val = targetPrice !== null ? Number(targetPrice.toFixed(decs)) : null;
           const effProd = (pos.product && pos.product !== '—') ? pos.product : selectedProduct;
           const effQty = Math.max(1, Math.abs(Math.round(Number(pos.quantity || (selectedLots * getIndexLotSize(pane.sym))))));
+          const effEntry = Number(avg > 0 ? avg : ref);
           try {
             _portfolioMutationEpoch += 1;
             if (existingRule) {
@@ -1690,13 +1706,17 @@
                 if (!hasTp) patch.tp_price = defTp;
                 if (!hasSl) patch.sl_price = defSl;
               }
-              await api(`/api/sltp/${existingRule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
+              const rPatch = await api(`/api/sltp/${existingRule.id}?market=${encodeURIComponent(currentMarketMode)}`, {
                 method: 'PATCH',
                 body: JSON.stringify(patch),
               });
+              if (patch.tp_price !== undefined) existingRule.tp_price = rPatch?.tp_price ?? patch.tp_price;
+              if (patch.sl_price !== undefined) existingRule.sl_price = rPatch?.sl_price ?? patch.sl_price;
             } else {
               const fx = getForexSpec(pane.sym);
-              await api(`/api/sltp?market=${encodeURIComponent(currentMarketMode)}`, {
+              const nextSl = kind === 'tp' ? null : (kind === 'sl' && val ? val : defSl);
+              const nextTp = kind === 'sl' ? null : (kind === 'tp' && val ? val : defTp);
+              const rPost = await api(`/api/sltp?market=${encodeURIComponent(currentMarketMode)}`, {
                 method: 'POST',
                 body: JSON.stringify({
                   symbol: pane.sym,
@@ -1704,12 +1724,28 @@
                   product: effProd,
                   side,
                   quantity: effQty,
-                  entry_price: Number(avg > 0 ? avg : ref),
-                  sl_price: kind === 'tp' ? null : (kind === 'sl' && val ? val : defSl),
-                  tp_price: kind === 'sl' ? null : (kind === 'tp' && val ? val : defTp),
+                  entry_price: effEntry,
+                  sl_price: nextSl,
+                  tp_price: nextTp,
                 }),
               });
+              if (rPost && rPost.rule_id) {
+                activeSltpRules = [
+                  {
+                    id: rPost.rule_id,
+                    symbol: pane.sym,
+                    side,
+                    quantity: effQty,
+                    entry_price: effEntry,
+                    sl_price: nextSl,
+                    tp_price: nextTp,
+                    status: 'active',
+                  },
+                  ...activeSltpRules.filter(r => !symbolsMatchTrade(r.symbol || '', pane.sym)),
+                ];
+              }
             }
+            renderPaneTradeLines(pane, true);
             toast('✅ SL/TP line active on chart — grab line or badge to drag!');
             await fetchPositionsAndOrders();
           } catch (err) {
@@ -2464,7 +2500,7 @@
     return lastTime > 0 ? Math.max(lastTime, barTime) : barTime;
   }
 
-  function updateLiveIndicatorsIncremental(pane) {
+  function updateLiveIndicatorsIncremental(pane, forceFull = false) {
     if (!pane || !pane.candles || !pane.candles.length) return;
     const decs = getSymbolDecimals(pane.sym);
     const updateEma = (on, series, period) => {
@@ -2478,20 +2514,26 @@
     updateEma(indConfig.showEmaSlow, pane.ema21Series, indConfig.emaSlowPeriod);
     updateEma(indConfig.showEmaMid, pane.ema50Series, indConfig.emaMidPeriod);
     updateEma(indConfig.showEmaLong, pane.ema200Series, indConfig.emaLongPeriod);
-    if (ChartInd && typeof ChartInd.calculateEMACrossoverSignals === 'function') {
-      const sig = ChartInd.calculateEMACrossoverSignals(pane.candles, indConfig.emaFastPeriod, indConfig.emaSlowPeriod, decs);
-      pane.emaSignal = sig;
-      if (sig.latestSignal && sig.latestSignal !== 'NEUTRAL') {
-        syncWatchlistSignalBadge(pane.sym, sig.latestSignal);
+
+    const nowMs = Date.now();
+    const runHeavy = forceFull || (nowMs - Number(pane._lastHeavyIndMs || 0)) > 480;
+    if (runHeavy) {
+      pane._lastHeavyIndMs = nowMs;
+      if (ChartInd && typeof ChartInd.calculateEMACrossoverSignals === 'function') {
+        const sig = ChartInd.calculateEMACrossoverSignals(pane.candles, indConfig.emaFastPeriod, indConfig.emaSlowPeriod, decs);
+        pane.emaSignal = sig;
+        if (sig.latestSignal && sig.latestSignal !== 'NEUTRAL') {
+          syncWatchlistSignalBadge(pane.sym, sig.latestSignal);
+        }
+        if (indConfig.showCrossoverSignals && indConfig.showEmaFast && indConfig.showEmaSlow) {
+          try { pane.candleSeries.setMarkers(sig.markers || []); } catch (_) {}
+        }
       }
-      if (indConfig.showCrossoverSignals && indConfig.showEmaFast && indConfig.showEmaSlow) {
-        try { pane.candleSeries.setMarkers(sig.markers || []); } catch (_) {}
+      if (indConfig.showVpvr && pane.candleSeries) {
+        syncPaneVpvrFromChartRange(pane);
       }
+      if (drawingMgr) drawingMgr.renderPane(pane);
     }
-    if (indConfig.showVpvr && pane.candleSeries) {
-      syncPaneVpvrFromChartRange(pane);
-    }
-    if (drawingMgr) drawingMgr.renderPane(pane);
     if (indicators.showVol && pane.volSeries && pane.activeBar) {
       try {
         pane.volSeries.update({
@@ -2503,11 +2545,21 @@
     }
   }
 
-  function applyLiveQuoteToPaneBar(paneOrIdx, rawLtp, nowSecOverride = null) {
+  function applyLiveQuoteToPaneBar(paneOrIdx, rawLtp, nowSecOverride = null, rawDayVol = null) {
     const pane = typeof paneOrIdx === 'number' ? panes[paneOrIdx] : (paneOrIdx || getActivePane());
     if (!pane || !pane.candleSeries || !pane.activeBar || !pane.candles || !pane.candles.length) return;
     const ltp = Number(rawLtp);
     if (!Number.isFinite(ltp) || ltp <= 0) return;
+
+    const isIdx = isIndexSpotSymbol(pane.sym, pane.token);
+    let volDelta = 0;
+    const dayVolNum = Number(rawDayVol || 0);
+    if (!isIdx && Number.isFinite(dayVolNum) && dayVolNum > 0) {
+      if (pane._lastDayVol > 0 && dayVolNum >= pane._lastDayVol) {
+        volDelta = dayVolNum - pane._lastDayVol;
+      }
+      pane._lastDayVol = dayVolNum;
+    }
 
     const tfKey = String(pane.tf || '1m').toLowerCase();
     const stepSec = TF_SECONDS_MAP[tfKey] || 60;
@@ -2516,17 +2568,22 @@
     const prevTime = Number(pane.activeBar.time || 0);
 
     if (targetTime <= prevTime) {
+      if (pane.activeBar.close === ltp && volDelta === 0) {
+        return;
+      }
       pane.activeBar.close = ltp;
       if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
       if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
+      if (volDelta > 0) pane.activeBar.volume = Number(pane.activeBar.volume || 0) + volDelta;
       const lastIdx = pane.candles.length - 1;
       if (lastIdx >= 0 && pane.candles[lastIdx].time === prevTime) {
         pane.candles[lastIdx].close = pane.activeBar.close;
         pane.candles[lastIdx].high = pane.activeBar.high;
         pane.candles[lastIdx].low = pane.activeBar.low;
+        pane.candles[lastIdx].volume = pane.activeBar.volume;
       }
       try { pane.candleSeries.update(pane.activeBar); } catch (_) {}
-      updateLiveIndicatorsIncremental(pane);
+      updateLiveIndicatorsIncremental(pane, false);
       updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
       return;
     }
@@ -2543,18 +2600,18 @@
       high: Math.max(openP, ltp),
       low: Math.min(openP, ltp),
       close: ltp,
-      volume: 0,
+      volume: volDelta > 0 ? volDelta : 0,
     };
     pane.candles.push(nextBar);
     if (pane.candles.length > 2500) pane.candles.shift();
     pane.volumes.push({
       time: targetTime,
-      value: 0,
+      value: nextBar.volume,
       color: ltp >= openP ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
     });
     pane.activeBar = { ...nextBar };
     try { pane.candleSeries.update(pane.activeBar); } catch (_) {}
-    updateLiveIndicatorsIncremental(pane);
+    updateLiveIndicatorsIncremental(pane, true);
     updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
     if (typeof window._updateCountdownsFn === 'function') window._updateCountdownsFn();
 
@@ -2646,6 +2703,7 @@
     };
 
     async function tick() {
+      const tStart = performance.now();
       try {
         pollTickCount += 1;
         const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
@@ -2654,7 +2712,7 @@
         const seenReq = new Set(items.map(it => String(it.symbol || '').toUpperCase()));
         if (cachedPositions && cachedPositions.length) {
           for (const pos of cachedPositions) {
-            if (items.length >= 20) break;
+            if (items.length >= 24) break;
             const posSym = String(pos.symbol || pos.trading_symbol || pos.trdSym || '').trim();
             if (!posSym) continue;
             const key = posSym.toUpperCase();
@@ -2686,7 +2744,7 @@
             const q = qMap[pane.sym];
             if (q && q.ltp && !q.is_fallback) {
               updatePaneQuote(pane, q);
-              applyLiveQuoteToPaneBar(pane, q.ltp);
+              applyLiveQuoteToPaneBar(pane, q.ltp, null, q.volume);
               maybeCheckLiveTriggers(pane, q.ltp);
             }
           });
@@ -2697,15 +2755,21 @@
               maybeCheckLiveTriggersBySymbol(symKey, q.ltp);
             });
           }
+          if (typeof syncWatchlistDomFromMap === 'function') syncWatchlistDomFromMap(qMap);
           if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
+          const latEl = $('stat-latency');
+          if (latEl && pollTickCount % 4 === 0) {
+            latEl.textContent = `${Math.max(8, Math.round(performance.now() - tStart))}ms`;
+          }
         }
-        if (pollTickCount % 15 === 0) {
+        if (pollTickCount % 10 === 0) {
           updateWatchlistQuotes();
         }
       } catch (e) {
         // quiet error
       }
-      setTimeout(tick, 180);
+      const nextDelay = Math.max(45, 145 - Math.round(performance.now() - tStart));
+      setTimeout(tick, nextDelay);
     }
     tick();
   }
@@ -2967,14 +3031,15 @@
 
         if (res.ok) {
           _portfolioMutationEpoch += 1;
+          const ordEpoch = _portfolioMutationEpoch;
           if (res.order_status !== 'pending' && res.status !== 'pending') {
             playTradeSound('filled');
           }
           toast(`✅ ${res.message || `${typeTag} order placed!`}`);
           fetchPositionsAndOrders();
-          if (currentMarketMode === 'indian') {
-            setTimeout(fetchPositionsAndOrders, 450);
-            setTimeout(fetchPositionsAndOrders, 1200);
+          if (res.mode === 'live' && currentMarketMode === 'indian') {
+            setTimeout(() => { if (_portfolioMutationEpoch === ordEpoch) fetchPositionsAndOrders(); }, 550);
+            setTimeout(() => { if (_portfolioMutationEpoch === ordEpoch) fetchPositionsAndOrders(); }, 1350);
           }
           return true;
         }
@@ -4292,6 +4357,27 @@
     updateWatchlistQuotes();
   }
 
+  function syncWatchlistDomFromMap(qMap) {
+    if (!qMap) return;
+    document.querySelectorAll('.ex-inst-row').forEach(r => {
+      const symEl = r.querySelector('.sym-main');
+      if (!symEl) return;
+      const sym = symEl.textContent.trim();
+      const q = qMap[sym] || qMap[sym.toUpperCase()];
+      if (q && q.ltp && !q.is_fallback) {
+        const bidBtn = r.querySelector('.btn-price-bid');
+        const askBtn = r.querySelector('.btn-price-ask');
+        const fx = getForexSpec(sym);
+        const decs = fx ? fx.decimals : 2;
+        const spread = fx ? fx.spread : ((q.ltp * 0.0005) + 0.05);
+        const bidVal = q.bid ? Number(q.bid) : Math.max(0.0001, q.ltp - spread / 2);
+        const askVal = q.ask ? Number(q.ask) : (q.ltp + spread / 2);
+        if (bidBtn) bidBtn.textContent = bidVal.toFixed(decs);
+        if (askBtn) askBtn.textContent = askVal.toFixed(decs);
+      }
+    });
+  }
+
   async function updateWatchlistQuotes() {
     try {
       const rows = document.querySelectorAll('.ex-inst-row');
@@ -4310,24 +4396,7 @@
         const qList = Array.isArray(data.quotes) ? data.quotes : Object.values(data.quotes);
         const qMap = data.quotes_by_symbol || {};
         qList.forEach(q => { if (q && q.symbol) qMap[q.symbol] = q; });
-
-        rows.forEach(r => {
-          const symEl = r.querySelector('.sym-main');
-          if (!symEl) return;
-          const sym = symEl.textContent.trim();
-          const q = qMap[sym];
-          if (q && q.ltp) {
-            const bidBtn = r.querySelector('.btn-price-bid');
-            const askBtn = r.querySelector('.btn-price-ask');
-            const fx = getForexSpec(sym);
-            const decs = fx ? fx.decimals : 2;
-            const spread = fx ? fx.spread : ((q.ltp * 0.0005) + 0.05);
-            const bidVal = q.bid ? Number(q.bid) : Math.max(0.0001, q.ltp - spread / 2);
-            const askVal = q.ask ? Number(q.ask) : (q.ltp + spread / 2);
-            if (bidBtn) bidBtn.textContent = bidVal.toFixed(decs);
-            if (askBtn) askBtn.textContent = askVal.toFixed(decs);
-          }
-        });
+        syncWatchlistDomFromMap(qMap);
       }
     } catch (e) {
       // quiet
@@ -4420,15 +4489,20 @@
   let _fetchingPortfolio = false;
   let _pendingPortfolioResync = false;
   let _portfolioMutationEpoch = 0;
+  let _inflightPortfolioPromise = null;
 
   async function fetchPositionsAndOrders() {
     if (!isAuthenticated) return;
     if (_fetchingPortfolio) {
       _pendingPortfolioResync = true;
+      if (_inflightPortfolioPromise) {
+        try { await _inflightPortfolioPromise; } catch (_) {}
+      }
       return;
     }
     _fetchingPortfolio = true;
     const startEpoch = _portfolioMutationEpoch;
+    _inflightPortfolioPromise = (async () => {
     try {
       const mQ = `market=${encodeURIComponent(currentMarketMode)}`;
       const c = curSym();
@@ -4771,11 +4845,14 @@
       // quiet
     } finally {
       _fetchingPortfolio = false;
+      _inflightPortfolioPromise = null;
       if (_pendingPortfolioResync) {
         _pendingPortfolioResync = false;
-        setTimeout(fetchPositionsAndOrders, 150);
+        setTimeout(fetchPositionsAndOrders, 40);
       }
     }
+    })();
+    return _inflightPortfolioPromise;
   }
 
   // --- Option Chain Modal (Matching Upstox TV) ---
