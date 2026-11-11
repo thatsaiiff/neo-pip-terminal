@@ -71,7 +71,10 @@ html, body {
 }
 
 html, body {
-  touch-action: manipulation;
+  touch-action: pan-y;
+  overflow-x: hidden;
+  max-width: 100%;
+  overscroll-behavior: none;
   -webkit-text-size-adjust: 100%;
 }
 

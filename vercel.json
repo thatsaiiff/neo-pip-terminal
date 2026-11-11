@@ -7,7 +7,9 @@
     { "src": "app/static/chart.html", "use": "@vercel/static" },
     { "src": "app/static/chart.css", "use": "@vercel/static" },
     { "src": "app/static/chart.js", "use": "@vercel/static" },
-    { "src": "app/static/lightweight-charts.js", "use": "@vercel/static" }
+    { "src": "app/static/lightweight-charts.js", "use": "@vercel/static" },
+    { "src": "app/static/trade-sounds.js", "use": "@vercel/static" },
+    { "src": "app/static/viewport-guard.js", "use": "@vercel/static" }
   ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "http://92.4.87.82:8000/api/:path*" },

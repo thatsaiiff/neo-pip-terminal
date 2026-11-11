@@ -6944,17 +6944,16 @@
 
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
-    // Prevent page pinch / double-tap zoom while leaving single-finger + / - taps instant
-    ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
-      document.addEventListener(evt, e => e.preventDefault(), { passive: false });
-    });
-    document.addEventListener('touchstart', e => {
-      if (e.touches && e.touches.length > 1 && !(e.target && e.target.closest && e.target.closest('.chart-canvas-view'))) {
-        if (e.cancelable) e.preventDefault();
-      }
-    }, { passive: false });
+    if (typeof window.resetViewportZoomTo100 === 'function') {
+      window.resetViewportZoomTo100(false);
+    }
 
     initChartPane(panes[0]);
+    if (typeof window.registerViewportResizeCallback === 'function') {
+      window.registerViewportResizeCallback(() => {
+        panes.forEach(p => { if (p && p.chart) resizePaneChart(p); });
+      });
+    }
     renderSymbolTabs();
     setupAddTabButton();
     setupOrderPanelInteractions();
