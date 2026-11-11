@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord16">
+  <link rel="stylesheet" href="/static/chart.css?v=20261111-ord17">
 </head>
 <body class="ex-theme-dark auth-locked">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
@@ -395,6 +395,10 @@
               <div class="pane-cd-top"><span class="pane-cd-tf" id="p1-cd-tf">1m</span><span class="pane-cd-time" id="p1-cd-time">00:00</span></div>
               <div class="pane-cd-track"><div class="pane-cd-fill" id="p1-cd-fill"></div></div>
             </div>
+            <div id="p1-opt-quick" class="pane-opt-quick-bar hidden" role="group" aria-label="Quick ATM Option Split">
+              <button type="button" class="opt-quick-btn opt-call" data-opt-type="CE">CALL</button>
+              <button type="button" class="opt-quick-btn opt-put" data-opt-type="PE">PUT</button>
+            </div>
           </div>
         </section>
 
@@ -423,6 +427,10 @@
             <div id="p2-cd-box" class="pane-cd-box" title="Countdown to current candle close">
               <div class="pane-cd-top"><span class="pane-cd-tf" id="p2-cd-tf">1m</span><span class="pane-cd-time" id="p2-cd-time">00:00</span></div>
               <div class="pane-cd-track"><div class="pane-cd-fill" id="p2-cd-fill"></div></div>
+            </div>
+            <div id="p2-opt-quick" class="pane-opt-quick-bar hidden" role="group" aria-label="Switch ATM Option">
+              <button type="button" class="opt-quick-btn opt-call" data-opt-type="CE">CALL</button>
+              <button type="button" class="opt-quick-btn opt-put" data-opt-type="PE">PUT</button>
             </div>
           </div>
         </section>
@@ -1947,6 +1955,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
 
   <script src="/static/lightweight-charts.js"></script>
   <script src="/static/trade-sounds.js?v=20261111-sfx1"></script>
-  <script src="/static/chart.js?v=20261111-ord16"></script>
+  <script src="/static/chart.js?v=20261111-ord17"></script>
 </body>
 </html>

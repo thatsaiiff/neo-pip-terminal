@@ -637,6 +637,165 @@
       if ($('m-sell-caption')) $('m-sell-caption').textContent = isPend ? 'Sell Pend' : 'Sell';
       if ($('m-buy-caption')) $('m-buy-caption').textContent = isPend ? 'Buy Pend' : 'Buy';
     }
+    if (typeof updateOptQuickButtons === 'function') updateOptQuickButtons();
+  }
+
+  function normalizeOptionUnderlyingInfo(rawSym) {
+    const comp = String(rawSym || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (comp.includes('BANKNIFTY') || comp === 'NIFTYBANK') {
+      return { und: 'BANKNIFTY', step: 100, segment: 'NSE_FO', lotSize: 30, fallbackSpot: 52000 };
+    }
+    if (comp.includes('SENSEX') || comp === 'BANKEX') {
+      return { und: 'SENSEX', step: 100, segment: 'BSE_FO', lotSize: 20, fallbackSpot: 82000 };
+    }
+    if (comp.includes('FINNIFTY') || comp === 'CNXFINANCE') {
+      return { und: 'FINNIFTY', step: 50, segment: 'NSE_FO', lotSize: 65, fallbackSpot: 23800 };
+    }
+    if (comp.includes('MIDCPNIFTY') || comp === 'MIDCAP') {
+      return { und: 'MIDCPNIFTY', step: 25, segment: 'NSE_FO', lotSize: 120, fallbackSpot: 12800 };
+    }
+    return { und: 'NIFTY', step: 50, segment: 'NSE_FO', lotSize: 75, fallbackSpot: 25000 };
+  }
+
+  function updateOptQuickButtons() {
+    const isMobileTablet = window.innerWidth <= 1024;
+    const isIndian = currentMarketMode === 'indian';
+    const p1 = panes[0];
+    const p2 = panes[1];
+    const p1Upper = String((p1 && p1.sym) || '').trim().toUpperCase();
+    const p1IsIdx = Boolean(p1 && isIndexSpotSymbol(p1.sym, p1.token) && !p1Upper.includes('INDIAVIX'));
+
+    const bar1 = $('p1-opt-quick');
+    const wrap1 = $('p1-canvas-wrap');
+    const show1 = Boolean(isIndian && isMobileTablet && activeLayout === 1 && p1IsIdx);
+    if (bar1) bar1.classList.toggle('hidden', !show1);
+    if (wrap1) wrap1.classList.toggle('has-opt-quick', show1);
+
+    const bar2 = $('p2-opt-quick');
+    const wrap2 = $('p2-canvas-wrap');
+    const p2Opt = Boolean(p2 && isOptionSymbol(p2.sym));
+    const show2 = Boolean(isIndian && isMobileTablet && activeLayout === 2 && p1IsIdx && p2Opt);
+    if (bar2) {
+      bar2.classList.toggle('hidden', !show2);
+      if (show2) {
+        const isPut = /\bPE\b/i.test(p2.sym);
+        bar2.querySelectorAll('.opt-quick-btn').forEach(btn => {
+          const isBtnPut = btn.dataset.optType === 'PE';
+          btn.classList.toggle('active', isPut ? isBtnPut : !isBtnPut);
+        });
+      }
+    }
+    if (wrap2) wrap2.classList.toggle('has-opt-quick', show2);
+  }
+
+  async function resolveAtmOptionContract(underlyingSym, optType) {
+    const optSuffix = String(optType || 'CE').toUpperCase() === 'PE' ? 'PE' : 'CE';
+    const info = normalizeOptionUnderlyingInfo(underlyingSym);
+    let spot = Number((panes[0] && panes[0].lastLtp) || 0);
+    let bestStrike = spot > 0 ? Math.round(spot / info.step) * info.step : info.fallbackSpot;
+    let optSym = `${info.und} ${bestStrike} ${optSuffix}`;
+    let optTok = '';
+    let optLot = info.lotSize;
+    let optSeg = info.segment;
+    let optLtp = 0;
+
+    try {
+      const chainRes = await api(`/api/chart/option-chain?symbol=${encodeURIComponent(info.und)}`);
+      if (chainRes && chainRes.ok) {
+        if (Number(chainRes.spot_price) > 0) spot = Number(chainRes.spot_price);
+        const rows = chainRes.chain || chainRes.rows || [];
+        if (rows.length) {
+          const atmRow = spot > 0
+            ? rows.reduce((best, r) => !best || Math.abs(Number(r.strike) - spot) < Math.abs(Number(best.strike) - spot) ? r : best, null)
+            : (rows.find(r => r.is_atm) || rows[Math.floor(rows.length / 2)]);
+          if (atmRow) {
+            bestStrike = Math.round(Number(atmRow.strike) || bestStrike);
+            const rawSym = optSuffix === 'CE'
+              ? (atmRow.call_symbol || (atmRow.call && atmRow.call.symbol))
+              : (atmRow.put_symbol || (atmRow.put && atmRow.put.symbol));
+            const rawTok = optSuffix === 'CE'
+              ? (atmRow.call_token || (atmRow.call && atmRow.call.instrument_key))
+              : (atmRow.put_token || (atmRow.put && atmRow.put.instrument_key));
+            const rawLtp = Number(optSuffix === 'CE'
+              ? (atmRow.call_ltp !== undefined ? atmRow.call_ltp : (atmRow.call && atmRow.call.ltp))
+              : (atmRow.put_ltp !== undefined ? atmRow.put_ltp : (atmRow.put && atmRow.put.ltp)));
+            if (rawSym) optSym = String(rawSym).trim().toUpperCase();
+            if (rawTok) optTok = String(rawTok).trim();
+            if (rawLtp > 0) optLtp = rawLtp;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Enrich synthetic/empty tokens with exact exchange contract & lot size from search when available
+    if (!optTok || optTok.endsWith(`${bestStrike}${optSuffix}`)) {
+      try {
+        const sr = await api(`/api/chart/search?q=${encodeURIComponent(`${info.und} ${bestStrike} ${optSuffix}`)}&market=indian`);
+        const list = (sr && (sr.results || sr.items)) || [];
+        const strikeRe = new RegExp(`\\b${bestStrike}\\s*${optSuffix}\\b`, 'i');
+        const hit = list.find(it => {
+          const s = String(it.symbol || '').toUpperCase();
+          return s.includes(info.und) && strikeRe.test(s);
+        });
+        if (hit && hit.symbol) {
+          optSym = String(hit.symbol).trim().toUpperCase();
+          if (hit.token) optTok = String(hit.token).trim();
+          if (Number(hit.lot_size) > 0) optLot = Number(hit.lot_size);
+          if (hit.segment) optSeg = String(hit.segment).trim();
+        }
+      } catch (_) {}
+    }
+
+    return { symbol: optSym, token: optTok, lotSize: optLot, segment: optSeg, strike: bestStrike, ltp: optLtp };
+  }
+
+  let optQuickBusy = false;
+  async function switchToAtmOptionSplit(optType) {
+    if (optQuickBusy || currentMarketMode !== 'indian') return;
+    const p1 = panes[0];
+    if (!p1 || !isIndexSpotSymbol(p1.sym, p1.token)) return;
+    optQuickBusy = true;
+    const allBtns = document.querySelectorAll('.pane-opt-quick-bar .opt-quick-btn');
+    allBtns.forEach(b => { b.disabled = true; });
+    try {
+      const atm = await resolveAtmOptionContract(p1.sym, optType);
+      panes[1]._userPicked = true;
+      panes[1].tf = p1.tf || panes[1].tf || '1m';
+      if (activeLayout !== 2 && typeof window._applyChartLayoutFn === 'function') {
+        window._applyChartLayoutFn(2, true);
+      }
+      openSymbolInPane(1, atm.symbol, atm.token, atm.lotSize, atm.segment);
+      if (atm.ltp > 0 && !panes[1].lastLtp) {
+        panes[1].lastLtp = atm.ltp;
+        updateOrderFormPrices(atm.ltp);
+      }
+      updateOptQuickButtons();
+      toast(`${activeLayout === 2 ? 'ATM' : 'Split'} ${atm.symbol}`);
+    } catch (e) {
+      toast('Could not load ATM option chart', 'error');
+    } finally {
+      optQuickBusy = false;
+      allBtns.forEach(b => { b.disabled = false; });
+    }
+  }
+
+  function setupOptQuickButtons() {
+    document.querySelectorAll('.pane-opt-quick-bar').forEach(bar => {
+      ['pointerdown', 'touchstart', 'mousedown'].forEach(ev => {
+        bar.addEventListener(ev, e => e.stopPropagation(), { passive: true });
+      });
+      bar.querySelectorAll('.opt-quick-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const optType = btn.dataset.optType || 'CE';
+          switchToAtmOptionSplit(optType);
+        });
+      });
+    });
+    window.addEventListener('resize', () => {
+      updateOptQuickButtons();
+    });
+    updateOptQuickButtons();
   }
 
   async function api(path, options = {}) {
@@ -5813,7 +5972,7 @@
       return '<svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.2" y="2.2" width="13.6" height="13.6" rx="2"/></svg>';
     }
 
-    function applyLayout(lay) {
+    function applyLayout(lay, skipSecondaryAutoLoad = false) {
       if (window.innerWidth <= 768 && lay > 2) lay = 2;
       activeLayout = lay;
       if (stage) stage.className = `ex-chart-stage layout-${lay}`;
@@ -5834,12 +5993,13 @@
       // Initialize pane charts if not yet done
       if (lay >= 2 && !panes[1].chart) {
         initChartPane(panes[1]);
-        loadCandles(panes[1]);
+        if (!skipSecondaryAutoLoad) loadCandles(panes[1]);
       }
       if (lay === 3 && !panes[2].chart) {
         initChartPane(panes[2]);
         loadCandles(panes[2]);
       }
+      if (typeof updateOptQuickButtons === 'function') updateOptQuickButtons();
 
       function refitVisiblePanes() {
         panes.slice(0, lay).forEach(p => {
@@ -6972,6 +7132,7 @@
     setupTokenModal();
     setupKeysModal();
     setupGuestProfileModal();
+    setupOptQuickButtons();
     setupMobileFlow();
     syncTradeButtonsForActivePane();
     updateTzBadgeUI();
