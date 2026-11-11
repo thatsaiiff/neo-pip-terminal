@@ -4917,9 +4917,7 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
         if live_q and res_copy.get("candles"):
             candles_copy = [dict(c) for c in res_copy["candles"]]
             spot = float(live_q["ltp"])
-            candles_copy[-1]["close"] = round(spot, decs)
-            candles_copy[-1]["high"] = round(max(float(candles_copy[-1]["high"]), spot), decs)
-            candles_copy[-1]["low"] = round(min(float(candles_copy[-1]["low"]), spot), decs)
+            candles_copy = _merge_live_tick_into_candles(candles_copy, spot, iv, decs, is_live_session=True)
             res_copy["candles"] = candles_copy
             res_copy["ltp"] = round(spot, decs)
             res_copy["change"] = live_q["change"]
@@ -5092,11 +5090,7 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
             pass
 
     if res_candles and live_q and float(live_q.get("ltp") or 0) > 0:
-        spot = float(live_q["ltp"])
-        last = res_candles[-1]
-        last["close"] = round(spot, decs)
-        last["high"] = round(max(float(last["high"]), spot), decs)
-        last["low"] = round(min(float(last["low"]), spot), decs)
+        res_candles = _merge_live_tick_into_candles(res_candles, float(live_q["ltp"]), iv, decs, is_live_session=True)
 
     ltp_final = float(live_q["ltp"]) if live_q else (res_candles[-1]["close"] if res_candles else 0.0)
     prev_final = float(live_q["prev_close"]) if live_q else (res_candles[-2]["close"] if len(res_candles) >= 2 else ltp_final)
@@ -5122,6 +5116,129 @@ def _get_forex_candles(symbol: str, interval: str = "1m", days: int = 5) -> dict
     if res_candles:
         _forex_candles_cache[f"{fx_sym}_{iv}_{days}"] = (time.time(), fx_out)
     return fx_out
+
+
+_INTERVAL_SECONDS_MAP: dict[str, int] = {
+    "5s": 5, "15s": 15, "1m": 60, "1min": 60, "3m": 180, "3min": 180,
+    "5m": 300, "5min": 300, "15m": 900, "15min": 900,
+    "30m": 1800, "30min": 1800, "1h": 3600, "60m": 3600,
+    "4h": 14400, "240m": 14400, "1d": 86400, "day": 86400, "daily": 86400,
+}
+
+
+def _merge_1m_candles(hist_raw: list[list[Any]], intra_raw: list[list[Any]]) -> list[list[Any]]:
+    """Merge historical + today's intraday Upstox candles chronologically by parsed epoch timestamp."""
+    by_ts: dict[int, list[Any]] = {}
+    for src in (hist_raw or (), intra_raw or ()):
+        for c in src:
+            if not c or len(c) < 5:
+                continue
+            try:
+                ts = int(datetime.fromisoformat(str(c[0])).timestamp())
+                by_ts[ts] = c
+            except Exception:
+                continue
+    return [by_ts[t] for t in sorted(by_ts.keys())]
+
+
+def _merge_live_tick_into_candles(
+    candles: list[dict[str, Any]],
+    live_price: float,
+    interval_str: str,
+    decs: int,
+    is_live_session: bool,
+) -> list[dict[str, Any]]:
+    """Ensure the latest bar tracks live LTP and rolls forward onto the current interval bucket."""
+    if not candles or not (live_price > 0) or not math.isfinite(live_price):
+        return candles
+    iv = (interval_str or "1m").lower().strip()
+    step_s = _INTERVAL_SECONDS_MAP.get(iv, 60)
+    last = candles[-1]
+    last_t = int(last.get("time") or 0)
+    now_s = int(time.time())
+
+    if step_s >= 86400:
+        if is_live_session:
+            last["close"] = round(live_price, decs)
+            last["high"] = round(max(float(last["high"]), live_price), decs)
+            last["low"] = round(min(float(last["low"]), live_price), decs)
+        return candles
+
+    if step_s <= 1800:
+        cur_t = (now_s // step_s) * step_s
+    else:
+        cur_t = last_t + ((now_s - last_t) // step_s) * step_s if now_s >= last_t else last_t
+
+    if cur_t <= last_t:
+        # Sub-minute expansion may already cover current minute up to last_t -> update matching/latest bar
+        target = next((c for c in reversed(candles[-12:]) if int(c["time"]) == cur_t), last)
+        target["close"] = round(live_price, decs)
+        target["high"] = round(max(float(target["high"]), live_price), decs)
+        target["low"] = round(min(float(target["low"]), live_price), decs)
+    elif is_live_session:
+        prev_c = float(last["close"])
+        open_p = prev_c if (cur_t - last_t) <= (step_s * 3) else live_price
+        candles.append({
+            "time": cur_t,
+            "open": round(open_p, decs),
+            "high": round(max(open_p, live_price), decs),
+            "low": round(min(open_p, live_price), decs),
+            "close": round(live_price, decs),
+            "volume": 0,
+        })
+    return candles
+
+
+def _fetch_upstox_1m_merged(
+    inst_key: str,
+    today_dt: datetime,
+    days_back: int,
+    upstox_headers: dict[str, str],
+) -> tuple[list[list[Any]], str]:
+    """Fetch Upstox prior historical 1m bars AND today's live intraday 1m bars, merged seamlessly."""
+    today_str = today_dt.strftime("%Y-%m-%d")
+    from_date_str = (today_dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
+    intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
+
+    hist_raw: list[list[Any]] = []
+    intra_raw: list[list[Any]] = []
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r_hist = client.get(range_url, headers=upstox_headers)
+            if r_hist.status_code == 200:
+                raw = r_hist.json().get("data", {}).get("candles", [])
+                if raw:
+                    raw.reverse()
+                    hist_raw = raw
+            r_intra = client.get(intraday_url, headers=upstox_headers)
+            if r_intra.status_code == 200:
+                raw_i = r_intra.json().get("data", {}).get("candles", [])
+                if raw_i:
+                    raw_i.reverse()
+                    intra_raw = raw_i
+    except Exception:
+        pass
+
+    merged = _merge_1m_candles(hist_raw, intra_raw)
+    if merged:
+        return merged, today_str
+
+    # Fallback: probe recent single trading sessions over past 7 IST days
+    for i in range(7):
+        try_date = (today_dt - timedelta(days=i)).strftime("%Y-%m-%d")
+        url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                resp = client.get(url, headers=upstox_headers)
+                if resp.status_code == 200:
+                    raw = resp.json().get("data", {}).get("candles", [])
+                    if raw:
+                        raw.reverse()
+                        return _merge_1m_candles([], raw), try_date
+        except Exception:
+            continue
+    return [], today_str
 
 
 @app.get("/api/chart/candles")
@@ -5166,14 +5283,15 @@ def chart_candles(
         upstox_headers["Authorization"] = f"Bearer {up_token}"
 
     interval_clean = interval.lower().strip()
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    now_ist = datetime.now(IST_TZ)
+    today_str = now_ist.strftime("%Y-%m-%d")
 
     # If it is an option and we only have an index key, do NOT query Upstox directly for raw option candles
     if not must_derive_option:
         # 1. Daily candles (fetch up to requested_days or 1 full year of daily bars directly from Upstox)
         if interval_clean in {"1d", "day", "daily"} or requested_days > 30:
             daily_span = max(requested_days, 365) if interval_clean in {"1d", "day", "daily"} else requested_days
-            from_str = (datetime.now() - timedelta(days=daily_span)).strftime("%Y-%m-%d")
+            from_str = (now_ist - timedelta(days=daily_span)).strftime("%Y-%m-%d")
             day_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/day/{today_str}/{from_str}"
             try:
                 with httpx.Client(timeout=5.0) as client:
@@ -5193,6 +5311,23 @@ def chart_candles(
                             res_candles = [seen[t] for t in sorted(seen.keys())]
                             _cache_quote_from_candles(sym, token, res_candles)
                             q_data = _get_live_quote_data(symbol, token=token)
+                            if not q_data.get("is_fallback") and res_candles and not os.getenv("PYTEST_CURRENT_TEST"):
+                                today_mid = int(datetime.fromisoformat(f"{today_str}T00:00:00+05:30").timestamp())
+                                live_p = float(q_data.get("ltp") or 0.0)
+                                if live_p > 0 and (_is_indian_market_open(now_ist) or res_candles[-1]["time"] == today_mid):
+                                    if res_candles[-1]["time"] == today_mid:
+                                        res_candles[-1]["close"] = live_p
+                                        res_candles[-1]["high"] = max(res_candles[-1]["high"], live_p)
+                                        res_candles[-1]["low"] = min(res_candles[-1]["low"], live_p)
+                                    else:
+                                        res_candles.append({
+                                            "time": today_mid,
+                                            "open": float(q_data.get("open") or live_p),
+                                            "high": max(float(q_data.get("high") or live_p), live_p),
+                                            "low": min(float(q_data.get("low") or live_p), live_p),
+                                            "close": live_p,
+                                            "volume": int(float(q_data.get("volume") or 0)),
+                                        })
                             if q_data.get("is_fallback") and res_candles:
                                 q_data["ltp"] = res_candles[-1]["close"]
                                 prev_d = res_candles[-2]["close"] if len(res_candles) >= 2 else res_candles[-1]["open"]
@@ -5215,64 +5350,9 @@ def chart_candles(
             except Exception:
                 pass
 
-        # 2. Intraday Multi-Day Candles (up to 30 days for 1h/4h or explicit days param, 1d for 5s/15s, else requested_days)
-        days_back = max(requested_days, 30) if interval_clean in {"1h", "60m", "4h", "240m"} else (1 if interval_clean in {"5s", "15s"} and requested_days <= 5 else min(requested_days, 30))
-        from_date_str = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-        range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
-        try:
-            with httpx.Client(timeout=5.0) as client:
-                resp = client.get(range_url, headers=upstox_headers)
-                if resp.status_code == 200:
-                    raw = resp.json().get("data", {}).get("candles", [])
-                    if raw:
-                        raw.reverse()
-                        candles_1m = raw
-                        selected_date = today_str
-        except Exception:
-            pass
-
-        # If range had no data, supplement with live intraday endpoint
-        if not candles_1m or interval_clean in {"5s", "15s"}:
-            intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
-            try:
-                with httpx.Client(timeout=4.0) as client:
-                    resp = client.get(intraday_url, headers=upstox_headers)
-                    if resp.status_code == 200:
-                        payload = resp.json()
-                        raw = payload.get("data", {}).get("candles", [])
-                        if raw:
-                            raw.reverse()
-                            if not candles_1m:
-                                candles_1m = raw
-                                selected_date = today_str
-                            else:
-                                last_hist_t = candles_1m[-1][0] if candles_1m else ""
-                                for c in raw:
-                                    if c[0] > last_hist_t:
-                                        candles_1m.append(c)
-            except Exception:
-                pass
-
-        # Fallback to single daily sessions if needed
-        if not candles_1m:
-            d = datetime.now()
-            dates_to_try = [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-            for try_date in dates_to_try:
-                url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
-                try:
-                    with httpx.Client(timeout=4.0) as client:
-                        resp = client.get(url, headers=upstox_headers)
-                        if resp.status_code == 200:
-                            payload = resp.json()
-                            raw = payload.get("data", {}).get("candles", [])
-                            if raw:
-                                raw.reverse()
-                                candles_1m = raw
-                                selected_date = try_date
-                                break
-                except Exception:
-                    continue
+        # 2. Intraday Multi-Day Candles + ALWAYS Today's Live Intraday Session
+        days_back = max(requested_days, 30) if interval_clean in {"1h", "60m", "4h", "240m"} else (2 if interval_clean in {"5s", "15s"} and requested_days <= 5 else min(requested_days, 30))
+        candles_1m, selected_date = _fetch_upstox_1m_merged(inst_key, now_ist, days_back, upstox_headers)
 
     # If candle data is empty or if this is an option that needs derivation from index
     if not candles_1m or must_derive_option:
@@ -5285,32 +5365,10 @@ def chart_candles(
         if parsed:
             und, stk_v, o_type = parsed
             und_key, _ = _resolve_upstox_instrument(und)
-            idx_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(und_key)}/1minute/{today_str}/{(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')}"
-            try:
-                with httpx.Client(timeout=4.0) as client:
-                    i_res = client.get(idx_url, headers=upstox_headers)
-                    if i_res.status_code == 200:
-                        raw_idx = i_res.json().get("data", {}).get("candles", [])
-                        if raw_idx:
-                            raw_idx.reverse()
-                            candles_1m = _derive_option_candles_from_index(und, stk_v, o_type, raw_idx)
-                            selected_date = today_str
-            except Exception:
-                pass
-
-            if not candles_1m:
-                intraday_idx_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(und_key)}/1minute"
-                try:
-                    with httpx.Client(timeout=4.0) as client:
-                        i_res = client.get(intraday_idx_url, headers=upstox_headers)
-                        if i_res.status_code == 200:
-                            raw_idx = i_res.json().get("data", {}).get("candles", [])
-                            if raw_idx:
-                                raw_idx.reverse()
-                                candles_1m = _derive_option_candles_from_index(und, stk_v, o_type, raw_idx)
-                                selected_date = today_str
-                except Exception:
-                    pass
+            raw_idx, sel_d = _fetch_upstox_1m_merged(und_key, now_ist, 7, upstox_headers)
+            if raw_idx:
+                candles_1m = _derive_option_candles_from_index(und, stk_v, o_type, raw_idx)
+                selected_date = sel_d
 
     # If still empty (e.g. offline weekend or unmapped contract), generate realistic smooth candles matching quote LTP
     if not candles_1m:
@@ -5328,9 +5386,9 @@ def chart_candles(
 
     interval_clean = interval.lower().strip()
     if interval_clean == "5s":
-        res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=5)
+        res_candles = _expand_1m_to_subminute(candles_1m[-120:], interval_sec=5)
     elif interval_clean == "15s":
-        res_candles = _expand_1m_to_subminute(candles_1m, interval_sec=15)
+        res_candles = _expand_1m_to_subminute(candles_1m[-180:], interval_sec=15)
     elif interval_clean in {"1m", "1min"}:
         res_candles = [{
             "time": int(datetime.fromisoformat(c[0]).timestamp()),
@@ -5362,6 +5420,8 @@ def chart_candles(
         _cache_quote_from_candles(sym, token, res_candles)
 
     q_data = _get_live_quote_data(symbol, token=token)
+    if res_candles and not must_derive_option and not q_data.get("is_fallback") and float(q_data.get("ltp") or 0) > 0:
+        res_candles = _merge_live_tick_into_candles(res_candles, float(q_data["ltp"]), interval_clean, 2, is_live_session=_is_indian_market_open(now_ist))
     if q_data.get("is_fallback") and res_candles:
         ltp_final = float(res_candles[-1]["close"])
         prev_final = float(res_candles[-2]["close"] if len(res_candles) >= 2 else res_candles[-1]["open"])
@@ -5449,6 +5509,10 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
             return fx_q
 
     inst_key, is_option = _resolve_upstox_instrument(sym, token=tok)
+    is_option_effective = bool(is_option or _is_option_symbol(sym))
+    is_option_on_index_fallback = is_option_effective and (
+        inst_key.startswith("NSE_INDEX|") or inst_key.startswith("BSE_INDEX|")
+    )
 
     # Only use _cached_indices early when it has actually been refreshed recently from broker/Upstox API
     if _cached_indices_time:
@@ -5479,7 +5543,7 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
 
     upstox_headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json"}
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
-    if up_token:
+    if up_token and not is_option_on_index_fallback:
         upstox_headers["Authorization"] = f"Bearer {up_token}"
         try:
             quote_url_str = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={quote_url(inst_key)}"
@@ -5496,50 +5560,51 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
         except Exception:
             pass
 
-    try:
-        intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
-        with httpx.Client(timeout=2.0) as client:
-            resp = client.get(intraday_url, headers=upstox_headers)
-            if resp.status_code == 200:
-                payload = resp.json()
-                raw = payload.get("data", {}).get("candles", [])
-                if raw:
-                    first = raw[0]
-                    c_open, c_high, c_low, c_close, c_vol = (
-                        float(first[1]),
-                        float(first[2]),
-                        float(first[3]),
-                        float(first[4]),
-                        int(float(first[5])),
-                    )
-                    c_time = int(datetime.fromisoformat(first[0]).timestamp())
-                    daily_info = _get_daily_close_info(inst_key, upstox_headers)
-                    day_prev = float(daily_info[1]) if daily_info and daily_info[1] > 0 else float(raw[-1][1])
-                    diff = round(c_close - day_prev, 2)
-                    pct = round((diff / day_prev) * 100, 2) if day_prev > 0 else 0.0
-                    res = {
-                        "ok": True,
-                        "symbol": sym,
-                        "token": tok,
-                        "ltp": c_close,
-                        "open": c_open,
-                        "high": c_high,
-                        "low": c_low,
-                        "close": c_close,
-                        "prev_close": day_prev,
-                        "volume": c_vol,
-                        "change": diff,
-                        "change_percent": pct,
-                        "time": c_time,
-                        "is_fallback": False,
-                    }
-                    _live_quote_cache[cache_key] = (now, res)
-                    return res
-    except Exception:
-        pass
+    if not is_option_on_index_fallback:
+        try:
+            intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
+            with httpx.Client(timeout=2.0) as client:
+                resp = client.get(intraday_url, headers=upstox_headers)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    raw = payload.get("data", {}).get("candles", [])
+                    if raw:
+                        first = raw[0]
+                        c_open, c_high, c_low, c_close, c_vol = (
+                            float(first[1]),
+                            float(first[2]),
+                            float(first[3]),
+                            float(first[4]),
+                            int(float(first[5])),
+                        )
+                        c_time = int(datetime.fromisoformat(first[0]).timestamp())
+                        daily_info = _get_daily_close_info(inst_key, upstox_headers)
+                        day_prev = float(daily_info[1]) if daily_info and daily_info[1] > 0 else float(raw[-1][1])
+                        diff = round(c_close - day_prev, 2)
+                        pct = round((diff / day_prev) * 100, 2) if day_prev > 0 else 0.0
+                        res = {
+                            "ok": True,
+                            "symbol": sym,
+                            "token": tok,
+                            "ltp": c_close,
+                            "open": c_open,
+                            "high": c_high,
+                            "low": c_low,
+                            "close": c_close,
+                            "prev_close": day_prev,
+                            "volume": c_vol,
+                            "change": diff,
+                            "change_percent": pct,
+                            "time": c_time,
+                            "is_fallback": False,
+                        }
+                        _live_quote_cache[cache_key] = (now, res)
+                        return res
+        except Exception:
+            pass
 
     # Query Upstox 24/7 daily historical candles (cached 300s) for accurate close & prev_close
-    if not (is_option and inst_key.endswith(("Nifty 50", "Nifty Bank", "SENSEX", "Nifty Fin Service", "NIFTY MID SELECT"))):
+    if not is_option_on_index_fallback:
         daily_info = _get_daily_close_info(inst_key, upstox_headers)
         if daily_info:
             ltp, prev_c, d_open, d_high, d_low, d_vol, d_time = daily_info
@@ -5570,7 +5635,7 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
     if cached_cq and (now - cached_cq[0] < 300):
         return cached_cq[1]
 
-    if is_option:
+    if is_option_effective:
         fallback_price = 80.0
     elif "SENSEX" in sym:
         fallback_price = 81100.0

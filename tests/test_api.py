@@ -714,15 +714,30 @@ def test_auth_user_otp_flow_and_keys(client):
 
 
 def test_sensex_option_candles_not_index_price(client):
+    idx_res = client.get("/api/chart/candles?symbol=SENSEX&interval=1m")
+    assert idx_res.status_code == 200
+    idx_candles = idx_res.json().get("candles", [])
+    assert len(idx_candles) > 0
+    spot = float(idx_candles[-1]["close"])
+    assert spot > 24000.0
+
+    # Deep ITM/historic 81200 CE must still reflect option pricing (never raw 24,000+ index spot)
     res = client.get("/api/chart/candles?symbol=SENSEX%2081200%20CE&interval=1m")
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is True
     assert len(data.get("candles", [])) > 0
-    # Option candles should be around 10 - 200, NEVER 24,000+ index price!
     last_candle = data["candles"][-1]
-    assert last_candle["close"] < 500.0
-    assert last_candle["close"] > 1.0
+    assert 1.0 < last_candle["close"] < spot * 0.25
+
+    # Current ATM SENSEX CE option must always stay below 500 and never leak index spot
+    atm_strike = int(round(spot / 100.0) * 100)
+    atm_res = client.get(f"/api/chart/candles?symbol=SENSEX%20{atm_strike}%20CE&interval=1m")
+    assert atm_res.status_code == 200
+    atm_data = atm_res.json()
+    assert atm_data["ok"] is True and len(atm_data.get("candles", [])) > 0
+    atm_last = atm_data["candles"][-1]["close"]
+    assert 1.0 < atm_last < 500.0
 
 
 def test_live_quotes_batch_dictionary_mapping(client):
@@ -1394,6 +1409,66 @@ def test_paper_wallet_deposit_withdraw_and_withdraw_all(client):
     # Zero amount rejected for deposit/withdraw
     bad = client.post("/api/paper-wallet/adjust", headers=hdrs, json={"action": "deposit", "amount": 0, "market": "forex"})
     assert bad.status_code == 400
+
+
+def test_indian_intraday_candles_merged_for_1m_and_sensex(client, monkeypatch):
+    monkeypatch.setattr(main, "UPSTOX_ACCESS_TOKEN", "test_upstox_tok")
+    monkeypatch.setattr(main, "_is_indian_market_open", lambda now_dt=None: True)
+    seen_urls = []
+
+    class FakeResp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+        def json(self):
+            return self._payload
+
+    now_dt = main.datetime.now(main.IST_TZ).replace(hour=9, minute=20, second=0, microsecond=0)
+    t_hist = (now_dt - main.timedelta(days=2)).strftime("%Y-%m-%dT15:29:00+05:30")
+    t_intra = now_dt.strftime("%Y-%m-%dT09:16:00+05:30")
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def get(self, url, **k):
+            seen_urls.append(url)
+            if "/historical-candle/intraday/" in url:
+                return FakeResp({"data": {"candles": [[t_intra, 82100.0, 82200.0, 82050.0, 82166.86, 0, 0]]}})
+            if "/historical-candle/" in url:
+                return FakeResp({"data": {"candles": [[t_hist, 81090.0, 81110.0, 81080.0, 81106.65, 0, 0]]}})
+            return FakeResp({}, status_code=404)
+
+    monkeypatch.setattr(main.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        main,
+        "_get_live_quote_data",
+        lambda sym, token=None: {"ltp": 82225.5, "prev_close": 81106.65, "change": 1118.85, "change_percent": 1.38, "is_fallback": False},
+    )
+
+    for iv in ("1m", "5m"):
+        res = client.get(f"/api/chart/candles?symbol=SENSEX&interval={iv}&days=5")
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["ok"] is True
+        cs = data["candles"]
+        assert len(cs) >= 2
+        # Must contain today's live intraday/tick candle close (NOT stuck at previous day 81106.65!)
+        assert cs[-1]["close"] == 82225.5
+    assert any("/historical-candle/intraday/" in u for u in seen_urls)
+
+    # Also test live bar rollover helper when wall clock moves to next candle bucket
+    base_ts = int(main.time.time()) // 60 * 60 - 60
+    bars = [{"time": base_ts, "open": 4040.0, "high": 4042.0, "low": 4039.0, "close": 4041.0, "volume": 10}]
+    rolled = main._merge_live_tick_into_candles(bars, 4043.25, "1m", 2, is_live_session=True)
+    assert len(rolled) == 2
+    assert rolled[-1]["open"] == 4041.0
+    assert rolled[-1]["close"] == 4043.25
+    assert rolled[-1]["high"] == 4043.25
+
 
 
 

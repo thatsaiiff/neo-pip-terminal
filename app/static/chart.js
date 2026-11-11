@@ -674,17 +674,18 @@
   });
 
   // --- Technical Math (TradingView Indicators) ---
-  function calculateEMA(candles, period) {
+  function calculateEMA(candles, period, decimals = 2) {
     if (!candles || candles.length < period) return [];
     const k = 2 / (period + 1);
+    const factor = Math.pow(10, Math.min(6, Math.max(2, Number(decimals) || 2)));
     const result = [];
     let sum = 0;
     for (let i = 0; i < period; i++) sum += candles[i].close;
     let ema = sum / period;
-    result.push({ time: candles[period - 1].time, value: Math.round(ema * 100) / 100 });
+    result.push({ time: candles[period - 1].time, value: Math.round(ema * factor) / factor });
     for (let i = period; i < candles.length; i++) {
       ema = (candles[i].close - ema) * k + ema;
-      result.push({ time: candles[i].time, value: Math.round(ema * 100) / 100 });
+      result.push({ time: candles[i].time, value: Math.round(ema * factor) / factor });
     }
     return result;
   }
@@ -1786,17 +1787,18 @@
 
   function applyPaneIndicators(pane) {
     if (!pane || !pane.chart || !pane.candleSeries || !pane.candles.length) return;
+    const decs = getSymbolDecimals(pane.sym);
 
-    if (indicators.showEma9) pane.ema9Series.setData(calculateEMA(pane.candles, 9));
+    if (indicators.showEma9) pane.ema9Series.setData(calculateEMA(pane.candles, 9, decs));
     else pane.ema9Series.setData([]);
 
-    if (indicators.showEma21) pane.ema21Series.setData(calculateEMA(pane.candles, 21));
+    if (indicators.showEma21) pane.ema21Series.setData(calculateEMA(pane.candles, 21, decs));
     else pane.ema21Series.setData([]);
 
-    if (indicators.showEma50) pane.ema50Series.setData(calculateEMA(pane.candles, 50));
+    if (indicators.showEma50) pane.ema50Series.setData(calculateEMA(pane.candles, 50, decs));
     else pane.ema50Series.setData([]);
 
-    if (indicators.showEma200) pane.ema200Series.setData(calculateEMA(pane.candles, 200));
+    if (indicators.showEma200) pane.ema200Series.setData(calculateEMA(pane.candles, 200, decs));
     else pane.ema200Series.setData([]);
 
     if (indicators.showVwap) pane.vwapSeries.setData(calculateVWAP(pane.candles));
@@ -1896,7 +1898,7 @@
 
   const _candleClientCache = new Map();
 
-  function renderCandlesIntoPane(pane, data, reqId) {
+  function renderCandlesIntoPane(pane, data, reqId, opts = {}) {
     if (!pane || reqId !== pane._reqId) return;
     const prefix = getPanePrefix(pane);
     const pSym = $(`${prefix}-sym`);
@@ -1904,10 +1906,11 @@
     const paneEl = $(pane.id);
     const segBadge = paneEl ? paneEl.querySelector('.pane-seg') : null;
     const ikey = String((data && data.instrument_key) || pane.token || '');
-    const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|');
+    const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|') || ikey.includes('BSE_FO|');
     const isFxResolved = Boolean(data && data.is_forex) || isForexSym(pane.sym) || ikey.startsWith('FOREX|');
     pane.isOption = !isFxResolved && (isOptionSymbol(pane.sym) || isOptResolved);
-    const segLabel = isFxResolved ? 'FOREX' : (isOptResolved ? 'NSE F&O' : (ikey.includes('_INDEX') ? 'NSE INDEX' : 'NSE EQ'));
+    const exchPrefix = ikey.startsWith('BSE') ? 'BSE' : 'NSE';
+    const segLabel = isFxResolved ? 'FOREX' : (isOptResolved ? `${exchPrefix} F&O` : (ikey.includes('_INDEX') ? `${exchPrefix} INDEX` : `${exchPrefix} EQ`));
     if (ikey) {
       registerSymbolMeta(pane.sym, { segment: ikey.split('|')[0] || segLabel });
     }
@@ -1984,7 +1987,7 @@
       resizePaneChart(pane);
       try {
         pane.chart.priceScale('right').applyOptions({ autoScale: true });
-        pane.chart.timeScale().fitContent();
+        if (!opts || !opts.silent) pane.chart.timeScale().fitContent();
         renderPaneTradeLines(pane);
       } catch (_) {}
     });
@@ -2001,13 +2004,15 @@
     }
   }
 
-  async function loadCandles(pane) {
+  async function loadCandles(pane, opts = {}) {
     try {
       if (!pane) return;
-      if (pane._abortCtrl) {
+      const silent = Boolean(opts && opts.silent);
+      if (!silent && pane._abortCtrl) {
         try { pane._abortCtrl.abort(); } catch (_) {}
       }
-      pane._abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      if (!silent) pane._abortCtrl = ctrl;
       pane._reqId = (pane._reqId || 0) + 1;
       const reqId = pane._reqId;
 
@@ -2018,24 +2023,26 @@
       const tokenEnc = encodeURIComponent(pane.token || '');
       const symEnc = encodeURIComponent(pane.sym);
       const reqDays = Math.max(1, Math.min(Number(pane.rangeDays || 5), 365));
+      const stepSec = TF_SECONDS_MAP[String(pane.tf || '1m').toLowerCase()] || 60;
+      const curBucket = Math.floor(Date.now() / (stepSec * 1000));
       const cacheKey = `${String(pane.sym || '').toUpperCase()}|${pane.tf}|${reqDays}`;
-      const cached = _candleClientCache.get(cacheKey);
-      if (cached && (Date.now() - cached.ts) < 3500) {
-        renderCandlesIntoPane(pane, cached.data, reqId);
+      const cached = !silent ? _candleClientCache.get(cacheKey) : null;
+      if (cached && (Date.now() - cached.ts) < 2500 && cached.bucket === curBucket) {
+        renderCandlesIntoPane(pane, cached.data, reqId, opts);
         return;
       }
 
       const url = `/api/chart/candles?symbol=${symEnc}&token=${tokenEnc}&interval=${encodeURIComponent(pane.tf)}&days=${reqDays}`;
-      const data = await api(url, pane._abortCtrl ? { signal: pane._abortCtrl.signal } : {});
+      const data = await api(url, ctrl ? { signal: ctrl.signal } : {});
       if (reqId !== pane._reqId) return;
       if (data && data.ok && data.candles && data.candles.length) {
-        _candleClientCache.set(cacheKey, { ts: Date.now(), data });
+        _candleClientCache.set(cacheKey, { ts: Date.now(), bucket: curBucket, data });
         if (_candleClientCache.size > 36) {
           const oldestKey = _candleClientCache.keys().next().value;
           _candleClientCache.delete(oldestKey);
         }
       }
-      renderCandlesIntoPane(pane, data, reqId);
+      renderCandlesIntoPane(pane, data, reqId, opts);
     } catch (err) {
       if (err && err.name === 'AbortError') return;
       console.warn(`[Candles] Failed loading candles for ${pane && pane.sym}:`, err && err.message ? err.message : err);
@@ -2076,6 +2083,134 @@
     } catch (_) {}
   }
 
+  function isMarketLiveForTickBar(sym) {
+    if (isForexSym(sym)) {
+      const n = String(sym || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (n.startsWith('BTC') || n.startsWith('ETH') || n.startsWith('SOL')) return true; // 24/7 crypto
+      const now = new Date();
+      const utcDay = now.getUTCDay();
+      const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
+      if (utcDay === 6) return false; // Saturday UTC closed
+      if (utcDay === 0 && utcMins < 1375) return false; // Sunday < 22:55 UTC
+      if (utcDay === 5 && utcMins > 1325) return false; // Friday > 22:05 UTC
+      return true;
+    }
+    const istMs = Date.now() + 19800000;
+    const istDate = new Date(istMs);
+    const wd = istDate.getUTCDay();
+    if (wd === 0 || wd === 6) return false;
+    const istMins = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+    return istMins >= 555 && istMins <= 931; // 09:15 to 15:31 IST
+  }
+
+  function getTargetLiveBarTime(pane, nowSec) {
+    const tfKey = String(pane.tf || '1m').toLowerCase();
+    const lastTime = Number((pane.activeBar && pane.activeBar.time) || 0);
+    if (tfKey === '1d' || tfKey === 'day') return lastTime || Math.floor(nowSec / 86400) * 86400;
+    const stepSec = TF_SECONDS_MAP[tfKey] || 60;
+    let barTime;
+    if (stepSec <= 1800) {
+      barTime = Math.floor(nowSec / stepSec) * stepSec;
+    } else if (isForexSym(pane.sym) || !lastTime) {
+      barTime = Math.floor(nowSec / stepSec) * stepSec;
+    } else {
+      barTime = lastTime + Math.floor(Math.max(0, nowSec - lastTime) / stepSec) * stepSec;
+    }
+    return lastTime > 0 ? Math.max(lastTime, barTime) : barTime;
+  }
+
+  function updateLiveIndicatorsIncremental(pane) {
+    if (!pane || !pane.candles || !pane.candles.length) return;
+    const decs = getSymbolDecimals(pane.sym);
+    const updateEma = (on, series, period) => {
+      if (!on || !series) return;
+      const arr = calculateEMA(pane.candles.slice(-(period * 4 + 20)), period, decs);
+      if (arr.length) {
+        try { series.update(arr[arr.length - 1]); } catch (_) {}
+      }
+    };
+    updateEma(indicators.showEma9, pane.ema9Series, 9);
+    updateEma(indicators.showEma21, pane.ema21Series, 21);
+    updateEma(indicators.showEma50, pane.ema50Series, 50);
+    updateEma(indicators.showEma200, pane.ema200Series, 200);
+    if (indicators.showVol && pane.volSeries && pane.activeBar) {
+      try {
+        pane.volSeries.update({
+          time: pane.activeBar.time,
+          value: Number(pane.activeBar.volume || 0),
+          color: pane.activeBar.close >= pane.activeBar.open ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
+        });
+      } catch (_) {}
+    }
+  }
+
+  function applyLiveQuoteToPaneBar(paneOrIdx, rawLtp, nowSecOverride = null) {
+    const pane = typeof paneOrIdx === 'number' ? panes[paneOrIdx] : (paneOrIdx || getActivePane());
+    if (!pane || !pane.candleSeries || !pane.activeBar || !pane.candles || !pane.candles.length) return;
+    const ltp = Number(rawLtp);
+    if (!Number.isFinite(ltp) || ltp <= 0) return;
+
+    const tfKey = String(pane.tf || '1m').toLowerCase();
+    const stepSec = TF_SECONDS_MAP[tfKey] || 60;
+    const nowSec = nowSecOverride !== null ? Number(nowSecOverride) : Math.floor(Date.now() / 1000);
+    const targetTime = getTargetLiveBarTime(pane, nowSec);
+    const prevTime = Number(pane.activeBar.time || 0);
+
+    if (targetTime <= prevTime) {
+      pane.activeBar.close = ltp;
+      if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
+      if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
+      const lastIdx = pane.candles.length - 1;
+      if (lastIdx >= 0 && pane.candles[lastIdx].time === prevTime) {
+        pane.candles[lastIdx].close = pane.activeBar.close;
+        pane.candles[lastIdx].high = pane.activeBar.high;
+        pane.candles[lastIdx].low = pane.activeBar.low;
+      }
+      try { pane.candleSeries.update(pane.activeBar); } catch (_) {}
+      updateLiveIndicatorsIncremental(pane);
+      updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
+      return;
+    }
+
+    if (!isMarketLiveForTickBar(pane.sym)) return;
+
+    // Candle interval closed -> roll seamlessly into a new live candle bar
+    const gap = targetTime - prevTime;
+    const isContinuous = gap <= (stepSec * 2);
+    const openP = (isContinuous && pane.activeBar.close > 0) ? Number(pane.activeBar.close) : ltp;
+    const nextBar = {
+      time: targetTime,
+      open: openP,
+      high: Math.max(openP, ltp),
+      low: Math.min(openP, ltp),
+      close: ltp,
+      volume: 0,
+    };
+    pane.candles.push(nextBar);
+    if (pane.candles.length > 2500) pane.candles.shift();
+    pane.volumes.push({
+      time: targetTime,
+      value: 0,
+      color: ltp >= openP ? 'rgba(0, 176, 116, 0.4)' : 'rgba(255, 71, 87, 0.4)',
+    });
+    pane.activeBar = { ...nextBar };
+    try { pane.candleSeries.update(pane.activeBar); } catch (_) {}
+    updateLiveIndicatorsIncremental(pane);
+    updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
+    if (typeof window._updateCountdownsFn === 'function') window._updateCountdownsFn();
+
+    // If session had missed intermediate candles (e.g. market just opened or laptop resumed), quietly backfill from server
+    if (gap > stepSec * 2 && (Date.now() - (pane._lastBackfillMs || 0)) > 15000) {
+      pane._lastBackfillMs = Date.now();
+      loadCandles(pane, { silent: true });
+    }
+  }
+  window._applyLiveTickFn = applyLiveQuoteToPaneBar;
+  window._getActivePaneSnapshotFn = () => {
+    const p = panes[activePaneIdx] || panes[0];
+    return { sym: p.sym, tf: p.tf, count: p.candles.length, activeBar: p.activeBar ? { ...p.activeBar } : null };
+  };
+
   // --- Sub-second Quotes Stream ---
   function startQuotesPolling() {
     let pollTickCount = 0;
@@ -2098,19 +2233,7 @@
             const q = qMap[pane.sym];
             if (q && q.ltp && !q.is_fallback) {
               updatePaneQuote(pane, q);
-              // Update live candle bar safely
-              if (pane.candleSeries && pane.activeBar && q.ltp > 0) {
-                const ltp = Number(q.ltp);
-                if (pane.activeBar.close > 0 && Math.abs(ltp - pane.activeBar.close) / pane.activeBar.close < 0.25) {
-                  pane.activeBar.close = ltp;
-                  if (ltp > pane.activeBar.high) pane.activeBar.high = ltp;
-                  if (ltp < pane.activeBar.low) pane.activeBar.low = ltp;
-                  try {
-                    pane.candleSeries.update(pane.activeBar);
-                  } catch (_) {}
-                  updatePaneHeaderQuote(pane, pane.activeBar.open, pane.activeBar.high, pane.activeBar.low, pane.activeBar.close);
-                }
-              }
+              applyLiveQuoteToPaneBar(pane, q.ltp);
               maybeCheckLiveTriggers(pane, q.ltp);
             }
           });
