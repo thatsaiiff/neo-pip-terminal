@@ -20,7 +20,7 @@
     vpvrMode: 'visible', // 'visible' | 'session'
     vpvrVaPct: 70,
     vpvrBins: 36,
-    showVol: false,
+    showVol: true,
     showBb: false,
   };
 
@@ -60,7 +60,7 @@
       vpvrMode: src.vpvrMode === 'session' ? 'session' : 'visible',
       vpvrVaPct: sanitizeVaPct(src.vpvrVaPct, DEFAULT_IND_CONFIG.vpvrVaPct),
       vpvrBins: sanitizeBins(src.vpvrBins, DEFAULT_IND_CONFIG.vpvrBins),
-      showVol: Boolean(src.showVol),
+      showVol: src.showVol !== undefined ? Boolean(src.showVol) : true,
       showBb: Boolean(src.showBb),
     };
   }

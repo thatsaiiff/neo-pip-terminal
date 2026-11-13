@@ -12,3 +12,7 @@ dist/
 .vercel/
 .DS_Store
 .vercel
+*.db
+neo_pip.db
+.agents/
+skills-lock.json

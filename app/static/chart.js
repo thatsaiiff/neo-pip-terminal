@@ -24,7 +24,7 @@
     vpvrMode: 'visible',
     vpvrVaPct: 70,
     vpvrBins: 36,
-    showVol: false,
+    showVol: true,
     showBb: false,
   };
   const indicators = {
@@ -282,6 +282,17 @@
   function getSymbolDecimals(sym) {
     const fx = getForexSpec(sym);
     return fx ? fx.decimals : 2;
+  }
+
+  function snapPriceToTick(price, sym = '') {
+    if (price === null || price === undefined || !Number.isFinite(Number(price))) return price;
+    const p = Number(price);
+    if (isForexSym(sym)) {
+      const decs = getSymbolDecimals(sym);
+      return Number(p.toFixed(decs));
+    }
+    // Indian F&O & Equity strict 0.05 exchange tick size
+    return Number((Math.round(p / 0.05) * 0.05).toFixed(2));
   }
 
   function curSym(sym = '') {
@@ -1264,16 +1275,16 @@
       wickDownColor: '#ff4757',
     });
 
-    // Volume Series (confined to bottom 18% via LWC v4 priceScale().applyOptions)
+    // Volume Series (confined to bottom 20% like TradingView / Dhan)
     const volSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'vol_overlay',
       priceLineVisible: false,
-      lastValueVisible: false,
+      lastValueVisible: true,
     });
     try {
       volSeries.priceScale().applyOptions({
-        scaleMargins: { top: 0.82, bottom: 0 },
+        scaleMargins: { top: 0.80, bottom: 0 },
       });
     } catch (_) {}
 
@@ -1554,7 +1565,7 @@
       const y = Math.max(8, Math.min(wrapRect.height - 20, getClientY(ev) - wrapRect.top));
       const newPrice = pane.candleSeries.coordinateToPrice(y);
       if (newPrice !== null && Number.isFinite(newPrice) && newPrice > 0) {
-        const rounded = Number(newPrice.toFixed(decs));
+        const rounded = snapPriceToTick(newPrice, pane.sym);
         lineEl.style.top = `${y}px`;
         lineEl.dataset.dragPrice = String(rounded);
         handleEl.textContent = formatPillText(rounded);
@@ -1791,7 +1802,7 @@
             const y = Math.max(8, Math.min(wrapRect.height - 20, cy - wrapRect.top));
             const pr = pane.candleSeries.coordinateToPrice(y);
             if (!pr || !Number.isFinite(pr) || pr <= 0) return;
-            const rounded = Number(pr.toFixed(decs));
+            const rounded = snapPriceToTick(pr, pane.sym);
             if (!previewEl) {
               previewEl = document.createElement('div');
               previewEl.className = `trade-price-line ${kind === 'tp' ? 'tpl-tp' : 'tpl-sl'} is-dragging`;
@@ -1859,12 +1870,13 @@
         closePosBtn.addEventListener('click', async e => {
           e.stopPropagation();
           try {
-            await api(`/api/positions/${encodeURIComponent(pane.sym)}/exit?market=${encodeURIComponent(currentMarketMode)}`, {
+            const exitSym = (pos && (pos.symbol || pos.trading_symbol || pos.trdSym)) || pane.sym;
+            await api(`/api/positions/${encodeURIComponent(exitSym)}/exit?market=${encodeURIComponent(currentMarketMode)}`, {
               method: 'POST',
               body: JSON.stringify({ percentage: 100 }),
             });
             playTradeSound('closed');
-            toast(`✅ Closed ${pane.sym}`);
+            toast(`✅ Closed ${exitSym}`);
             fetchPositionsAndOrders();
           } catch (err) {
             toast(`❌ ${err.message}`);
@@ -2008,7 +2020,7 @@
         const y = Math.max(8, Math.min(rect.height - 20, getY(ev) - rect.top));
         const np = pane.candleSeries.coordinateToPrice(y);
         if (np !== null && Number.isFinite(np) && np > 0) {
-          const r = Number(np.toFixed(decs));
+          const r = snapPriceToTick(np, pane.sym);
           pendLine.style.top = `${y}px`;
           pendLine.dataset.dragPrice = String(r);
           const liveLtp = Number(pane.lastLtp || r);
@@ -2349,7 +2361,17 @@
       if (!pane.chart || reqId !== pane._reqId) return;
       try {
         pane.chart.priceScale('right').applyOptions({ autoScale: true });
-        if (!opts || !opts.silent) pane.chart.timeScale().fitContent();
+        if (!opts || !opts.silent) {
+          const totalBars = (pane.candles || []).length;
+          if (totalBars > 0) {
+            const visibleBars = 60;
+            const from = Math.max(0, totalBars - visibleBars);
+            const to = totalBars + 4;
+            pane.chart.timeScale().setVisibleLogicalRange({ from, to });
+          } else {
+            pane.chart.timeScale().fitContent();
+          }
+        }
       } catch (_) {}
       resizePaneChart(pane);
       renderPaneTradeLines(pane);
@@ -2794,23 +2816,26 @@
   }
 
   function getPriceTickStep(sym, ltp = 0) {
-    const decs = getSymbolDecimals(sym);
-    if (decs >= 4) return 0.0005;
-    if (decs === 3) return 0.05;
-    return Number(ltp || panes[0]?.lastLtp || 0) > 10000 ? 1.0 : 0.1;
+    if (isForexSym(sym)) {
+      const decs = getSymbolDecimals(sym);
+      return decs >= 4 ? 0.0001 : 0.01;
+    }
+    // Indian Market: All NSE/BSE Equity & F&O contracts strictly require 0.05 tick size!
+    return 0.05;
   }
 
   function getNearestLimitPrice(sym, side, ltp) {
     const ref = Number(ltp || panes[0]?.lastLtp || 0);
     if (!(ref > 0)) return 0;
     const fx = getForexSpec(sym);
+    const isFx = Boolean(fx) || isForexSym(sym);
     const decs = fx ? fx.decimals : 2;
-    const spread = fx ? fx.spread : ((ref * 0.0005) + 0.05);
-    const offset = Math.max(spread * 0.75, getPriceTickStep(sym, ref));
+    const tick = isFx ? (decs >= 4 ? 0.0001 : 0.01) : 0.05;
+    const offset = tick * 2;
     const raw = String(side || 'BUY').toUpperCase() === 'BUY'
-      ? Math.max(decs >= 4 ? 0.0001 : 0.05, ref - offset)
+      ? Math.max(tick, ref - offset)
       : ref + offset;
-    return Number(raw.toFixed(decs));
+    return isFx ? Number(raw.toFixed(decs)) : Number((Math.round(raw / 0.05) * 0.05).toFixed(2));
   }
 
   function classifyPendingOrder(side, openPrice, ltp) {
@@ -2888,10 +2913,38 @@
     syncTradeButtonsForActivePane();
     if (!ltp) return;
     const fx = getForexSpec(sym);
+    const isFx = Boolean(fx) || isForexSym(sym);
     const decs = fx ? fx.decimals : 2;
-    const spread = fx ? fx.spread : ((ltp * 0.0005) + 0.05);
-    const askPrice = ltp + (spread / 2);
-    const bidPrice = Math.max(decs >= 4 ? 0.0001 : 0.05, ltp - (spread / 2));
+    let bidPrice = ltp;
+    let askPrice = ltp;
+    let spread = 0.0;
+
+    if (isFx && fx) {
+      spread = fx.spread || 0.0001;
+      bidPrice = Math.max(0.0001, ltp - (spread / 2));
+      askPrice = ltp + (spread / 2);
+    } else if (activePane && activePane.lastBid && activePane.lastAsk && activePane.lastAsk >= activePane.lastBid) {
+      bidPrice = Number(activePane.lastBid);
+      askPrice = Number(activePane.lastAsk);
+      spread = Math.max(0, askPrice - bidPrice);
+    } else {
+      const q = activePane?._lastQuote;
+      if (q && q.bid && q.ask && Number(q.ask) >= Number(q.bid)) {
+        bidPrice = Number(q.bid);
+        askPrice = Number(q.ask);
+        spread = Math.max(0, askPrice - bidPrice);
+      } else {
+        bidPrice = ltp;
+        askPrice = ltp;
+        spread = 0.0;
+      }
+    }
+
+    if (!isFx) {
+      bidPrice = Math.round(bidPrice / 0.05) * 0.05;
+      askPrice = Math.round(askPrice / 0.05) * 0.05;
+      spread = Math.max(0, askPrice - bidPrice);
+    }
 
     const sellLbl = $('lbl-sell-price');
     const buyLbl = $('lbl-buy-price');
@@ -2899,7 +2952,7 @@
     if (buyLbl) buyLbl.textContent = askPrice.toFixed(decs);
 
     const spreadText = $('op-spread-text');
-    if (spreadText) spreadText.textContent = `${spread.toFixed(decs)} Spread`;
+    if (spreadText) spreadText.textContent = spread > 0 ? `${spread.toFixed(decs)} Spread` : (isIndexSpotSymbol(sym) ? 'Index' : '0.00 Spread');
 
     let estMargin = 0;
     if (fx) {
@@ -3115,7 +3168,7 @@
         const y = Math.max(8, Math.min(rect.height - 20, clientY - rect.top));
         const pr = pane.candleSeries.coordinateToPrice(y);
         if (pr !== null && Number.isFinite(pr) && pr > 0) {
-          currentPrice = Number(pr.toFixed(decs));
+          currentPrice = snapPriceToTick(pr, pane.sym);
           draftLine.style.top = `${y}px`;
           const liveLtp = Number(pane.lastLtp || ltp || currentPrice);
           const cls = classifyPendingOrder(side, currentPrice, liveLtp);
@@ -6535,7 +6588,14 @@
         panes.slice(0, lay).forEach(p => {
           if (p.chart) {
             resizePaneChart(p);
-            try { p.chart.timeScale().fitContent(); } catch (_) {}
+            try {
+              const totalBars = (p.candles || []).length;
+              if (totalBars > 0) {
+                p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+              } else {
+                p.chart.timeScale().fitContent();
+              }
+            } catch (_) {}
           }
         });
       }
@@ -6817,7 +6877,14 @@
               loadCandles(p);
             } else {
               resizePaneChart(p);
-              try { p.chart.timeScale().fitContent(); } catch (_) {}
+              try {
+                const totalBars = (p.candles || []).length;
+                if (totalBars > 0) {
+                  p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+                } else {
+                  p.chart.timeScale().fitContent();
+                }
+              } catch (_) {}
             }
           });
         }

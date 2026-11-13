@@ -2123,6 +2123,78 @@ def test_mcx_and_commodity_option_strike_and_sltp_live_execution(client, monkeyp
     assert called_order[0]["exchange_segment"] == "mcx_fo"
 
 
+def test_round_to_tick_and_exchange_tick_sizes():
+    # NSE/BSE options and equities strictly require 0.05 multiples
+    assert main.round_to_tick(125.43, 0.05) == 125.45
+    assert main.round_to_tick(125.42, 0.05) == 125.40
+    assert main.round_to_tick(515.62, 0.05) == 515.60
+    assert main.round_to_tick(515.63, 0.05) == 515.65
+    assert main.round_to_tick(0.0, 0.05) == 0.0
+    assert main.round_to_tick(None, 0.05) is None
+
+    # Exchange tick sizes
+    assert main.get_exchange_tick_size("SENSEX26N1282400PE", "BSE_FO") == 0.05
+    assert main.get_exchange_tick_size("NIFTY24NOV25000CE", "NSE_FO") == 0.05
+    assert main.get_exchange_tick_size("RELIANCE", "NSE_EQ") == 0.05
+    assert main.get_exchange_tick_size("CRUDEOIL 6200 CE", "MCX_FO") == 0.05
+    assert main.get_exchange_tick_size("CRUDEOIL FUT", "MCX_FO") == 1.0
+    assert main.get_exchange_tick_size("NATURALGAS FUT", "MCX_FO") == 0.10
+    assert main.get_exchange_tick_size("EURUSD", "FOREX") == 0.0001
+    assert main.get_exchange_tick_size("USDJPY", "FOREX") == 0.01
+
+
+def test_kotak_exit_live_position_matching(client, monkeypatch):
+    called_order = []
+    class FakeNeoClient:
+        def positions(self):
+            return {
+                "stat": "Ok",
+                "data": [
+                    {
+                        "trdSym": "SENSEX26N1282400PE",
+                        "prod": "NRML",
+                        "exSeg": "bse_fo",
+                        "netQty": "20",
+                        "buyAmt": "10000.0",
+                        "sellAmt": "0.0",
+                        "flBuyQty": "20",
+                        "flSellQty": "0",
+                        "cfBuyQty": "0",
+                        "cfSellQty": "0",
+                    }
+                ]
+            }
+        def place_order(self, **kwargs):
+            called_order.append(kwargs)
+            return {"stat": "Ok", "nOrdNo": "EX-LIVE-999"}
+
+    monkeypatch.setattr(main, "neo_client", FakeNeoClient())
+    monkeypatch.setattr(main, "neo_authenticated", True)
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+
+    # Calling exit with SENSEX underlying name matches SENSEX26N1282400PE open position
+    res = client.post("/api/positions/SENSEX/exit", json={"percentage": 100})
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    assert len(called_order) == 1
+    assert called_order[0]["trading_symbol"] == "SENSEX26N1282400PE"
+    assert called_order[0]["transaction_type"] == "S"
+    assert called_order[0]["quantity"] == "20"
+    assert called_order[0]["order_type"] == "MKT"
+    assert called_order[0]["price"] == "0"
+
+
+def test_exit_nonexistent_position_returns_404(client, monkeypatch):
+    monkeypatch.setattr(main, "neo_client", None)
+    monkeypatch.setattr(main, "neo_authenticated", False)
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", False)
+
+    res = client.post("/api/positions/NONEXISTENT_XYZ/exit", json={"percentage": 100})
+    assert res.status_code == 404
+    assert "No open position found" in res.json()["detail"]
+
+
+
 
 
 

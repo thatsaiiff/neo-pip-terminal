@@ -1,0 +1,22 @@
+{
+  "appId": "com.propdesk.neopip",
+  "appName": "Kotak Neo PIP",
+  "webDir": "app/static",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://neo-pip-terminal.vercel.app",
+    "cleartext": true,
+    "allowNavigation": [
+      "neo-pip-terminal.vercel.app",
+      "92.4.87.82",
+      "api.upstox.com"
+    ]
+  },
+  "ios": {
+    "contentInset": "always",
+    "scheme": "KotakNeoPIP"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

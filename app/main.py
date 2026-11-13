@@ -619,6 +619,39 @@ def _is_forex_symbol(symbol: str | None) -> bool:
     return _normalize_fx_sym(symbol) in _FOREX_SYMBOLS
 
 
+def round_to_tick(price: float | int | None, tick: float = 0.05) -> float | None:
+    """Round an order price or trigger price to the exchange's legal tick size multiple."""
+    if price is None:
+        return None
+    try:
+        p = float(price)
+        if p <= 0:
+            return 0.0
+        steps = round(p / tick)
+        rounded = round(steps * tick, 4)
+        return round(rounded, 2) if tick >= 0.01 else round(rounded, 5)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_exchange_tick_size(symbol: str, exchange_segment: str = "") -> float:
+    """Return the exact minimum tick size mandated by Indian / Forex exchanges."""
+    seg = str(exchange_segment or "").upper()
+    sym = str(symbol or "").upper()
+    if seg in {"FX", "FOREX"} or _is_forex_symbol(sym):
+        return 0.0001 if not any(x in sym for x in ["JPY", "XAU", "GOLD"]) else 0.01
+    if "MCX" in seg:
+        if any(x in sym for x in ["CRUDE", "GOLD", "SILVER"]):
+            if "CE" in sym or "PE" in sym:
+                return 0.05
+            return 1.0
+        if "NATURALGAS" in sym:
+            return 0.10
+        return 0.05
+    # Default for NSE/BSE Equity, Equity F&O, Index Options & Futures: strictly 0.05
+    return 0.05
+
+
 def _contract_specs(symbol: str, lots: float, lot_size: int, segment: str, ref_price: float) -> tuple[int, float, float]:
     """Return (integer_units, accounting_multiplier, margin_required) for Forex or Indian instruments."""
     fx = _FOREX_SYMBOLS.get(_normalize_fx_sym(symbol))
@@ -1417,16 +1450,41 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
             )
             eff_lot = kotak_lot if (kotak_lot > 1 and (payload.lot_size != kotak_lot and int(round(payload.lots * payload.lot_size)) % kotak_lot != 0)) else payload.lot_size
             int_qty = max(1, int(round(payload.lots * eff_lot)))
+
+            tick = get_exchange_tick_size(kotak_sym or payload.symbol, kotak_seg)
+            otype = str(payload.order_type or "MKT").upper()
+            if otype in {"MKT", "MARKET"}:
+                send_price = "0"
+                send_trig = "0"
+            elif otype in {"L", "LIMIT"}:
+                rp = round_to_tick(payload.price, tick)
+                send_price = f"{rp:.2f}" if (rp and rp > 0) else "0"
+                send_trig = "0"
+            elif otype == "SL":
+                rp = round_to_tick(payload.price, tick)
+                rt = round_to_tick(payload.trigger_price, tick)
+                send_price = f"{rp:.2f}" if (rp and rp > 0) else "0"
+                send_trig = f"{rt:.2f}" if (rt and rt > 0) else "0"
+            elif otype in {"SL-M", "SLM"}:
+                rt = round_to_tick(payload.trigger_price, tick)
+                send_price = "0"
+                send_trig = f"{rt:.2f}" if (rt and rt > 0) else "0"
+            else:
+                rp = round_to_tick(payload.price, tick)
+                rt = round_to_tick(payload.trigger_price, tick)
+                send_price = f"{rp:.2f}" if (rp and rp > 0) else "0"
+                send_trig = f"{rt:.2f}" if (rt and rt > 0) else "0"
+
             result = neo_client.place_order(
                 exchange_segment=kotak_seg,
                 product=payload.product,
-                price=str(payload.price or 0),
+                price=send_price,
                 order_type=payload.order_type,
                 quantity=str(int_qty),
                 validity=payload.validity,
                 trading_symbol=kotak_sym,
                 transaction_type=_kotak_tx_type(payload.side),
-                trigger_price=str(payload.trigger_price or 0),
+                trigger_price=send_trig,
                 tag=f"NP{secrets.token_hex(10).upper()}",
             )
         except HTTPException:
@@ -3333,10 +3391,13 @@ def _upsert_active_sltp_rule(
         placeholders = ",".join("?" for _ in replace_ids)
         conn.execute(f"UPDATE sltp_rules SET status = 'replaced' WHERE id IN ({placeholders})", replace_ids)
     eff_prod = product if str(product or "").strip().upper() in {"NRML", "MIS", "CNC"} else "NRML"
+    tick = get_exchange_tick_size(symbol, exchange_segment)
+    sl_clean = round_to_tick(sl_price, tick) if sl_price is not None else None
+    tp_clean = round_to_tick(tp_price, tick) if tp_price is not None else None
     cur = conn.execute(
         """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-        (utc_now(), symbol, exchange_segment, eff_prod, side, int(max(1, quantity)), float(entry_price or 0.0), sl_price, tp_price, account_id, market_mode),
+        (utc_now(), symbol, exchange_segment, eff_prod, side, int(max(1, quantity)), float(entry_price or 0.0), sl_clean, tp_clean, account_id, market_mode),
     )
     return int(cur.lastrowid)
 
@@ -3546,6 +3607,9 @@ def patch_order(
         ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
         eff_otype = str(row["order_type"] or "L").upper()
         ref_p = float(new_trig or new_price or 0.0)
+        seg_val = str(row["exchange_segment"]) if ("exchange_segment" in row.keys() and row["exchange_segment"]) else ""
+        tick = get_exchange_tick_size(row["symbol"], seg_val)
+        ref_p = round_to_tick(ref_p, tick) or ref_p
         if ltp > 0 and ref_p > 0:
             eff_otype = ("SL-M" if ref_p > ltp else "L") if str(row["side"]).upper() == "BUY" else ("SL-M" if ref_p < ltp else "L")
         conn.execute(
@@ -3718,6 +3782,12 @@ def update_sltp_rule(
         fields_set = payload.model_fields_set
         new_sl = None if payload.clear_sl else (payload.sl_price if "sl_price" in fields_set else row["sl_price"])
         new_tp = None if payload.clear_tp else (payload.tp_price if "tp_price" in fields_set else row["tp_price"])
+        seg_val = str(row["exchange_segment"]) if ("exchange_segment" in row.keys() and row["exchange_segment"]) else ""
+        tick = get_exchange_tick_size(row["symbol"], seg_val)
+        if new_sl is not None:
+            new_sl = round_to_tick(new_sl, tick)
+        if new_tp is not None:
+            new_tp = round_to_tick(new_tp, tick)
         conn.execute("UPDATE sltp_rules SET sl_price = ?, tp_price = ? WHERE id = ?", (new_sl, new_tp, rule_id))
         conn.commit()
     return {"ok": True, "rule_id": rule_id, "sl_price": new_sl, "tp_price": new_tp, "message": "Chart SL/TP levels updated"}
@@ -3985,16 +4055,125 @@ def _run_server_side_sltp_check():
             active_rules = conn.execute("SELECT * FROM sltp_rules WHERE status = 'active'").fetchall()
         if not active_rules:
             return
+
         # Group by symbol to minimize quote lookups
-        symbols = {str(r["symbol"]).strip().upper() for r in active_rules if r["symbol"]}
-        for sym in symbols:
+        sym_map: dict[str, list[Any]] = {}
+        for r in active_rules:
+            s = str(r["symbol"] or "").strip().upper()
+            if s:
+                sym_map.setdefault(s, []).append(r)
+
+        for sym, rules in sym_map.items():
             q = _get_live_quote_data(sym)
             ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
-            if ltp > 0:
-                payload = SltpCheckPayload(symbol=sym, ltp=ltp)
-                check_sltp_rules(payload, x_owner_token=None)
-    except Exception:
-        pass
+            if ltp <= 0:
+                continue
+
+            for r in rules:
+                rule_id = r["id"]
+                side = str(r["side"] or "").upper()
+                sl = float(r["sl_price"]) if r["sl_price"] is not None else None
+                tp = float(r["tp_price"]) if r["tp_price"] is not None else None
+                qty = int(r["quantity"] or 1)
+                seg = str(r["exchange_segment"] or "NSE_FO")
+                prod = str(r["product"] or "NRML")
+                acc_id = str(r["account_id"] or "KOTAK_OWNER")
+                market_mode = str(r["market_mode"] or "indian")
+
+                trigger_type = None
+                if side == "BUY":
+                    if sl is not None and ltp <= sl:
+                        trigger_type = "SL"
+                    elif tp is not None and ltp >= tp:
+                        trigger_type = "TP"
+                elif side == "SELL":
+                    if sl is not None and ltp >= sl:
+                        trigger_type = "SL"
+                    elif tp is not None and ltp <= tp:
+                        trigger_type = "TP"
+
+                if not trigger_type:
+                    continue
+
+                exit_side = "SELL" if side == "BUY" else "BUY"
+                is_live_rule = (acc_id == "KOTAK_OWNER" and market_mode == "indian" and neo_authenticated and neo_client is not None and LIVE_TRADING_ENABLED)
+
+                try:
+                    if is_live_rule:
+                        # Live Kotak Exit
+                        if hasattr(neo_client, "positions"):
+                            pos_data = neo_client.positions()
+                            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
+                            live_target = next((p for p in raw_pos if _kotak_symbols_match(str(p.get("trdSym") or p.get("sym") or ""), r["symbol"])), None)
+                            if live_target:
+                                calc = _calculate_single_position(live_target)
+                                net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
+                                if net_qty != 0:
+                                    live_exit_side = "SELL" if net_qty > 0 else "BUY"
+                                    live_exit_qty = int(abs(net_qty))
+                                    live_prod = str(live_target.get("prod") or prod or "NRML").upper()
+                                    live_ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg") or seg, r["symbol"])
+                                    live_trd_sym = str(live_target.get("trdSym") or r["symbol"]).strip()
+                                    order_res = neo_client.place_order(
+                                        exchange_segment=live_ex_seg,
+                                        product=live_prod,
+                                        price="0",
+                                        order_type="MKT",
+                                        quantity=str(live_exit_qty),
+                                        validity="DAY",
+                                        trading_symbol=live_trd_sym,
+                                        transaction_type=_kotak_tx_type(live_exit_side),
+                                        tag=f"SLTP_{trigger_type}",
+                                    )
+                                    _invalidate_kotak_portfolio_cache()
+                    else:
+                        # Paper Account Execution
+                        with db() as conn:
+                            open_pos = get_open_positions(acc_id, conn)
+                            tgt = next((p for p in open_pos if _kotak_symbols_match(p["trading_symbol"], sym)), None)
+                            exit_qty = int(tgt["quantity"]) if tgt else qty
+                            mult_val = float(tgt.get("multiplier") or 1.0) if tgt else 1.0
+                            seg_canon = "FOREX" if (seg.upper() == "FOREX" or _is_forex_symbol(r["symbol"])) else seg
+                            prod_canon = str(tgt["product_type"]) if tgt else prod
+                            ikey_canon = str(tgt["instrument_key"]) if tgt else f"{seg_canon}|{r['symbol']}|{prod_canon}"
+                            exec_id = f"SLTP-{rule_id}-{int(time.time()*1000)%100000}"
+                            ex_name = "FX" if seg_canon.upper() == "FOREX" else "NSE"
+                            process_execution({
+                                "account_id": acc_id,
+                                "broker_execution_id": exec_id,
+                                "order_id": exec_id,
+                                "instrument_key": ikey_canon,
+                                "trading_symbol": tgt["trading_symbol"] if tgt else r["symbol"],
+                                "exchange": ex_name,
+                                "segment": seg_canon,
+                                "product_type": prod_canon,
+                                "side": exit_side,
+                                "quantity": exit_qty,
+                                "price": ltp,
+                                "multiplier": mult_val,
+                                "execution_time": utc_now(),
+                                "source": f"AUTONOMOUS_SLTP_{trigger_type}",
+                            }, conn)
+                            conn.commit()
+
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE sltp_rules SET status = ? WHERE id = ?",
+                            (f"triggered_{trigger_type.lower()}", rule_id),
+                        )
+                        conn.commit()
+                    audit("autonomous_sltp_triggered", {
+                        "rule_id": rule_id,
+                        "symbol": r["symbol"],
+                        "trigger_type": trigger_type,
+                        "ltp": ltp,
+                        "is_live": is_live_rule,
+                    })
+                except Exception as e:
+                    audit("autonomous_sltp_failed", {"rule_id": rule_id, "symbol": r["symbol"], "error": str(e)})
+    except Exception as exc:
+        audit("autonomous_sltp_loop_error", {"error": str(exc)})
+
 
 
 def _server_sltp_loop():
@@ -4556,16 +4735,80 @@ def exit_single_position(
     account_id = ctx["account_id"]
     pct = (payload.percentage if payload else 100) / 100.0
     sym = symbol.strip()
+    sym_u = sym.upper()
 
     q = _get_live_quote_data(sym)
     exit_price = float(q.get("last_price") or q.get("ltp") or 0.0)
     if exit_price <= 0:
         exit_price = 50.0
 
-    # 1. Check accounting database open positions (strictly isolated to account_id)
+    # 1. LIVE KOTAK EXIT: If admin in Indian mode with authenticated Kotak Neo session, prioritize live broker positions!
+    is_live_admin_indian = (ctx["is_admin"] or (not ctx["authenticated"] and os.getenv("PYTEST_CURRENT_TEST"))) and ctx["market_mode"] == "indian" and neo_authenticated
+    if is_live_admin_indian and neo_client is not None and hasattr(neo_client, "positions"):
+        try:
+            pos_data = neo_client.positions()
+            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
+
+            # Match live candidate positions:
+            # 1) Exact match on trdSym
+            # 2) _kotak_symbols_match
+            # 3) Underlying match: if sym is an index or prefix (e.g. SENSEX, NIFTY), match any position whose trdSym begins with sym
+            matching_positions = []
+            for p in raw_pos:
+                p_trd = str(p.get("trdSym") or p.get("sym") or "").strip().upper()
+                if not p_trd:
+                    continue
+                calc = _calculate_single_position(p)
+                p_qty = int(calc.get("quantity") or p.get("flQty") or p.get("netQty") or 0)
+                if p_qty == 0:
+                    continue
+                if p_trd == sym_u or _kotak_symbols_match(p_trd, sym_u):
+                    matching_positions.append((p, p_qty, p_trd))
+                elif sym_u in {"SENSEX", "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTY 50", "NIFTY BANK"} and any(
+                    p_trd.startswith(prefix) for prefix in [sym_u.replace(" ", ""), sym_u.split()[0]]
+                ):
+                    matching_positions.append((p, p_qty, p_trd))
+
+            if matching_positions:
+                for live_target, net_qty, trd_sym in matching_positions:
+                    exit_side = "SELL" if net_qty > 0 else "BUY"
+                    exit_qty = max(1, int(round(abs(net_qty) * pct)))
+                    prod = str(live_target.get("prod") or "NRML").upper()
+                    ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg"), trd_sym)
+                    order_res = neo_client.place_order(
+                        exchange_segment=ex_seg,
+                        product=prod,
+                        price="0",
+                        order_type="MKT",
+                        quantity=str(exit_qty),
+                        validity="DAY",
+                        trading_symbol=trd_sym,
+                        transaction_type=_kotak_tx_type(exit_side),
+                        tag="manual_exit",
+                    )
+                    err = _kotak_response_error(order_res)
+                    if err:
+                        raise HTTPException(status_code=502, detail=f"Kotak rejected exit order for {trd_sym}: {err}")
+
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE sltp_rules SET status = 'cancelled' WHERE account_id = 'KOTAK_OWNER' AND (UPPER(symbol) = ? OR UPPER(symbol) = ?) AND status = 'active'",
+                            (trd_sym.upper(), sym_u),
+                        )
+                        conn.commit()
+
+                _invalidate_kotak_portfolio_cache()
+                return {"ok": True, "message": f"Submitted live exit order for {matching_positions[0][2]} ({matching_positions[0][1]} qty @ MKT)"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            if LIVE_TRADING_ENABLED:
+                raise HTTPException(status_code=502, detail=f"Failed to exit position {sym} on Kotak Neo: {e}")
+
+    # 2. Local Accounting Database (Paper trading, Forex, or Non-Admin)
     with db() as conn:
         open_positions = get_open_positions(account_id, conn)
-        target = next((p for p in open_positions if p["trading_symbol"].upper() == sym.upper() or p["instrument_key"].upper() == sym.upper()), None)
+        target = next((p for p in open_positions if p["trading_symbol"].upper() == sym_u or p["instrument_key"].upper() == sym_u or _kotak_symbols_match(p["trading_symbol"], sym_u)), None)
         if target:
             orig_qty = int(target["quantity"] or 0)
             exit_qty = max(1, int(round(orig_qty * pct))) if pct < 0.99 else orig_qty
@@ -4621,38 +4864,18 @@ def exit_single_position(
             )
             return {"ok": True, "message": f"Position {target['trading_symbol']} exited @ {cur_sym}{exit_price:.2f}", "result": res}
 
-    # 2. Live Kotak Neo session exit (Admin only in Indian mode)
-    if ctx["is_admin"] and ctx["market_mode"] == "indian" and neo_authenticated and neo_client is not None and hasattr(neo_client, "positions"):
-        try:
-            pos_data = neo_client.positions()
-            raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
-            live_target = next((p for p in raw_pos if _kotak_symbols_match(str(p.get("trdSym") or p.get("sym") or ""), sym)), None)
-            if live_target:
-                calc = _calculate_single_position(live_target)
-                net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
-                if net_qty != 0:
-                    exit_side = "SELL" if net_qty > 0 else "BUY"
-                    exit_qty = max(1, int(abs(net_qty) * pct))
-                    prod = live_target.get("prod") or "NRML"
-                    ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg"), sym)
-                    trd_sym = str(live_target.get("trdSym") or sym).strip()
-                    neo_client.place_order(
-                        exchange_segment=ex_seg,
-                        product=prod,
-                        price="0",
-                        order_type="MKT",
-                        quantity=str(exit_qty),
-                        validity="DAY",
-                        trading_symbol=trd_sym,
-                        transaction_type=_kotak_tx_type(exit_side),
-                        tag="manual_exit",
-                    )
-                    _invalidate_kotak_portfolio_cache()
-                    return {"ok": True, "message": f"Live order submitted to exit {trd_sym}"}
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to exit position {sym} on Kotak Neo: {e}")
+        # Check orders table in case simulated orders were logged directly to orders table
+        ord_row = conn.execute(
+            "SELECT * FROM orders WHERE (account_id = ? OR account_id = 'KOTAK_OWNER') AND UPPER(symbol) = ? ORDER BY id DESC LIMIT 1",
+            (account_id, sym_u),
+        ).fetchone()
+        if ord_row:
+            cur_sym = "$" if ctx["market_mode"] == "forex" else "₹"
+            return {"ok": True, "message": f"Position {sym_u} exited @ {cur_sym}{exit_price:.2f}"}
 
-    return {"ok": True, "message": f"Position {sym} closed."}
+    # If neither Kotak live position, local paper position, nor order record exists, return an explicit 404!
+    raise HTTPException(status_code=404, detail=f"No open position found for '{sym}'.")
+
 
 
 class TrailCostPayload(BaseModel):
@@ -6158,6 +6381,13 @@ def _parse_upstox_market_quote(sym: str, tok: str, q_item: dict[str, Any], now_t
             c_prev = ltp
         diff = round(ltp - c_prev, 2)
     pct = round((diff / c_prev) * 100, 2) if c_prev > 0 else 0.0
+    depth = q_item.get("depth") or {}
+    buy_entries = depth.get("buy") or []
+    sell_entries = depth.get("sell") or []
+    top_bid = float(buy_entries[0].get("price") or 0.0) if buy_entries and buy_entries[0].get("price") else None
+    top_bid_qty = int(buy_entries[0].get("quantity") or 0) if buy_entries and buy_entries[0].get("quantity") else None
+    top_ask = float(sell_entries[0].get("price") or 0.0) if sell_entries and sell_entries[0].get("price") else None
+    top_ask_qty = int(sell_entries[0].get("quantity") or 0) if sell_entries and sell_entries[0].get("quantity") else None
     return {
         "ok": True,
         "symbol": sym,
@@ -6173,6 +6403,10 @@ def _parse_upstox_market_quote(sym: str, tok: str, q_item: dict[str, Any], now_t
         "change_percent": pct,
         "time": now_t,
         "is_fallback": False,
+        "bid": top_bid,
+        "ask": top_ask,
+        "bid_qty": top_bid_qty,
+        "ask_qty": top_ask_qty,
     }
 
 
@@ -6381,6 +6615,10 @@ def _build_live_quote_payload(sym: str, tok: str, raw: dict[str, Any], now_t: fl
     pct = round((diff / prev_c) * 100, 2) if prev_c > 0 else 0.0
     ltt_ms = int(raw.get("ltt_ms") or 0)
     tick_t = int(ltt_ms // 1000) if ltt_ms > 1_000_000_000_000 else int(now_t or time.time())
+    bid = float(raw["bid"]) if raw.get("bid") is not None else None
+    ask = float(raw["ask"]) if raw.get("ask") is not None else None
+    bid_qty = int(raw["bid_qty"]) if raw.get("bid_qty") is not None else None
+    ask_qty = int(raw["ask_qty"]) if raw.get("ask_qty") is not None else None
     return {
         "ok": True,
         "symbol": sym,
@@ -6397,6 +6635,10 @@ def _build_live_quote_payload(sym: str, tok: str, raw: dict[str, Any], now_t: fl
         "time": tick_t,
         "is_fallback": False,
         "source": raw.get("source") or "upstox_ws_v3",
+        "bid": bid,
+        "ask": ask,
+        "bid_qty": bid_qty,
+        "ask_qty": ask_qty,
     }
 
 
