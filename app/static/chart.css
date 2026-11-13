@@ -6850,6 +6850,408 @@ tr.closed-row-clickable {
   }
 }
 
+/* ==================== TRADINGVIEW / DHAN STYLE BOTTOM SCALE & OPTION CHAIN CONTROLS ==================== */
+.chart-bottom-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+}
+
+.chart-dock-chain-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 14px;
+  background: rgba(41, 98, 255, 0.12);
+  border: 1px solid rgba(41, 98, 255, 0.4);
+  border-radius: 20px;
+  color: #60a5fa;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.chart-dock-chain-btn:hover,
+.chart-dock-chain-btn:active {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+}
+
+.chart-dock-chain-btn .chain-icon {
+  font-size: 12px;
+}
+
+.tv-scale-toggles {
+  display: inline-flex;
+  align-items: center;
+  background: #181d27;
+  border: 1px solid #283246;
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.tv-scale-btn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.3;
+}
+
+.tv-scale-btn:hover {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tv-scale-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.4);
+}
+
+.tv-scale-settings-btn {
+  background: transparent;
+  border: 1px solid #283246;
+  border-radius: 6px;
+  color: #94a3b8;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.tv-scale-settings-btn:hover {
+  background: #232b3b;
+  color: #f8fafc;
+}
+
+.chart-clock-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+/* Reverse Position Button on Canvas Trade Line */
+.tpl-reverse-btn {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 5px;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.tpl-reverse-btn:hover {
+  background: #d97706;
+  border-color: #f59e0b;
+  color: #ffffff;
+}
+
+/* TradingView Chart Settings Modal */
+.tv-settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.tv-settings-modal-card {
+  background: #131722;
+  border: 1px solid #2a2e39;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.tv-settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.tv-settings-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.tv-settings-tab {
+  background: transparent;
+  border: none;
+  color: #787b86;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tv-settings-tab.active {
+  background: rgba(41, 98, 255, 0.15);
+  color: #2962ff;
+}
+
+.tv-settings-close-btn {
+  background: transparent;
+  border: none;
+  color: #787b86;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.tv-settings-close-btn:hover {
+  color: #f8fafc;
+}
+
+.tv-settings-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tv-settings-body.hidden {
+  display: none !important;
+}
+
+.tv-settings-section-lbl {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.tv-settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tv-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tv-checkbox-row input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: #2962ff;
+  margin-top: 2px;
+}
+
+.tv-checkbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tv-cb-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.tv-cb-desc {
+  font-size: 11.5px;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.tv-sub-group {
+  margin-left: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tv-sub-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tv-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.tv-checkbox-label input[type="checkbox"] {
+  accent-color: #2962ff;
+}
+
+.tv-select-mini {
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.tv-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13.5px;
+  color: #e2e8f0;
+}
+
+.tv-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid #2a2e39;
+  background: #10141d;
+}
+
+.tv-btn-cancel {
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.tv-btn-cancel:hover {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+.tv-btn-ok {
+  background: #2962ff;
+  border: 1px solid #2962ff;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 18px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tv-btn-ok:hover {
+  background: #1d4ed8;
+}
+
+/* TradingView Price Scale Context Menu (Screenshot 1) */
+.tv-scale-context-menu {
+  position: fixed;
+  z-index: 99998;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+  min-width: 210px;
+  padding: 6px 0;
+  user-select: none;
+}
+
+.tv-cm-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: #d1d4dc;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.tv-cm-item:hover {
+  background: #2a2e39;
+  color: #ffffff;
+}
+
+.tv-cm-item .cm-icon {
+  font-size: 13px;
+  width: 14px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.tv-cm-item .cm-check {
+  font-size: 13px;
+  width: 14px;
+  color: #2962ff;
+  font-weight: 800;
+  text-align: center;
+}
+
+.tv-cm-divider {
+  height: 1px;
+  background: #2a2e39;
+  margin: 5px 0;
+}
+
+@media (max-width: 768px) {
+  .chart-dock-chain-btn {
+    padding: 3px 10px;
+    font-size: 11px;
+  }
+  .chart-clock-badge {
+    display: none;
+  }
+  .tv-settings-modal-card {
+    max-height: 94vh;
+  }
+}
+
+
 
 
 

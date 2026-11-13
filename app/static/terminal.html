@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Neo PIP — Remote Cloud Terminal</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💻</text></svg>">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0a0d14;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .term-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: #111622;
+      border-bottom: 1px solid #1f293d;
+      font-size: 13px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .term-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .term-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .term-dot.connecting { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+    .term-dot.disconnected { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+    .term-host {
+      font-family: monospace;
+      font-size: 11.5px;
+      color: #94a3b8;
+    }
+    .term-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .term-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .term-btn:hover { background: #2563eb; color: #fff; border-color: #3b82f6; }
+    #terminal-container {
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      padding: 4px 6px;
+      background: #0a0d14;
+      overflow: hidden;
+    }
+    /* Mobile Virtual Keypad Bar */
+    .mobile-keybar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: #111622;
+      border-top: 1px solid #1f293d;
+      overflow-x: auto;
+      flex-shrink: 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .key-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      padding: 6px 11px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      min-width: 42px;
+      text-align: center;
+    }
+    .key-btn:active {
+      background: #2563eb;
+      transform: scale(0.96);
+    }
+  </style>
+</head>
+<body>
+  <header class="term-header">
+    <div class="term-title">
+      <span class="term-dot" id="status-dot"></span>
+      <span>Oracle VM Cloud Terminal</span>
+      <span class="term-host">ubuntu@92.4.87.82</span>
+    </div>
+    <div class="term-actions">
+      <button type="button" class="term-btn" id="btn-reconnect">Reconnect</button>
+      <a href="/chart" class="term-btn">📈 Trading Chart</a>
+    </div>
+  </header>
+
+  <div id="terminal-container"></div>
+
+  <!-- Mobile Keyboard Helper (Esc, Tab, Ctrl, Arrows) -->
+  <div class="mobile-keybar">
+    <button type="button" class="key-btn" data-key="\x1b">ESC</button>
+    <button type="button" class="key-btn" data-key="\t">TAB</button>
+    <button type="button" class="key-btn" data-key="\x03">Ctrl+C</button>
+    <button type="button" class="key-btn" data-key="\x04">Ctrl+D</button>
+    <button type="button" class="key-btn" data-key="\x1b[A">↑</button>
+    <button type="button" class="key-btn" data-key="\x1b[B">↓</button>
+    <button type="button" class="key-btn" data-key="\x1b[D">←</button>
+    <button type="button" class="key-btn" data-key="\x1b[C">→</button>
+    <button type="button" class="key-btn" data-key="clear\n">Clear</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <script>
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: window.innerWidth <= 768 ? 12.5 : 14,
+      lineHeight: 1.25,
+      theme: {
+        background: '#0a0d14',
+        foreground: '#e2e8f0',
+        cursor: '#ffb703',
+        black: '#1e293b',
+        red: '#ef4444',
+        green: '#10b981',
+        yellow: '#f59e0b',
+        blue: '#3b82f6',
+        magenta: '#a855f7',
+        cyan: '#06b6d4',
+        white: '#f8fafc',
+      }
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal-container'));
+    fitAddon.fit();
+
+    let ws = null;
+    const dot = document.getElementById('status-dot');
+
+    function connect() {
+      if (ws) {
+        try { ws.close(); } catch(_) {}
+      }
+      dot.className = 'term-dot connecting';
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/api/terminal/ws`;
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        dot.className = 'term-dot';
+        term.writeln('\x1b[1;32m● Connected to Ubuntu VM session (92.4.87.82)\x1b[0m');
+        sendResize();
+      };
+
+      ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(ev.data));
+        } else {
+          term.write(ev.data);
+        }
+      };
+
+      ws.onclose = () => {
+        dot.className = 'term-dot disconnected';
+        term.writeln('\r\n\x1b[1;31m[Session Disconnected. Click Reconnect above to restart.]\x1b[0m\r\n');
+      };
+
+      ws.onerror = () => {
+        dot.className = 'term-dot disconnected';
+      };
+    }
+
+    term.onData(data => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    function sendResize() {
+      fitAddon.fit();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      sendResize();
+    });
+
+    document.querySelectorAll('.key-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const raw = btn.getAttribute('data-key');
+        if (raw && ws && ws.readyState === WebSocket.OPEN) {
+          const processed = raw
+            .replace(/\\x1b/g, '\x1b')
+            .replace(/\\x03/g, '\x03')
+            .replace(/\\x04/g, '\x04')
+            .replace(/\\t/g, '\t')
+            .replace(/\\n/g, '\n');
+          ws.send(processed);
+          term.focus();
+        }
+      });
+    });
+
+    document.getElementById('btn-reconnect').addEventListener('click', connect);
+
+    connect();
+  </script>
+</body>
+</html>

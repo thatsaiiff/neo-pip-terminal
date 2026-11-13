@@ -22,6 +22,14 @@ from urllib.parse import urlsplit, quote as quote_url
 
 import httpx
 import smtplib
+try:
+    import pty
+    import termios
+    import fcntl
+except ImportError:
+    pty = None
+    termios = None
+    fcntl = None
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
@@ -1619,6 +1627,14 @@ def chart_view():
     chart_file = STATIC_DIR / "chart.html"
     if chart_file.exists():
         return FileResponse(chart_file)
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/terminal")
+def terminal_view():
+    term_file = STATIC_DIR / "terminal.html"
+    if term_file.exists():
+        return FileResponse(term_file)
     return FileResponse(STATIC_DIR / "index.html")
 
 
@@ -7312,6 +7328,80 @@ def live_quotes_batch(payload: LiveQuotesBatchPayload):
             quotes_map[sym] = q
         results.append(q)
     return {"ok": True, "quotes": results, "quotes_by_symbol": quotes_map, "time": utc_now()}
+
+
+@app.websocket("/api/terminal/ws")
+async def terminal_ws_endpoint(websocket: WebSocket):
+    if pty is None:
+        await websocket.close(code=1011)
+        return
+
+    await websocket.accept()
+    master_fd, slave_fd = pty.openpty()
+    winsize = struct.pack("HHHH", 24, 80, 0, 0)
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+
+    pid = os.fork()
+    if pid == 0:
+        os.close(master_fd)
+        os.setsid()
+        os.dup2(slave_fd, 0)
+        os.dup2(slave_fd, 1)
+        os.dup2(slave_fd, 2)
+        if slave_fd > 2:
+            os.close(slave_fd)
+        work_dir = "/app" if os.path.isdir("/app") else str(Path(__file__).resolve().parent.parent)
+        os.chdir(work_dir)
+        shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+        os.execvpe(shell, [shell], env)
+    else:
+        os.close(slave_fd)
+        loop = asyncio.get_event_loop()
+
+        async def read_from_pty():
+            try:
+                while True:
+                    data = await loop.run_in_executor(None, os.read, master_fd, 2048)
+                    if not data:
+                        break
+                    await websocket.send_bytes(data)
+            except Exception:
+                pass
+
+        async def write_to_pty():
+            try:
+                while True:
+                    msg = await websocket.receive()
+                    if "bytes" in msg and msg["bytes"]:
+                        os.write(master_fd, msg["bytes"])
+                    elif "text" in msg and msg["text"]:
+                        text = msg["text"]
+                        if text.startswith('{"resize":'):
+                            import json
+                            sz = json.loads(text).get("resize", {})
+                            cols = int(sz.get("cols", 80))
+                            rows = int(sz.get("rows", 24))
+                            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                        else:
+                            os.write(master_fd, text.encode("utf-8"))
+            except Exception:
+                pass
+
+        await asyncio.gather(read_from_pty(), write_to_pty(), return_exceptions=True)
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
+        try:
+            os.close(master_fd)
+        except Exception:
+            pass
 
 
 @app.websocket("/api/ws/quotes")

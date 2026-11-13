@@ -420,6 +420,11 @@
               <line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
+
+          <!-- TradingView / Dhan Style Chart & Trading Settings Gear (Screenshot 1, 2, 3) -->
+          <button type="button" id="btn-chart-trading-settings" class="ex-toolbar-btn btn-chart-cog" title="TradingView Chart &amp; Trading Settings" aria-label="Chart Settings">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
         </div>
       </div>
 
@@ -687,7 +692,7 @@
         </div>
       </div>
 
-      <!-- Bottom Chart Timeframe Bar (Exness bottom) -->
+      <!-- Bottom Chart Timeframe Bar (TradingView & Dhan Pro Style) -->
       <div class="ex-chart-bottom-bar">
         <div class="range-shortcuts">
           <button type="button" class="range-btn active" data-range="1d">1D</button>
@@ -697,9 +702,24 @@
           <button type="button" class="range-btn" data-range="6m">6M</button>
           <button type="button" class="range-btn" data-range="1y">1Y</button>
         </div>
+
+        <!-- Center Docked TradingView / Dhan Style Option Chain Button -->
+        <div class="chart-bottom-center">
+          <button type="button" id="btn-chart-dock-opt-chain" class="chart-dock-chain-btn" title="Open Real-Time Option Chain">
+            <span class="chain-icon">📑</span> Chain
+          </button>
+        </div>
+
         <div class="chart-meta-right">
-          <button type="button" class="tz-badge tz-toggle-btn" id="btn-tz-toggle" title="Click to switch X-Axis Timezone (IST / UTC)">UTC+5:30 (IST)</button>
-          <span class="feed-badge" id="feed-status-badge">● Sub-30ms Live</span>
+          <span class="chart-clock-badge" id="chart-clock-live">--:--:-- UTC+5:30</span>
+          <div class="tv-scale-toggles" role="group" aria-label="Scale Modes">
+            <button type="button" id="btn-scale-percent" class="tv-scale-btn" title="Toggle Percentage Scale Mode">%</button>
+            <button type="button" id="btn-scale-log" class="tv-scale-btn" title="Toggle Logarithmic Scale Mode">log</button>
+            <button type="button" id="btn-scale-auto" class="tv-scale-btn active" title="Auto (fits data to screen)">auto</button>
+          </div>
+          <button type="button" class="tz-badge tz-toggle-btn" id="btn-tz-toggle" title="Click to switch X-Axis Timezone (IST / UTC)">UTC+5:30</button>
+          <button type="button" id="btn-chart-scale-settings" class="tv-scale-settings-btn" title="Price Scale &amp; Lines Settings">⚙</button>
+          <span class="feed-badge" id="feed-status-badge">● Live</span>
         </div>
       </div>
 
@@ -1932,6 +1952,167 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
       <div class="oc-footer">
         <span class="oc-hint">⚡ Click any <b>Call or Put LTP</b> to instantly load that option chart &amp; prep the order form!</span>
       </div>
+    </div>
+  </div>
+
+  <!-- TRADINGVIEW / DHAN STYLE CHART & TRADING SETTINGS MODAL (Screenshot 1, 2, 3) -->
+  <div id="chart-tv-settings-modal" class="tv-settings-modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Chart Settings">
+    <div class="tv-settings-modal-card">
+      <div class="tv-settings-modal-header">
+        <div class="tv-settings-tabs">
+          <button type="button" class="tv-settings-tab active" data-tab="trading" id="tab-tv-trading">Trading</button>
+          <button type="button" class="tv-settings-tab" data-tab="scales" id="tab-tv-scales">Scales and lines</button>
+        </div>
+        <button type="button" class="tv-settings-close-btn" id="btn-close-tv-settings" aria-label="Close">✕</button>
+      </div>
+
+      <!-- Trading Tab Content (Screenshot 3) -->
+      <div class="tv-settings-body active" id="tv-settings-tab-trading">
+        <div class="tv-settings-group">
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-buysell-buttons" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Buy/sell buttons</span>
+              <span class="tv-cb-desc">Displays buy and sell buttons directly on the chart</span>
+            </div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-onetap-trading" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">One-tap trading</span>
+              <span class="tv-cb-desc">Instantly place, edit, cancel orders or close positions without confirmation</span>
+            </div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-sound-fx" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Play sound for executions</span>
+            </div>
+          </label>
+        </div>
+
+        <div class="tv-settings-section-lbl">APPEARANCE</div>
+        <div class="tv-settings-group">
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-positions-orders" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Positions and orders</span>
+            </div>
+          </label>
+          <div class="tv-sub-group">
+            <label class="tv-checkbox-row">
+              <input type="checkbox" id="chk-tv-reverse-pos" checked>
+              <div class="tv-checkbox-text">
+                <span class="tv-cb-title">Reverse position button</span>
+                <span class="tv-cb-desc">Adds the reverse button next to the open position on the chart</span>
+              </div>
+            </label>
+          </div>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-pnl-val" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Profit and loss value</span>
+            </div>
+          </label>
+          <div class="tv-sub-group">
+            <div class="tv-sub-row">
+              <label class="tv-checkbox-label"><input type="checkbox" id="chk-tv-pnl-positions" checked> Positions</label>
+              <select id="sel-tv-pnl-positions-unit" class="tv-select-mini">
+                <option value="money">Money</option>
+                <option value="percent">Percentage</option>
+                <option value="pips">Ticks / Pips</option>
+              </select>
+            </div>
+            <div class="tv-sub-row">
+              <label class="tv-checkbox-label"><input type="checkbox" id="chk-tv-pnl-brackets" checked> Brackets</label>
+              <select id="sel-tv-pnl-brackets-unit" class="tv-select-mini">
+                <option value="money">Money</option>
+                <option value="percent">Percentage</option>
+                <option value="pips">Ticks / Pips</option>
+              </select>
+            </div>
+          </div>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-extend-lines" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Extended price lines across the entire chart width</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Scales & Lines Tab Content (Screenshot 2) -->
+      <div class="tv-settings-body hidden" id="tv-settings-tab-scales">
+        <div class="tv-settings-section-lbl">PRICE SCALE</div>
+        <div class="tv-settings-row">
+          <span>Scale mode</span>
+          <select id="sel-tv-scale-mode" class="tv-select-mini">
+            <option value="auto">Auto (fits data to screen)</option>
+            <option value="regular">Regular</option>
+            <option value="log">Logarithmic</option>
+            <option value="percent">Percent</option>
+          </select>
+        </div>
+        <div class="tv-settings-section-lbl">PRICE LABELS &amp; LINES</div>
+        <div class="tv-settings-group">
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-no-overlap" checked>
+            <div class="tv-checkbox-text"><span class="tv-cb-title">No overlapping labels</span></div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-plus-button" checked>
+            <div class="tv-checkbox-text"><span class="tv-cb-title">Plus button</span></div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-countdown" checked>
+            <div class="tv-checkbox-text"><span class="tv-cb-title">Countdown to bar close</span></div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-high-low" checked>
+            <div class="tv-checkbox-text"><span class="tv-cb-title">Day High / Low lines</span></div>
+          </label>
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-avg-line" checked>
+            <div class="tv-checkbox-text"><span class="tv-cb-title">Day Average line</span></div>
+          </label>
+        </div>
+      </div>
+
+      <div class="tv-settings-footer">
+        <button type="button" class="tv-btn-cancel" id="btn-cancel-tv-settings">Cancel</button>
+        <button type="button" class="tv-btn-ok" id="btn-ok-tv-settings">Ok</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRADINGVIEW STYLE PRICE SCALE CONTEXT MENU (Screenshot 1) -->
+  <div id="tv-scale-context-menu" class="tv-scale-context-menu hidden">
+    <div class="tv-cm-item" id="cm-scale-reset">
+      <span class="cm-icon">↺</span> Reset price scale
+    </div>
+    <div class="tv-cm-item" id="cm-scale-auto">
+      <span class="cm-icon">✓</span> Auto (fits data to screen)
+    </div>
+    <div class="tv-cm-divider"></div>
+    <div class="tv-cm-item" id="cm-scale-regular">
+      <span class="cm-check" id="cm-chk-regular">✓</span> Regular
+    </div>
+    <div class="tv-cm-item" id="cm-scale-percent">
+      <span class="cm-check" id="cm-chk-percent"></span> Percent
+    </div>
+    <div class="tv-cm-item" id="cm-scale-log">
+      <span class="cm-check" id="cm-chk-log"></span> Logarithmic
+    </div>
+    <div class="tv-cm-divider"></div>
+    <div class="tv-cm-item" id="cm-scale-countdown">
+      <span class="cm-check" id="cm-chk-countdown">✓</span> Countdown to bar close
+    </div>
+    <div class="tv-cm-item" id="cm-scale-highlow">
+      <span class="cm-check" id="cm-chk-highlow">✓</span> Day High / Low lines
+    </div>
+    <div class="tv-cm-divider"></div>
+    <div class="tv-cm-item" id="cm-scale-more">
+      <span class="cm-icon">⚙</span> More settings...
     </div>
   </div>
 
