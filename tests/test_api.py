@@ -2281,6 +2281,17 @@ def test_algo_api_endpoints(client):
     assert cfg_res.status_code == 200
     assert cfg_res.json()["rr_ratio"] == 2.25
 
+    # Backtest endpoint
+    bt_res = client.get("/api/algo/backtest")
+    assert bt_res.status_code == 200
+    report = bt_res.json()["report"]
+    assert "portfolio" in report
+    port = report["portfolio"]
+    assert port["target_rr"] >= 6.5
+    assert port["win_rate_pct"] >= 25.0
+    assert port["max_drawdown_pct"] < 30.0
+    assert port["sharpe_ratio"] >= 1.3
+
 
 
 

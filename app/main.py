@@ -5079,6 +5079,13 @@ def get_algo_trades():
     return {"ok": True, "trades": algo_bot.trades_history}
 
 
+@app.get("/api/algo/backtest")
+def get_algo_backtest(rr: float = 6.5, min_atr: float = 10.0):
+    from app.backtest_engine import run_full_expiry_portfolio_backtest
+    report = run_full_expiry_portfolio_backtest()
+    return {"ok": True, "report": report}
+
+
 
 @app.get("/api/indices/quotes")
 def index_quotes():
