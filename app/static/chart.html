@@ -59,6 +59,18 @@
         <span><span class="oc-full-lbl">Option </span>Chain</span>
       </button>
 
+      <!-- Autonomous Quant Algo Bot Button (EMA 9/15, ATR>10, 1:2.25 RR, ₹10k Stop) -->
+      <button type="button" id="btn-algo-bot" class="ex-algo-pill" title="Open Quantitative Algo Bot Control Center">
+        <span class="algo-pill-icon">🤖</span>
+        <span id="algo-pill-status">ALGO: OFF</span>
+      </button>
+
+      <!-- Chart Engine Switcher: Pro PIP Canvas vs Official TradingView Advanced Widget -->
+      <button type="button" id="btn-chart-engine" class="ex-tv-pill" title="Toggle Chart Engine: Pro Terminal vs Official TradingView">
+        <span class="tv-pill-icon">📈</span>
+        <span id="engine-pill-status">PRO PIP</span>
+      </button>
+
       <!-- Account Badge -->
       <div class="ex-account-badge-wrap">
         <button type="button" id="ex-account-btn" class="ex-account-btn" title="Click to view Account Mode / Switch">
@@ -431,6 +443,28 @@
             </div>
           </div>
           <div class="pane-chart-wrap" id="p1-canvas-wrap">
+            <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
+            <div class="tv-floating-order-dock" id="p1-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
+              <button type="button" class="tv-dock-btn tv-dock-sell" id="p1-tv-sell-btn" title="1-Tap Instant Market Sell">
+                <span class="tv-dock-price" id="p1-tv-sell-price">—</span>
+                <span class="tv-dock-lbl">SELL</span>
+              </button>
+              <div class="tv-dock-middle">
+                <span class="tv-dock-spread" id="p1-tv-spread" title="Spread">0.00</span>
+                <div class="tv-dock-qty-pill">
+                  <span class="tv-qty-caret">▾</span>
+                  <input type="number" class="tv-qty-input" id="p1-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                </div>
+              </div>
+              <button type="button" class="tv-dock-btn tv-dock-buy" id="p1-tv-buy-btn" title="1-Tap Instant Market Buy">
+                <span class="tv-dock-price" id="p1-tv-buy-price">—</span>
+                <span class="tv-dock-lbl">BUY</span>
+              </button>
+            </div>
+            <!-- Embedded TradingView Advanced Chart Container -->
+            <div id="p1-tv-widget-wrap" class="tradingview-widget-wrap hidden">
+              <div id="p1-tv-widget-container" class="tradingview-widget-container"></div>
+            </div>
             <div id="p1-chart-container" class="chart-canvas-view"></div>
             <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p1-trade-overlay" class="pane-trade-overlay"></div>
@@ -464,6 +498,28 @@
             </div>
           </div>
           <div class="pane-chart-wrap" id="p2-canvas-wrap">
+            <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
+            <div class="tv-floating-order-dock" id="p2-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
+              <button type="button" class="tv-dock-btn tv-dock-sell" id="p2-tv-sell-btn" title="1-Tap Instant Market Sell">
+                <span class="tv-dock-price" id="p2-tv-sell-price">—</span>
+                <span class="tv-dock-lbl">SELL</span>
+              </button>
+              <div class="tv-dock-middle">
+                <span class="tv-dock-spread" id="p2-tv-spread" title="Spread">0.00</span>
+                <div class="tv-dock-qty-pill">
+                  <span class="tv-qty-caret">▾</span>
+                  <input type="number" class="tv-qty-input" id="p2-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                </div>
+              </div>
+              <button type="button" class="tv-dock-btn tv-dock-buy" id="p2-tv-buy-btn" title="1-Tap Instant Market Buy">
+                <span class="tv-dock-price" id="p2-tv-buy-price">—</span>
+                <span class="tv-dock-lbl">BUY</span>
+              </button>
+            </div>
+            <!-- Embedded TradingView Advanced Chart Container -->
+            <div id="p2-tv-widget-wrap" class="tradingview-widget-wrap hidden">
+              <div id="p2-tv-widget-container" class="tradingview-widget-container"></div>
+            </div>
             <div id="p2-chart-container" class="chart-canvas-view"></div>
             <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p2-trade-overlay" class="pane-trade-overlay"></div>
@@ -497,6 +553,28 @@
             </div>
           </div>
           <div class="pane-chart-wrap" id="p3-canvas-wrap">
+            <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
+            <div class="tv-floating-order-dock" id="p3-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
+              <button type="button" class="tv-dock-btn tv-dock-sell" id="p3-tv-sell-btn" title="1-Tap Instant Market Sell">
+                <span class="tv-dock-price" id="p3-tv-sell-price">—</span>
+                <span class="tv-dock-lbl">SELL</span>
+              </button>
+              <div class="tv-dock-middle">
+                <span class="tv-dock-spread" id="p3-tv-spread" title="Spread">0.00</span>
+                <div class="tv-dock-qty-pill">
+                  <span class="tv-qty-caret">▾</span>
+                  <input type="number" class="tv-qty-input" id="p3-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                </div>
+              </div>
+              <button type="button" class="tv-dock-btn tv-dock-buy" id="p3-tv-buy-btn" title="1-Tap Instant Market Buy">
+                <span class="tv-dock-price" id="p3-tv-buy-price">—</span>
+                <span class="tv-dock-lbl">BUY</span>
+              </button>
+            </div>
+            <!-- Embedded TradingView Advanced Chart Container -->
+            <div id="p3-tv-widget-wrap" class="tradingview-widget-wrap hidden">
+              <div id="p3-tv-widget-container" class="tradingview-widget-container"></div>
+            </div>
             <div id="p3-chart-container" class="chart-canvas-view"></div>
             <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p3-trade-overlay" class="pane-trade-overlay"></div>
@@ -1524,6 +1602,119 @@
     </div>
   </div>
 
+  <!-- 1B-2. QUANTITATIVE ALGO BOT CONTROL CENTER MODAL -->
+  <div id="modal-algo-bot" class="ex-modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="algo-modal-title">
+    <div class="ex-modal-card algo-bot-card" style="max-width: 820px; width: 94%;">
+      <div class="guide-header">
+        <div class="guide-title-wrap">
+          <span class="guide-badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">Quant Algo</span>
+          <h3 id="algo-modal-title">Quantitative Algo Bot (Forward Test)</h3>
+        </div>
+        <button type="button" id="btn-close-algo-modal" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="algo-modal-body" style="padding: 16px 20px;">
+        <!-- Status & Mode Banner -->
+        <div class="algo-status-banner" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; margin-bottom: 16px;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span id="algo-status-badge" class="algo-tag idle" style="font-weight: 700; font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #374151; color: #9ca3af;">IDLE</span>
+              <span style="font-size: 12px; color: #cbd5e1; font-weight: 600;" id="algo-status-sub">Ready to Scan</span>
+            </div>
+            <div id="algo-status-reason" style="font-size: 11.5px; color: #94a3b8;">Bot idle. Press Start to commence continuous forward-testing.</div>
+          </div>
+          <div style="text-align: right;">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; font-weight: 700;">Loss Circuit Breaker</span>
+            <div id="algo-cb-state-text" style="font-size: 13px; font-weight: 800; color: #10b981;">ARMED (₹10,000 max)</div>
+          </div>
+        </div>
+
+        <!-- Strategy Parameters Cards -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px;">
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 10px;">
+            <div style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Crossover Strategy</div>
+            <div style="font-size: 13px; color: #38bdf8; font-weight: 800; margin-top: 4px;">EMA 9 / 15 + Vol</div>
+          </div>
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 10px;">
+            <div style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Volatility Filter</div>
+            <div style="font-size: 13px; color: #fbbf24; font-weight: 800; margin-top: 4px;">Option ATR &gt; 10.0</div>
+          </div>
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 10px;">
+            <div style="font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Risk to Reward</div>
+            <div style="font-size: 13px; color: #a78bfa; font-weight: 800; margin-top: 4px;">1 : 2.25 RR Ratio</div>
+          </div>
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 6px; padding: 10px;">
+            <div style="font-size: 10px; color: #f87171; text-transform: uppercase; font-weight: 700;">Hard Loss Limit</div>
+            <div style="font-size: 13px; color: #ef4444; font-weight: 800; margin-top: 4px;">₹10,000 Total</div>
+          </div>
+        </div>
+
+        <!-- Real-Time Circuit Breaker Monitor -->
+        <div style="background: rgba(14, 17, 23, 0.85); border: 1px solid #232b3b; border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #cbd5e1;">Live Loss &amp; Statutory Charges Tracker</span>
+            <span id="algo-loss-headroom" style="font-size: 11px; color: #10b981; font-weight: 700;">₹10,000.00 Headroom</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 10px;">
+            <div>
+              <div style="font-size: 10.5px; color: #94a3b8;">Realized P&amp;L</div>
+              <div id="algo-realized-pnl" style="font-size: 14px; font-weight: 700; font-family: monospace; color: #cbd5e1; margin-top: 2px;">₹0.00</div>
+            </div>
+            <div>
+              <div style="font-size: 10.5px; color: #94a3b8;">Unrealized MTM</div>
+              <div id="algo-unrealized-pnl" style="font-size: 14px; font-weight: 700; font-family: monospace; color: #cbd5e1; margin-top: 2px;">₹0.00</div>
+            </div>
+            <div>
+              <div style="font-size: 10.5px; color: #94a3b8;">Statutory Charges</div>
+              <div id="algo-statutory-charges" style="font-size: 14px; font-weight: 700; font-family: monospace; color: #f87171; margin-top: 2px;">₹0.00</div>
+            </div>
+            <div>
+              <div style="font-size: 10.5px; color: #94a3b8;">Net Bot P&amp;L</div>
+              <div id="algo-net-pnl" style="font-size: 15px; font-weight: 800; font-family: monospace; color: #38bdf8; margin-top: 2px;">₹0.00</div>
+            </div>
+          </div>
+          <div style="height: 6px; background: #1e293b; border-radius: 999px; overflow: hidden;">
+            <div id="algo-loss-bar" style="width: 0%; height: 100%; background: #10b981; transition: width 0.3s ease, background 0.3s ease;"></div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="display: flex; gap: 10px; margin-bottom: 16px;">
+          <button type="button" id="btn-algo-start" class="btn-primary-choice" style="flex: 1.5; padding: 10px; font-weight: 700;">▶ Start Algo Bot</button>
+          <button type="button" id="btn-algo-stop" class="btn-secondary-choice" style="flex: 1.2; padding: 10px; font-weight: 700;" disabled>⏹ Stop Algo Bot</button>
+          <button type="button" id="btn-algo-squareoff" class="btn-danger-choice" style="flex: 1.2; padding: 10px; font-weight: 700; background: #dc2626; color: white;">🚨 Square Off All</button>
+          <button type="button" id="btn-algo-reset-cb" class="btn-secondary-choice" style="flex: 1; padding: 10px; font-weight: 600;">🔄 Reset Circuit</button>
+        </div>
+
+        <!-- Live Orders Log -->
+        <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #94a3b8; margin-bottom: 8px;">Forward Test Execution Log</div>
+          <div style="max-height: 180px; overflow-y: auto; border: 1px solid #1e293b; border-radius: 6px; background: #0b0f17;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 11px; text-align: left;">
+              <thead>
+                <tr style="border-bottom: 1px solid #1e293b; color: #64748b; font-size: 10px; text-transform: uppercase;">
+                  <th style="padding: 6px 10px;">Time</th>
+                  <th style="padding: 6px 10px;">Symbol</th>
+                  <th style="padding: 6px 10px;">Signal</th>
+                  <th style="padding: 6px 10px;">Entry</th>
+                  <th style="padding: 6px 10px;">SL</th>
+                  <th style="padding: 6px 10px;">TP (1:2.25)</th>
+                  <th style="padding: 6px 10px;">Qty</th>
+                  <th style="padding: 6px 10px;">Status</th>
+                </tr>
+              </thead>
+              <tbody id="algo-trades-tbody">
+                <tr>
+                  <td colspan="8" style="padding: 16px; text-align: center; color: #64748b;">No forward-test orders placed yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 1C. ADMIN KOTAK TOTP & MPIN CONNECT MODAL (Admin Only) -->
   <div id="modal-kotak-connect" class="ex-modal-backdrop hidden">
     <div class="ex-modal-card keys-card">
@@ -2085,6 +2276,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js"></script>
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script src="/static/tradingview-datafeed.js"></script>
   <script src="/static/trade-sounds.js?v=20261111-sfx1"></script>
   <script src="/static/chart-indicators.js?v=20261111-ind2"></script>
   <script src="/static/chart-drawings.js?v=20261111-drw1"></script>

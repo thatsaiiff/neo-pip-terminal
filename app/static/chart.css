@@ -6629,6 +6629,227 @@ tr.closed-row-clickable {
   }
 }
 
+/* ======================== ALGO BOT & TRADINGVIEW ENGINES & FLOATING DOCK ======================== */
+.ex-algo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  color: #10b981;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ex-algo-pill:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: #10b981;
+}
+
+.ex-algo-pill.running {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: #10b981;
+  color: #34d399;
+  animation: algoPulse 2s infinite ease-in-out;
+}
+
+.ex-algo-pill.halted {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+  color: #f87171;
+  animation: algoHaltFlash 1.5s infinite ease-in-out;
+}
+
+@keyframes algoPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50% { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+}
+
+@keyframes algoHaltFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.ex-tv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ex-tv-pill:hover {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: #3b82f6;
+}
+
+.ex-tv-pill.tv-active {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+/* Floating TradingView / Dhan Style Instant Buy/Sell Dock on Chart Canvas */
+.tv-floating-order-dock {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  background: rgba(14, 17, 23, 0.88);
+  border: 1px solid #232b3b;
+  border-radius: 8px;
+  padding: 4px;
+  gap: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  user-select: none;
+}
+
+.tv-dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 82px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tv-dock-sell {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #ef4444;
+}
+
+.tv-dock-sell:hover {
+  background: #dc2626;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.tv-dock-buy {
+  background: rgba(37, 99, 235, 0.18);
+  border: 1px solid rgba(37, 99, 235, 0.5);
+  color: #38bdf8;
+}
+
+.tv-dock-buy:hover {
+  background: #2563eb;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.tv-dock-price {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+}
+
+.tv-dock-lbl {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  opacity: 0.9;
+}
+
+.tv-dock-middle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+}
+
+.tv-dock-spread {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.tv-dock-qty-pill {
+  display: flex;
+  align-items: center;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 3px;
+}
+
+.tv-qty-caret {
+  font-size: 9px;
+  color: #94a3b8;
+  margin-right: 2px;
+}
+
+.tv-qty-input {
+  width: 32px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  color: #f8fafc;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+}
+
+/* TradingView Widget Embed Wrapper */
+.tradingview-widget-wrap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  background: #0e1117;
+}
+
+.tradingview-widget-container {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 768px) {
+  .tv-floating-order-dock {
+    top: 8px;
+    left: 8px;
+    padding: 3px;
+    gap: 4px;
+  }
+  .tv-dock-btn {
+    min-width: 68px;
+    padding: 4px 6px;
+  }
+  .tv-dock-price {
+    font-size: 10.5px;
+  }
+  .tv-dock-lbl {
+    font-size: 8.5px;
+  }
+}
+
 
 
 

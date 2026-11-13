@@ -2194,6 +2194,95 @@ def test_exit_nonexistent_position_returns_404(client, monkeypatch):
     assert "No open position found" in res.json()["detail"]
 
 
+def test_algo_bot_atr_filter_and_crossover_signal():
+    from app.algo_bot import evaluate_crossover_signal
+
+    # Case 1: Low ATR (< 10) -> Should return NONE due to ATR filter
+    low_atr_candles = []
+    base = 100.0
+    for i in range(25):
+        # Range is only 2 points per candle -> ATR << 10
+        low_atr_candles.append({
+            "open": base, "high": base + 1.0, "low": base - 1.0, "close": base + 0.5,
+            "volume": 500,
+        })
+        base += 0.5
+    res = evaluate_crossover_signal(low_atr_candles, fast_period=9, slow_period=15, min_atr=10.0, rr_ratio=2.25)
+    assert res["signal"] == "NONE"
+    assert "ATR filter active" in res["reason"]
+
+    # Case 2: High ATR (> 10) with Bullish EMA 9/15 crossover & high volume -> Should trigger BUY with 1:2.25 RR
+    high_atr_candles = []
+    # 25 flat/declining bars with 15-pt volatility
+    for i in range(25):
+        high_atr_candles.append({
+            "open": 200.0, "high": 215.0, "low": 195.0, "close": 198.0,
+            "volume": 1000,
+        })
+    # Fresh breakout bar crossing fast EMA above slow EMA with 3x volume
+    high_atr_candles.append({
+        "open": 200.0, "high": 235.0, "low": 198.0, "close": 230.0,
+        "volume": 4500,
+    })
+    sig = evaluate_crossover_signal(high_atr_candles, fast_period=9, slow_period=15, min_atr=10.0, rr_ratio=2.25)
+    assert sig["signal"] == "BUY"
+    assert sig["rr_ratio"] == 2.25
+    assert abs(sig["reward"] - sig["risk"] * 2.25) <= 0.05
+    assert sig["tp_price"] > sig["entry_price"]
+    assert sig["sl_price"] < sig["entry_price"]
+
+
+def test_algo_bot_circuit_breaker_halts_at_10k_loss(client, monkeypatch):
+    from app.algo_bot import QuantitativeAlgoBot
+
+    squared_off = []
+    def fake_square_off():
+        squared_off.append(True)
+
+    bot = QuantitativeAlgoBot(
+        db_conn_factory=main.db,
+        executor_fn=lambda p: {"ok": True},
+        square_off_all_fn=fake_square_off,
+    )
+    bot.config.max_loss_limit = 10000.0
+
+    # Mock P&L with ₹10,500 total loss (including charges)
+    monkeypatch.setattr(
+        bot,
+        "compute_current_pnl_with_charges",
+        lambda: {"realized_net": -9800.0, "unrealized_mtm": -400.0, "charges": 300.0, "net_pnl": -10200.0},
+    )
+
+    is_halted = bot.check_circuit_breaker()
+    assert is_halted is True
+    assert bot.status == "HALTED_MAX_LOSS"
+    assert bot.circuit_breaker_triggered is True
+    assert "CRITICAL CIRCUIT BREAKER TRIPPED" in (bot.halt_reason or "")
+    assert len(squared_off) == 1
+
+    # Reset circuit breaker
+    reset_res = bot.reset_circuit_breaker()
+    assert reset_res["ok"] is True
+    assert bot.circuit_breaker_triggered is False
+    assert bot.status == "STOPPED"
+
+
+def test_algo_api_endpoints(client):
+    status_res = client.get("/api/algo/status")
+    assert status_res.status_code == 200
+    st = status_res.json()
+    assert "status" in st
+    assert st["config"]["atr_threshold"] == 10.0
+    assert st["config"]["rr_ratio"] == 2.25
+    assert st["config"]["max_loss_limit"] == 10000.0
+
+    # Config update
+    cfg_res = client.post("/api/algo/config", json={"fast_ema": 9, "slow_ema": 15, "rr_ratio": 2.25})
+    assert cfg_res.status_code == 200
+    assert cfg_res.json()["rr_ratio"] == 2.25
+
+
+
 
 
 

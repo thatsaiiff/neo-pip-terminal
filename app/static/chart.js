@@ -2262,6 +2262,18 @@
       chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
     }
 
+    // Update floating TradingView Buy/Sell Dock
+    const dockPrefix = `p${pane.idx + 1}-tv`;
+    const sellPriceEl = $(`${dockPrefix}-sell-price`);
+    const buyPriceEl = $(`${dockPrefix}-buy-price`);
+    const spreadEl = $(`${dockPrefix}-spread`);
+    const bidPrice = Number(quote.bid || quote.best_bid || ltp);
+    const askPrice = Number(quote.ask || quote.best_ask || ltp);
+    const spreadVal = Math.max(0, askPrice - bidPrice);
+    if (sellPriceEl) sellPriceEl.textContent = bidPrice.toFixed(decs);
+    if (buyPriceEl) buyPriceEl.textContent = askPrice.toFixed(decs);
+    if (spreadEl) spreadEl.textContent = spreadVal.toFixed(decs);
+
     if (pane.idx === activePaneIdx) {
       updateOrderFormPrices(ltp);
     }
@@ -2281,6 +2293,7 @@
     const paneEl = $(pane.id);
     const segBadge = paneEl ? paneEl.querySelector('.pane-seg') : null;
     const ikey = String((data && data.instrument_key) || pane.token || '');
+    pane.token = ikey;
     const isOptResolved = Boolean(data && data.is_option) || isOptionSymbol(pane.sym) || ikey.includes('NSE_FO|') || ikey.includes('BSE_FO|');
     const isFxResolved = Boolean(data && data.is_forex) || isForexSym(pane.sym) || ikey.startsWith('FOREX|');
     pane.isOption = !isFxResolved && (isOptionSymbol(pane.sym) || isOptResolved);
@@ -7860,6 +7873,398 @@
     });
   }
 
+  // --- Floating TradingView / Dhan Style 1-Tap Trading Dock ---
+  function setupFloatingOrderDocks() {
+    [0, 1, 2].forEach(idx => {
+      const pNum = idx + 1;
+      const sellBtn = $(`p${pNum}-tv-sell-btn`);
+      const buyBtn = $(`p${pNum}-tv-buy-btn`);
+      const qtyInput = $(`p${pNum}-tv-qty-input`);
+
+      const executeQuickTvOrder = async (side) => {
+        const pane = panes[idx];
+        if (!pane || !pane.sym) return;
+        const sym = pane.sym;
+        if (isIndexSpotSymbol(sym, pane.token)) {
+          toast('Index spot cannot be bought or sold directly — select an Option (CE/PE) or Stock');
+          return;
+        }
+
+        const lotCount = Math.max(1, parseInt((qtyInput && qtyInput.value) || '1', 10));
+        const lotSz = getSymbolLotSize(sym);
+        const totalQty = lotCount * lotSz;
+
+        const isFx = isForexSym(sym);
+        const ltp = Number(pane.lastLtp || 0);
+        const roundedPrice = roundToTick(ltp, isFx ? 0.0001 : 0.05) || ltp;
+
+        const seg = isFx ? 'forex' : inferOrderExchangeSegment(sym, pane.token);
+        const payload = {
+          symbol: sym,
+          transaction_type: side,
+          order_type: 'MKT',
+          quantity: totalQty,
+          price: roundedPrice,
+          product: 'MIS',
+          exchange_segment: seg,
+          instrument_token: pane.token || '',
+        };
+
+        try {
+          if (typeof playSoundFx === 'function') playSoundFx('order_submit');
+          toast(`⚡ Placing 1-Tap ${side} ${totalQty} ${sym}...`);
+          const res = await fetch('/api/orders', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.status === 'success' || data.order_id)) {
+            toast(`✅ 1-Tap ${side} filled for ${totalQty} ${sym}!`);
+            if (typeof playSoundFx === 'function') playSoundFx('order_fill');
+            fetchPositionsAndOrders();
+          } else {
+            const errMsg = data.detail || data.message || 'Order rejected';
+            toast(`❌ 1-Tap Order Failed: ${errMsg}`);
+            if (typeof playSoundFx === 'function') playSoundFx('order_reject');
+          }
+        } catch (err) {
+          toast(`❌ Order failed: ${err.message}`);
+        }
+      };
+
+      if (sellBtn && !sellBtn.dataset.bound) {
+        sellBtn.dataset.bound = '1';
+        sellBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          executeQuickTvOrder('SELL');
+        });
+      }
+      if (buyBtn && !buyBtn.dataset.bound) {
+        buyBtn.dataset.bound = '1';
+        buyBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          executeQuickTvOrder('BUY');
+        });
+      }
+    });
+  }
+
+  // --- Quantitative Algo Bot Control Center ---
+  let _algoPollInterval = null;
+
+  function setupAlgoBotModal() {
+    const btnAlgo = $('btn-algo-bot');
+    const modal = $('modal-algo-bot');
+    const btnClose = $('btn-close-algo-modal');
+    const btnStart = $('btn-algo-start');
+    const btnStop = $('btn-algo-stop');
+    const btnSquareOff = $('btn-algo-squareoff');
+    const btnResetCb = $('btn-algo-reset-cb');
+
+    const updateAlgoUiFromStatus = (st) => {
+      if (!st) return;
+      const statusPill = $('algo-pill-status');
+      const algoPill = $('btn-algo-bot');
+      const statusBadge = $('algo-status-badge');
+      const statusSub = $('algo-status-sub');
+      const statusReason = $('algo-status-reason');
+      const cbStateText = $('algo-cb-state-text');
+      const realizedEl = $('algo-realized-pnl');
+      const unrealizedEl = $('algo-unrealized-pnl');
+      const chargesEl = $('algo-statutory-charges');
+      const netEl = $('algo-net-pnl');
+      const lossBar = $('algo-loss-bar');
+      const headroomEl = $('algo-loss-headroom');
+
+      const isRunning = Boolean(st.running);
+      const isHalted = Boolean(st.circuit_breaker_halted);
+      const netLoss = Number(st.net_pnl || 0);
+      const maxLoss = Number((st.config && st.config.max_loss_limit) || 10000);
+      const remaining = Math.max(0, maxLoss + netLoss);
+
+      if (statusPill) {
+        if (isHalted) statusPill.textContent = 'ALGO: HALTED';
+        else if (isRunning) statusPill.textContent = 'ALGO: RUNNING';
+        else statusPill.textContent = 'ALGO: OFF';
+      }
+      if (algoPill) {
+        algoPill.classList.toggle('running', isRunning && !isHalted);
+        algoPill.classList.toggle('halted', isHalted);
+      }
+
+      if (statusBadge) {
+        statusBadge.textContent = isHalted ? 'CIRCUIT HALTED' : (isRunning ? 'ACTIVE' : 'IDLE');
+        statusBadge.className = `algo-tag ${isHalted ? 'halted' : (isRunning ? 'running' : 'idle')}`;
+      }
+      if (statusSub) statusSub.textContent = isHalted ? 'Hard Stop Hit (-₹10,000)' : (isRunning ? 'Live Forward Scanning' : 'Ready to Scan');
+      if (statusReason) statusReason.textContent = st.last_reason || (isRunning ? 'Scanning option chains & ATR signals' : 'Bot stopped.');
+
+      if (cbStateText) {
+        if (isHalted) {
+          cbStateText.textContent = 'TRIPPED (Halted)';
+          cbStateText.style.color = '#ef4444';
+        } else {
+          cbStateText.textContent = `ARMED (₹${maxLoss.toLocaleString('en-IN')} max)`;
+          cbStateText.style.color = '#10b981';
+        }
+      }
+
+      if (realizedEl) realizedEl.textContent = `₹${Number(st.realized_pnl || 0).toFixed(2)}`;
+      if (unrealizedEl) unrealizedEl.textContent = `₹${Number(st.unrealized_pnl || 0).toFixed(2)}`;
+      if (chargesEl) chargesEl.textContent = `₹${Number(st.statutory_charges || 0).toFixed(2)}`;
+      if (netEl) {
+        netEl.textContent = `₹${netLoss.toFixed(2)}`;
+        netEl.style.color = netLoss >= 0 ? '#10b981' : (netLoss <= -8000 ? '#ef4444' : '#f59e0b');
+      }
+
+      const lossPct = Math.min(100, Math.max(0, (Math.abs(Math.min(0, netLoss)) / maxLoss) * 100));
+      if (lossBar) {
+        lossBar.style.width = `${lossPct}%`;
+        lossBar.style.background = lossPct >= 80 ? '#ef4444' : (lossPct >= 50 ? '#f59e0b' : '#10b981');
+      }
+      if (headroomEl) {
+        headroomEl.textContent = `₹${remaining.toFixed(2)} Headroom`;
+        headroomEl.style.color = remaining <= 2000 ? '#ef4444' : '#10b981';
+      }
+
+      if (btnStart) btnStart.disabled = isRunning;
+      if (btnStop) btnStop.disabled = !isRunning;
+    };
+
+    const fetchAlgoStatus = async () => {
+      try {
+        const res = await fetch('/api/algo/status', {
+          headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+        });
+        if (res.ok) {
+          const st = await res.json();
+          updateAlgoUiFromStatus(st);
+        }
+      } catch (_) {}
+    };
+
+    const fetchAlgoTrades = async () => {
+      const tbody = $('algo-trades-tbody');
+      if (!tbody) return;
+      try {
+        const res = await fetch('/api/algo/trades?limit=25', {
+          headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const trades = data.trades || [];
+          if (!trades.length) {
+            tbody.innerHTML = '<tr><td colspan="8" style="padding: 16px; text-align: center; color: #64748b;">No forward-test orders placed yet.</td></tr>';
+            return;
+          }
+          tbody.innerHTML = trades.map(t => `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <td style="padding: 6px 10px; color: #94a3b8;">${new Date(t.timestamp * 1000).toLocaleTimeString()}</td>
+              <td style="padding: 6px 10px; font-weight: 700; color: #f8fafc;">${t.symbol}</td>
+              <td style="padding: 6px 10px; font-weight: 800; color: ${t.signal === 'BUY' ? '#38bdf8' : '#ef4444'};">${t.signal}</td>
+              <td style="padding: 6px 10px; font-family: monospace;">₹${Number(t.entry_price || 0).toFixed(2)}</td>
+              <td style="padding: 6px 10px; font-family: monospace; color: #ef4444;">₹${Number(t.sl_price || 0).toFixed(2)}</td>
+              <td style="padding: 6px 10px; font-family: monospace; color: #10b981;">₹${Number(t.tp_price || 0).toFixed(2)}</td>
+              <td style="padding: 6px 10px;">${t.quantity}</td>
+              <td style="padding: 6px 10px;"><span style="font-size: 10px; padding: 2px 6px; border-radius: 3px; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">${t.status || 'SUBMITTED'}</span></td>
+            </tr>
+          `).join('');
+        }
+      } catch (_) {}
+    };
+
+    if (btnAlgo) {
+      btnAlgo.addEventListener('click', () => {
+        if (modal) modal.classList.remove('hidden');
+        fetchAlgoStatus();
+        fetchAlgoTrades();
+        if (!_algoPollInterval) {
+          _algoPollInterval = setInterval(() => {
+            fetchAlgoStatus();
+            fetchAlgoTrades();
+          }, 1500);
+        }
+      });
+    }
+
+    if (btnClose) {
+      btnClose.addEventListener('click', () => {
+        if (modal) modal.classList.add('hidden');
+        if (_algoPollInterval) {
+          clearInterval(_algoPollInterval);
+          _algoPollInterval = null;
+        }
+      });
+    }
+
+    if (btnStart) {
+      btnStart.addEventListener('click', async () => {
+        try {
+          toast('🤖 Starting Quantitative Algo Bot...');
+          const res = await fetch('/api/algo/start', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify({ mode: 'forward_test' })
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            toast('✅ Algo Bot started in Forward Test mode (EMA 9/15, ATR>10, 1:2.25 RR)!');
+            fetchAlgoStatus();
+          } else {
+            toast(`❌ Failed to start algo: ${data.detail || data.reason || 'Error'}`);
+          }
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
+
+    if (btnStop) {
+      btnStop.addEventListener('click', async () => {
+        try {
+          toast('⏹ Stopping Algo Bot...');
+          const res = await fetch('/api/algo/stop', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify({ square_off: false })
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            toast('⏹ Algo Bot stopped.');
+            fetchAlgoStatus();
+          }
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
+
+    if (btnSquareOff) {
+      btnSquareOff.addEventListener('click', async () => {
+        if (!confirm('Emergency Square Off All Algo Positions and Halt?')) return;
+        try {
+          toast('🚨 Squaring off all positions...');
+          const res = await fetch('/api/algo/stop', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify({ square_off: true })
+          });
+          toast('🚨 All positions squared off & Algo halted.');
+          fetchAlgoStatus();
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
+
+    if (btnResetCb) {
+      btnResetCb.addEventListener('click', async () => {
+        try {
+          const res = await fetch('/api/algo/reset-circuit-breaker', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            }
+          });
+          toast('🔄 Circuit breaker reset to active state.');
+          fetchAlgoStatus();
+        } catch (err) {
+          toast(`❌ ${err.message}`);
+        }
+      });
+    }
+
+    // Background poll every 5s for the header pill
+    setInterval(fetchAlgoStatus, 5000);
+  }
+
+  // --- Official TradingView vs Pro PIP Chart Switcher ---
+  let _currentChartEngine = 'pro';
+
+  function setupChartEngineToggle() {
+    const btn = $('btn-chart-engine');
+    const label = $('engine-pill-status');
+    if (!btn) return;
+
+    btn.addEventListener('click', () => {
+      _currentChartEngine = _currentChartEngine === 'pro' ? 'tv' : 'pro';
+      btn.classList.toggle('tv-active', _currentChartEngine === 'tv');
+      if (label) label.textContent = _currentChartEngine === 'tv' ? 'TRADINGVIEW' : 'PRO PIP';
+
+      [0, 1, 2].forEach(idx => {
+        const wrap = $(`p${idx + 1}-tv-widget-wrap`);
+        const canvasContainer = $(`p${idx + 1}-chart-container`);
+        if (_currentChartEngine === 'tv') {
+          if (wrap) wrap.classList.remove('hidden');
+          if (canvasContainer) canvasContainer.style.visibility = 'hidden';
+          loadTradingViewWidgetForPane(panes[idx]);
+        } else {
+          if (wrap) wrap.classList.add('hidden');
+          if (canvasContainer) canvasContainer.style.visibility = 'visible';
+          resizePaneChart(panes[idx]);
+        }
+      });
+      toast(`Switched chart engine to ${_currentChartEngine === 'tv' ? 'Official TradingView' : 'Pro PIP Canvas'}`);
+    });
+  }
+
+  function loadTradingViewWidgetForPane(pane) {
+    if (!pane) return;
+    const containerId = `p${pane.idx + 1}-tv-widget-container`;
+    const container = $(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (typeof TradingView === 'undefined' || typeof TradingView.widget !== 'function') {
+      container.innerHTML = '<div style="padding: 24px; color: #94a3b8; font-size: 12px; text-align: center;">Loading TradingView Advanced Chart...</div>';
+      return;
+    }
+
+    const sym = String(pane.sym || 'NIFTY').toUpperCase();
+    let tvSym = 'NSE:NIFTY';
+    if (sym.includes('BANKNIFTY')) tvSym = 'NSE:BANKNIFTY';
+    else if (sym.includes('SENSEX')) tvSym = 'BSE:SENSEX';
+    else if (sym.includes('FINNIFTY')) tvSym = 'NSE:FINNIFTY';
+    else if (sym.includes('EURUSD')) tvSym = 'FX:EURUSD';
+    else if (sym.includes('BTC')) tvSym = 'BINANCE:BTCUSDT';
+    else if (sym.includes('RELIANCE')) tvSym = 'NSE:RELIANCE';
+    else tvSym = `NSE:${sym}`;
+
+    try {
+      new TradingView.widget({
+        autosize: true,
+        symbol: tvSym,
+        interval: pane.tf ? (pane.tf.replace('m', '') || '1') : '1',
+        timezone: 'Asia/Kolkata',
+        theme: 'dark',
+        style: '1',
+        locale: 'en',
+        toolbar_bg: '#0e1117',
+        enable_publishing: false,
+        hide_top_toolbar: false,
+        hide_legend: false,
+        save_image: false,
+        container_id: containerId,
+      });
+    } catch (e) {
+      console.warn('[TradingView] Failed to initialize widget:', e);
+    }
+  }
+
   // --- Bootloader ---
   window.addEventListener('DOMContentLoaded', () => {
     if (typeof window.resetViewportZoomTo100 === 'function') {
@@ -7893,6 +8298,9 @@
     setupGuestProfileModal();
     setupOptQuickButtons();
     setupMobileFlow();
+    setupFloatingOrderDocks();
+    setupAlgoBotModal();
+    setupChartEngineToggle();
     syncTradeButtonsForActivePane();
     updateTzBadgeUI();
     updatePaneCountdowns();

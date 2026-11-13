@@ -221,7 +221,7 @@
     }
 
     // Indices typically have 0 reported volume: do not fabricate fake Volume Profile bars on index spot.
-    if (isIndex || !hasRealVol) {
+    if (isIndex) {
       return {
         bins: [],
         pocPrice: null,
@@ -237,8 +237,13 @@
         endTime: candlesSlice[candlesSlice.length - 1].time,
         usedSyntheticActivity: false,
         noVolumeData: true,
+        isIndex: true,
       };
     }
+
+    // For options (CE/PE) & individual stocks: if exchange volume was 0 or omitted in tick feed,
+    // synthesize activity volume from candle price volatility so Volume Profile ALWAYS renders cleanly.
+    const useSyntheticVol = !hasRealVol;
 
     if (maxP <= minP) {
       const pad = Math.max(0.05, Math.abs(minP) * 0.001);
@@ -266,7 +271,11 @@
       const lo = Number(c.low);
       const op = Number(c.open);
       const cl = Number(c.close);
-      const effVol = Math.max(0, Number(c.volume || 0));
+      let effVol = Math.max(0, Number(c.volume || 0));
+      if (useSyntheticVol || effVol <= 0) {
+        const rng = Math.abs(hi - lo);
+        effVol = Math.max(10, Math.round(rng > 0 ? rng * 250 : 50));
+      }
       if (effVol <= 0 || !Number.isFinite(hi) || !Number.isFinite(lo)) continue;
 
       const startBin = Math.max(0, Math.min(nBins - 1, Math.floor((lo - minP) / binSize)));
@@ -369,6 +378,8 @@
       valueAreaPct: vaPct,
       startTime: candlesSlice[0].time,
       endTime: candlesSlice[candlesSlice.length - 1].time,
+      highPrice: maxP,
+      lowPrice: minP,
       usedSyntheticActivity: !hasRealVol,
     };
   }
@@ -480,29 +491,29 @@
       const sellAlpha = b.isPoc ? 0.85 : (b.inValueArea ? 0.62 : 0.24);
 
       if (isSessionMode) {
-        // Grow from left edge of session rightward
-        ctx.fillStyle = `rgba(0, 196, 140, ${buyAlpha})`;
+        // Grow from left edge of session rightward (Classic TradingView Blue & Gold)
+        ctx.fillStyle = `rgba(41, 98, 255, ${buyAlpha})`;
         ctx.fillRect(xLeft, y, buyW, h);
-        ctx.fillStyle = `rgba(255, 79, 94, ${sellAlpha})`;
+        ctx.fillStyle = `rgba(255, 183, 3, ${sellAlpha})`;
         ctx.fillRect(xLeft + buyW, y, sellW, h);
       } else {
         // Grow from right price scale edge leftward (TradingView VPVR style)
-        ctx.fillStyle = `rgba(0, 196, 140, ${buyAlpha})`;
+        ctx.fillStyle = `rgba(41, 98, 255, ${buyAlpha})`;
         ctx.fillRect(xRight - (buyW + sellW), y, buyW, h);
-        ctx.fillStyle = `rgba(255, 79, 94, ${sellAlpha})`;
+        ctx.fillStyle = `rgba(255, 183, 3, ${sellAlpha})`;
         ctx.fillRect(xRight - sellW, y, sellW, h);
       }
 
       if (b.isPoc) {
         const pocBarW = buyW + sellW;
         const pocBarX = isSessionMode ? xLeft : (xRight - pocBarW);
-        ctx.strokeStyle = 'rgba(255, 183, 3, 0.9)';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(249, 115, 22, 0.95)';
+        ctx.lineWidth = 1.2;
         ctx.strokeRect(pocBarX, y, Math.max(2, pocBarW), h);
       }
     }
 
-    const drawLevelLine = (price, color, labelPrefix, dashPattern, lineWidth, alignRightLabel) => {
+    const drawLevelLine = (price, color, labelPrefix, dashPattern, lineWidth, alignRightLabel, badgeBg = null) => {
       if (price === null || !Number.isFinite(price)) return;
       const y = pane.candleSeries.priceToCoordinate(price);
       if (y === null || y < 6 || y > ctx.canvas.clientHeight - 6) return;
@@ -517,27 +528,36 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const txt = `${labelPrefix} ${Number(price).toFixed(decimals)}`;
-      ctx.font = '600 9.5px "DM Mono", monospace';
-      const tw = ctx.measureText(txt).width + 10;
-      const lx = alignRightLabel ? Math.max(xLeft + 4, xRight - tw - 6) : xLeft + 6;
-      const ly = Math.max(10, Math.min(ctx.canvas.clientHeight - 16, y - 14));
+      const pStr = Number(price).toFixed(decimals);
+      const txt = labelPrefix ? `${labelPrefix} ${pStr}` : pStr;
+      ctx.font = '600 10px "DM Mono", monospace';
+      const tw = ctx.measureText(txt).width + 12;
+      const lx = alignRightLabel ? Math.max(xLeft + 4, xRight - tw - 4) : xLeft + 6;
+      const ly = Math.max(8, Math.min(ctx.canvas.clientHeight - 18, y - 7));
 
-      ctx.fillStyle = 'rgba(14, 17, 23, 0.9)';
+      ctx.fillStyle = badgeBg || 'rgba(14, 17, 23, 0.92)';
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
-      ctx.fillRect(lx, ly, tw, 13);
-      ctx.strokeRect(lx, ly, tw, 13);
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(lx, ly, tw, 15, 3) : ctx.rect(lx, ly, tw, 15);
+      ctx.fill();
+      ctx.stroke();
 
-      ctx.fillStyle = color;
-      ctx.fillText(txt, lx + 5, ly + 9.5);
+      ctx.fillStyle = badgeBg ? '#ffffff' : color;
+      ctx.fillText(txt, lx + 6, ly + 11);
       ctx.restore();
     };
 
-    // Distinct Value Area High, Value Area Low, and Point of Control lines + labels
-    drawLevelLine(prof.vahPrice, '#38bdf8', `VAH (${prof.valueAreaPct}%)`, [4, 3], 1.2, !isSessionMode);
-    drawLevelLine(prof.valPrice, '#a78bfa', 'VAL', [4, 3], 1.2, !isSessionMode);
-    drawLevelLine(prof.pocPrice, '#ffb703', 'POC', [], 1.8, !isSessionMode);
+    // TradingView / Dhan Style Level Badges & Lines
+    if (prof.highPrice !== undefined && prof.highPrice !== null) {
+      drawLevelLine(prof.highPrice, '#2563eb', 'High', [2, 2], 1, !isSessionMode, '#1d4ed8');
+    }
+    drawLevelLine(prof.vahPrice, '#ef4444', '', [3, 2], 1.2, !isSessionMode, '#dc2626');
+    drawLevelLine(prof.pocPrice, '#f59e0b', 'Avg', [], 1.8, !isSessionMode, '#b45309');
+    drawLevelLine(prof.valPrice, '#38bdf8', '', [3, 2], 1.2, !isSessionMode, '#0284c7');
+    if (prof.lowPrice !== undefined && prof.lowPrice !== null) {
+      drawLevelLine(prof.lowPrice, '#2563eb', 'Low', [2, 2], 1, !isSessionMode, '#1d4ed8');
+    }
   }
 
   function renderVolumeProfile(pane, vpData, opts = {}) {
@@ -573,10 +593,10 @@
     ctx.clearRect(0, 0, cssW, cssH);
 
     if (!vpData || vpData.noVolumeData || !vpData.profiles || !vpData.profiles.length) {
-      if (vpData && vpData.noVolumeData) {
+      if (vpData && vpData.noVolumeData && vpData.isIndex) {
         ctx.save();
         ctx.font = '600 10px "DM Mono", monospace';
-        const note = 'VP: No volume data (Index)';
+        const note = 'VP: Index spot has no volume data';
         const nw = ctx.measureText(note).width + 14;
         ctx.fillStyle = 'rgba(14, 17, 23, 0.85)';
         ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';

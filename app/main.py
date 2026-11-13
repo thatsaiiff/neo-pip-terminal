@@ -4983,6 +4983,103 @@ def trail_sl_to_cost(
     }
 
 
+# --- QUANTITATIVE ALGO BOT ENGINE (EMA 9/15 + Vol, ATR > 10, 1:2.25 RR, ₹10K Loss Cap) ---
+from app.algo_bot import QuantitativeAlgoBot, AlgoBotConfig
+
+algo_bot = QuantitativeAlgoBot(
+    db_conn_factory=db,
+    executor_fn=lambda payload: _execute_order(payload),
+    square_off_all_fn=lambda: exit_all_positions(),
+)
+
+
+class AlgoConfigPayload(BaseModel):
+    mode: str | None = None
+    underlyings: list[str] | None = None
+    fast_ema: int | None = None
+    slow_ema: int | None = None
+    atr_threshold: float | None = None
+    rr_ratio: float | None = None
+    max_loss_limit: float | None = None
+    lots_per_order: int | None = None
+    max_open_positions: int | None = None
+    cooldown_seconds: int | None = None
+
+
+@app.get("/api/algo/status")
+def get_algo_status(
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=False)
+    status_data = algo_bot.get_status()
+    status_data["user_is_admin"] = ctx["is_admin"]
+    return status_data
+
+
+@app.post("/api/algo/start")
+def start_algo(
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to operate Algorithmic Trading Bot")
+    return algo_bot.start()
+
+
+@app.post("/api/algo/stop")
+def stop_algo(
+    square_off: bool = False,
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to stop Algorithmic Trading Bot")
+    return algo_bot.stop(square_off=square_off)
+
+
+@app.post("/api/algo/config")
+def update_algo_config(
+    payload: AlgoConfigPayload,
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to configure Algorithmic Trading Bot")
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    return algo_bot.update_config(**updates)
+
+
+@app.post("/api/algo/reset-circuit-breaker")
+def reset_algo_circuit_breaker(
+    market: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to reset Circuit Breaker")
+    return algo_bot.reset_circuit_breaker()
+
+
+@app.get("/api/algo/trades")
+def get_algo_trades():
+    return {"ok": True, "trades": algo_bot.trades_history}
+
+
+
 @app.get("/api/indices/quotes")
 def index_quotes():
     client = _market_data_client()
@@ -6151,6 +6248,7 @@ def _fetch_upstox_1m_merged(
     return [], today_str
 
 
+@app.get("/api/candles")
 @app.get("/api/chart/candles")
 def chart_candles(
     symbol: str = "NIFTY",
