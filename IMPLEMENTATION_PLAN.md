@@ -1,4 +1,6 @@
 # Implementation Plan: Production Hardening
+
+> Historical plan from November 11, 2026. Later repository changes supersede its remaining work items; see [docs/DEPLOYMENT_AUDIT.md](docs/DEPLOYMENT_AUDIT.md) for the current release state.
 **Project:** Kotak Neo PIP Trading Terminal  
 **Date:** November 11, 2026  
 **Execution Methodology:** Incremental Test-Driven Implementation (Non-Destructive)

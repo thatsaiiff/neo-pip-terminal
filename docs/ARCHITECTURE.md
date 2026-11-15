@@ -1,4 +1,6 @@
-# System Architecture — Neo PIP Trading Ticket
+# System Architecture — Neo PIP Trading and Research
+
+> Deployment topology updated for release 0.2.1. The November 11 local-only audit files are historical; see [Deployment Audit](DEPLOYMENT_AUDIT.md) for the current hosted findings and rollout state.
 
 ## 1. Component diagram
 
@@ -23,13 +25,15 @@
                                                └────────────┘ └────────────┘
 ```
 
+Hosted path: browser → Vercel static frontend → Vercel `/api/proxy` function → HTTPS Caddy on Oracle → private FastAPI/Rust backend → SQLite and broker APIs.
+
 ## 2. Trust boundaries
 
 - Browser content script runs on configured Kotak domains and reads visible DOM candidate text only. It does not read browser cookies or broker session storage.
 - Extension service worker can call the explicitly permitted loopback bridge endpoint. Bridge requests require `X-Bridge-Token`.
-- UI is served from the loopback FastAPI process. The process rejects non-local host/origin requests and is not intended for remote exposure.
+- Local UI is served from the loopback FastAPI process. Hosted UI is served by Vercel and API traffic is forwarded to Oracle through the HTTPS proxy.
 - Broker credentials and SDK session live in the Python backend process, not JavaScript.
-- SQLite stores orders/audit data but no consumer key, MPIN, TOTP or session token.
+- SQLite stores orders/audit data and session tokens, but no consumer key, MPIN or TOTP. Restrict database and backup access.
 
 ## 3. Core runtime flows
 
@@ -67,4 +71,6 @@ Consumer key, mobile and UCC are loaded from local `.env`. TOTP and MPIN are sub
 
 ## 6. Deployment stance
 
-Single-user desktop-only local deployment. Do not deploy this service to a public IP, reverse proxy, tunnel, shared machine or hosted cloud without a separate security architecture, authentication, CSRF strategy and broker policy review.
+Local mode serves the backend on loopback. Hosted mode serves static pages through Vercel, routes `/api/*` through a serverless HTTPS proxy, and runs FastAPI + Rust/PyO3 on an Oracle VM behind Caddy TLS. Port 8000 remains private to the Docker network. The VM holds broker credentials and SQLite data; Vercel holds only static frontend assets and the backend origin setting.
+
+The hosted release is single-operator for live Kotak execution. It still needs deployment review, a valid public TLS certificate for either a hostname or reserved IP, configured owner credentials, and restricted Oracle VCN ingress. The process has software-managed exits; production updates must not restart it during an active position.

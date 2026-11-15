@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "neo-pip-rust-execution"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Rust and PyO3 execution core for Neo PIP"
+
+[tool.maturin]
+manifest-path = "rust/neo_execution/Cargo.toml"
+python-source = "."
+module-name = "app.execution._neo_exec"
+features = ["pyo3/extension-module"]

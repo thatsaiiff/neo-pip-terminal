@@ -1,6 +1,9 @@
 {
   "name": "kotak-neo-pip-terminal",
   "version": "2.0.0",
+  "engines": {
+    "node": "22.x"
+  },
   "description": "Kotak Neo PIP Trading Terminal — Mobile App (iOS IPA & Android APK)",
   "scripts": {
     "cap:sync": "npx cap sync",

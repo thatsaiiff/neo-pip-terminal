@@ -5,6 +5,21 @@ if (-not (Test-Path '.venv')) { python -m venv .venv }
 & .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+if ((Get-Command rustc -ErrorAction SilentlyContinue) -and (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command maturin -ErrorAction SilentlyContinue)) {
+        python -m pip install 'maturin>=1.8,<2.0'
+    }
+    if ($LASTEXITCODE -eq 0) {
+        maturin develop --manifest-path rust/neo_execution/Cargo.toml --locked
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host 'Rust execution module is ready.'
+    } else {
+        Write-Warning 'Rust module build failed. Paper and research modes remain available; live Kotak order mutations are disabled.'
+    }
+} else {
+    Write-Warning 'Rust toolchain not found. Paper and research modes remain available; live Kotak order mutations are disabled. Install Rust, then run maturin develop --manifest-path rust/neo_execution/Cargo.toml.'
+}
 if (-not (Test-Path '.env')) { Copy-Item '.env.example' '.env'; Write-Host 'Created .env from .env.example. Review it before connecting Kotak Neo.' }
 New-Item -ItemType Directory -Force -Path 'data' | Out-Null
 Write-Host 'Neo PIP local service: http://127.0.0.1:8000'

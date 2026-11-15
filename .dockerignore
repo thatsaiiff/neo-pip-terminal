@@ -9,7 +9,17 @@ __pycache__
 htmlcov
 .git
 .gitignore
+.env
+.env.*
+!.env.example
 .agents
+.vercel
+public
+node_modules
 dist
+target
+data
+logs
+reports
 *.log
 .DS_Store

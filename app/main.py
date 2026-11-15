@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import ipaddress
 import math
@@ -14,6 +16,7 @@ import time
 import asyncio
 import uuid
 import zoneinfo
+from decimal import Decimal
 from contextlib import asynccontextmanager
 from datetime import datetime, time as dt_time, timezone, timedelta
 from pathlib import Path
@@ -36,7 +39,7 @@ from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from app.accounting import (
     init_accounting_db,
     process_execution,
@@ -48,6 +51,11 @@ from app.accounting import (
     rebuild_accounting_ledger,
     calculate_statutory_charges,
     compute_trade_metrics,
+)
+from app.execution import (
+    dispatch_kotak_mutation,
+    is_rust_execution_available,
+    rust_execution_status,
 )
 
 IST_TZ = zoneinfo.ZoneInfo("Asia/Kolkata")
@@ -170,6 +178,83 @@ def init_db() -> None:
             tp_price REAL,
             status TEXT NOT NULL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS algo_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            option_type TEXT NOT NULL,
+            instrument_key TEXT NOT NULL,
+            exchange_segment TEXT NOT NULL,
+            product TEXT NOT NULL,
+            entry_time TEXT NOT NULL,
+            signal_bar_time TEXT,
+            entry_price REAL NOT NULL,
+            quantity INTEGER NOT NULL,
+            lot_size INTEGER NOT NULL,
+            sl_price REAL,
+            tp_price REAL,
+            trailing_dist REAL,
+            status TEXT NOT NULL,
+            order_id TEXT,
+            exit_order_id TEXT,
+            exit_submitted_at TEXT,
+            exit_time TEXT,
+            exit_price REAL,
+            gross_pnl REAL NOT NULL DEFAULT 0,
+            charges REAL NOT NULL DEFAULT 0,
+            net_pnl REAL NOT NULL DEFAULT 0,
+            exit_reason TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS algo_risk_state (
+            state_key TEXT PRIMARY KEY,
+            peak_equity REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS algo_session_days (
+            strategy_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, account_id, trade_date)
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS algo_backtest_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            underlying TEXT NOT NULL,
+            option_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            instrument_key TEXT NOT NULL,
+            requested_days INTEGER NOT NULL,
+            candle_count INTEGER NOT NULL DEFAULT 0,
+            data_start TEXT,
+            data_end TEXT,
+            settings_json TEXT NOT NULL,
+            report_json TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS research_backtest_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            data_source_label TEXT NOT NULL,
+            settings_json TEXT NOT NULL,
+            report_json TEXT NOT NULL
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS research_shares (
+            token_hash TEXT PRIMARY KEY,
+            run_id INTEGER NOT NULL,
+            account_id TEXT NOT NULL,
+            strategy_id TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES research_backtest_runs(id) ON DELETE CASCADE
+        )""")
+        share_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(research_shares)").fetchall()}
+        if "strategy_id" not in share_columns:
+            conn.execute("ALTER TABLE research_shares ADD COLUMN strategy_id TEXT")
         conn.execute("""CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
@@ -205,6 +290,11 @@ def init_db() -> None:
             ("sltp_rules", "account_id", "TEXT NOT NULL DEFAULT 'KOTAK_OWNER'"),
             ("sltp_rules", "trailing_dist", "REAL"),
             ("sltp_rules", "market_mode", "TEXT NOT NULL DEFAULT 'indian'"),
+            ("sltp_rules", "strategy_id", "TEXT"),
+            ("sltp_rules", "instrument_token", "TEXT"),
+            ("algo_trades", "exit_order_id", "TEXT"),
+            ("algo_trades", "exit_submitted_at", "TEXT"),
+            ("algo_trades", "signal_bar_time", "TEXT"),
             ("users", "market_mode", "TEXT NOT NULL DEFAULT ''"),
             ("users", "indian_balance", "REAL NOT NULL DEFAULT 1000000.0"),
             ("users", "forex_balance", "REAL NOT NULL DEFAULT 10000.0"),
@@ -223,6 +313,12 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_order_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sltp_account_status ON sltp_rules(account_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_algo_trades_strategy_account_status ON algo_trades(strategy_id, account_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_algo_trades_date ON algo_trades(strategy_id, account_id, trade_date, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_algo_trades_signal ON algo_trades(strategy_id, account_id, symbol, signal_bar_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_algo_backtests_account ON algo_backtest_runs(strategy_id, account_id, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_research_runs_account ON research_backtest_runs(account_id, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_research_shares_expiry ON research_shares(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_acc_inst ON executions(account_id, instrument_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_position_matches_pos ON position_matches(position_id)")
@@ -265,7 +361,11 @@ def _set_stored_setting(key: str, value: str) -> None:
 
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
 NEO_CONSUMER_KEY = os.getenv("NEO_CONSUMER_KEY", "").strip()
-OWNER_PIN = os.getenv("OWNER_PIN", "2026").strip()
+OWNER_PIN = os.getenv("OWNER_PIN", "").strip()
+
+
+def _configured_owner_pin() -> str:
+    return os.getenv("OWNER_PIN", "").strip() or OWNER_PIN
 
 
 @asynccontextmanager
@@ -287,7 +387,7 @@ async def lifespan(_: FastAPI):
 
 
 init_db()
-app = FastAPI(title="Neo PIP Trading Terminal", version="0.1.1", lifespan=lifespan)
+app = FastAPI(title="Neo PIP Trading Terminal", version="0.2.1", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -400,6 +500,8 @@ class OrderPayload(BaseModel):
     sl_price: float | None = Field(default=None, gt=0)
     tp_price: float | None = Field(default=None, gt=0)
     auto_sltp: bool = False
+    strategy_id: str | None = Field(default=None, max_length=64)
+    trailing_dist: float | None = Field(default=None, gt=0)
 
     @field_validator("lots")
     @classmethod
@@ -453,10 +555,9 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 MAIL_RELAY_URL = os.getenv("MAIL_RELAY_URL", "").strip()
 MAIL_RELAY_SECRET = os.getenv("MAIL_RELAY_SECRET", "").strip()
 
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "osaifala").strip().lower()
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "osaifala@gmail.com").strip().lower()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "S@if7246")
-_LEGACY_ADMIN_PASSWORD = "saif7788"
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip().lower()
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 
 _EMAIL_RE = re.compile(r"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@([a-z0-9-]+\.)+[a-z]{2,24}$")
 
@@ -1104,8 +1205,17 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 detail="Indian market is closed (Mon–Fri 09:15–15:30 IST). Switch to Forex to trade XAUUSD / BTCUSD 24/7.",
             )
 
-    q = _get_live_quote_data(payload.symbol)
+    # Preserve compatibility with quote providers that only accept a symbol;
+    # pass the instrument token only when the order actually supplies one.
+    q = (_get_live_quote_data(payload.symbol, token=payload.instrument_token)
+         if payload.instrument_token else _get_live_quote_data(payload.symbol))
     live_ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
+    if payload.strategy_id and (
+        q.get("is_fallback")
+        or live_ltp <= 0
+        or (time.time() - float(q.get("time") or 0.0)) > 15
+    ):
+        raise HTTPException(status_code=503, detail="Algo paper entry requires a fresh live option quote.")
     ref_price = float(payload.price or payload.trigger_price or live_ltp or 0.0)
     if ref_price <= 0:
         raise HTTPException(status_code=503, detail=f"Live market quote unavailable for {payload.symbol}; please retry shortly.")
@@ -1127,6 +1237,16 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
 
     is_mkt = payload.order_type == "MKT"
     exec_price = live_ltp if (is_mkt and live_ltp > 0) else ref_price
+    effective_sl = payload.sl_price
+    effective_tp = payload.tp_price
+    if payload.strategy_id and is_mkt and payload.price and effective_sl and effective_tp:
+        initial_risk = float(payload.price) - float(effective_sl)
+        reward_distance = float(effective_tp) - float(payload.price)
+        if initial_risk > 0 and reward_distance > 0:
+            tick = get_exchange_tick_size(payload.symbol, payload.exchange_segment)
+            multiple = reward_distance / initial_risk
+            effective_sl = round_to_tick(exec_price - initial_risk, tick) or effective_sl
+            effective_tp = round_to_tick(exec_price + initial_risk * multiple, tick) or effective_tp
     status = "completed" if is_mkt else "pending"
     cur_sym = "$" if eff_market == "forex" else "₹"
     msg = (
@@ -1153,7 +1273,8 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 json.dumps({
                     "symbol": payload.symbol, "side": payload.side, "lots": payload.lots,
                     "multiplier": mult, "market": eff_market,
-                    "sl_price": payload.sl_price, "tp_price": payload.tp_price,
+                    "sl_price": effective_sl, "tp_price": effective_tp,
+                    "strategy_id": payload.strategy_id,
                     "auto_sltp": bool(payload.auto_sltp or payload.sl_price or payload.tp_price),
                 }),
                 json.dumps({"simulated": True, "market": eff_market}),
@@ -1167,7 +1288,7 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 "account_id": account_id,
                 "broker_execution_id": f"P-{row_id}-{int(time.time()*1000)%100000}",
                 "order_id": str(row_id),
-                "instrument_key": f"{seg_store}|{payload.symbol}|{payload.product}",
+                "instrument_key": payload.instrument_token or f"{seg_store}|{payload.symbol}|{payload.product}",
                 "trading_symbol": payload.symbol,
                 "exchange": ex_name,
                 "segment": seg_store,
@@ -1177,18 +1298,18 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
                 "price": exec_price,
                 "multiplier": mult,
                 "execution_time": utc_now(),
-                "source": "PAPER_ENGINE",
+                "source": "ALGO_PAPER_ENTRY" if payload.strategy_id else "PAPER_ENGINE",
             }, conn)
 
-            if payload.sl_price or payload.tp_price:
+            if effective_sl or effective_tp:
                 conn.execute(
-                    "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
-                    (account_id, payload.symbol),
+                    "UPDATE sltp_rules SET status = 'replaced' WHERE account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'active' AND COALESCE(strategy_id, '') = COALESCE(?, '')",
+                    (account_id, payload.symbol, payload.strategy_id),
                 )
                 conn.execute(
-                    """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-                    (utc_now(), payload.symbol, seg_store, payload.product, payload.side, units, exec_price, payload.sl_price, payload.tp_price, account_id, eff_market),
+                    """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode, trailing_dist, strategy_id, instrument_token)
+                       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
+                    (utc_now(), payload.symbol, seg_store, payload.product, payload.side, units, exec_price, effective_sl, effective_tp, account_id, eff_market, payload.trailing_dist, payload.strategy_id, payload.instrument_token),
                 )
         conn.commit()
 
@@ -1203,6 +1324,8 @@ def _execute_user_paper_order(payload: OrderPayload, ctx: dict[str, Any]) -> dic
         "lots": payload.lots,
         "multiplier": mult,
         "price": round(exec_price, 5 if eff_market == "forex" else 2),
+        "sl_price": effective_sl,
+        "tp_price": effective_tp,
         "currency": "USD" if eff_market == "forex" else "INR",
         "broker_order_id": None,
         "message": msg,
@@ -1438,6 +1561,8 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
         raise HTTPException(status_code=401, detail="Kotak Neo session is not authenticated")
     if not LIVE_TRADING_ENABLED:
         raise HTTPException(status_code=403, detail="Live orders are disabled. Set LIVE_TRADING_ENABLED=true in .env and restart after testing.")
+    if not is_rust_execution_available():
+        raise HTTPException(status_code=503, detail=rust_execution_status().get("reason") or "Rust execution is unavailable.")
     # Mutating call: deliberately not retried. Timeouts can be ambiguous; reconcile using the order book.
     with neo_client_lock:
         try:
@@ -1483,7 +1608,7 @@ def sdk_order(payload: OrderPayload) -> tuple[str, str | None, Any]:
                 send_price = f"{rp:.2f}" if (rp and rp > 0) else "0"
                 send_trig = f"{rt:.2f}" if (rt and rt > 0) else "0"
 
-            result = neo_client.place_order(
+            result = dispatch_kotak_mutation(neo_client, "place_order",
                 exchange_segment=kotak_seg,
                 product=payload.product,
                 price=send_price,
@@ -1600,7 +1725,7 @@ async def local_only(request: Request, call_next):
                 response.set_cookie("neo_lan_access", LAN_ACCESS_TOKEN, httponly=True, samesite="strict", secure=False, max_age=43200, path="/")
                 return response
             return JSONResponse(status_code=401, content={"detail": "Invalid local network access key"})
-        if request.url.path in {"/", "/chart", "/api/health", "/static/styles.css", "/static/app.js", "/static/chart.css", "/static/chart.js", "/static/lightweight-charts.js"}:
+        if request.url.path in {"/", "/chart", "/research", "/api/health", "/static/styles.css", "/static/app.js", "/static/chart.css", "/static/chart.js", "/static/lightweight-charts.js", "/static/research.css", "/static/research.js"} or request.url.path.startswith(("/research/results/", "/results/", "/static/research-")):
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1632,10 +1757,32 @@ def chart_view():
 
 @app.get("/terminal")
 def terminal_view():
+    if CLOUD_DEPLOYMENT:
+        raise HTTPException(status_code=404, detail="Remote terminal is disabled in cloud deployments.")
     term_file = STATIC_DIR / "terminal.html"
     if term_file.exists():
         return FileResponse(term_file)
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/research")
+def research_view():
+    return FileResponse(STATIC_DIR / "research.html")
+
+
+@app.get("/research/results/{run_id}")
+def research_result_view(run_id: int):
+    return FileResponse(STATIC_DIR / "research.html")
+
+
+@app.get("/results/{share_token}")
+def shared_research_result_view(share_token: str):
+    return FileResponse(STATIC_DIR / "research.html")
+
+
+@app.get("/results/{share_token}/{strategy_id}")
+def shared_strategy_research_result_view(share_token: str, strategy_id: str):
+    return FileResponse(STATIC_DIR / "research.html")
 
 
 @app.post("/api/lan/access")
@@ -2693,7 +2840,9 @@ def auth_signin(payload: SigninPayload, response: Response, request: Request):
 
     # 1. Check Terminal Admin login without leaking/exposing admin credentials
     is_admin_ident = ident_lower in {ADMIN_USERNAME, ADMIN_EMAIL}
-    if is_admin_ident and (secrets.compare_digest(pw, ADMIN_PASSWORD) or secrets.compare_digest(pw, _LEGACY_ADMIN_PASSWORD)):
+    if is_admin_ident and not ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Owner sign-in is not configured on this server.")
+    if is_admin_ident and secrets.compare_digest(pw, ADMIN_PASSWORD):
         with db() as conn:
             row = conn.execute("SELECT id, market_mode, indian_balance, forex_balance FROM users WHERE email = ? OR LOWER(username) = ?", (ADMIN_EMAIL, ADMIN_USERNAME)).fetchone()
             if not row:
@@ -3025,9 +3174,17 @@ def auth_check_email(payload: CheckEmailPayload):
 
 
 @app.post("/api/auth/login-admin")
-def auth_login_admin(payload: AdminEmailLoginPayload, response: Response):
+def auth_login_admin(payload: AdminEmailLoginPayload, response: Response, request: Request):
     clean_email = (payload.email or "").strip().lower()
-    if clean_email != ADMIN_EMAIL or (payload.password != ADMIN_PASSWORD and payload.password != _LEGACY_ADMIN_PASSWORD):
+    client_ip = request.client.host if request.client else "unknown"
+    if not os.getenv("PYTEST_CURRENT_TEST") and not check_rate_limit(
+        f"owner-login:{client_ip}:{clean_email}", max_calls=5, window_seconds=900.0
+    ):
+        audit("owner_login_rate_limited", {"email": clean_email, "client_ip": client_ip})
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Owner sign-in is not configured on this server.")
+    if clean_email != ADMIN_EMAIL or not secrets.compare_digest(payload.password, ADMIN_PASSWORD):
         raise HTTPException(status_code=401, detail="Invalid admin credentials.")
 
     token = secrets.token_hex(32)
@@ -3238,7 +3395,7 @@ def owner_login(payload: OwnerLoginPayload):
     consumer_key = os.getenv("NEO_CONSUMER_KEY", "").strip()
     mobile = os.getenv("NEO_MOBILE_NUMBER", "").strip()
     ucc = os.getenv("NEO_UCC", "").strip()
-    owner_pin = os.getenv("OWNER_PIN", "").strip() or os.getenv("NEO_MPIN", "").strip()
+    owner_pin = _configured_owner_pin()
 
     logged_in_kotak = False
 
@@ -3396,11 +3553,14 @@ def _upsert_active_sltp_rule(
     sl_price: float | None,
     tp_price: float | None,
     market_mode: str = "indian",
+    trailing_dist: float | None = None,
+    strategy_id: str | None = None,
+    instrument_token: str | None = None,
 ) -> int:
     """Replace any active rule for the same or alias-matched contract and insert a fresh active rule."""
     active_rows = conn.execute(
-        "SELECT id, symbol FROM sltp_rules WHERE account_id = ? AND status = 'active'",
-        (account_id,),
+        "SELECT id, symbol FROM sltp_rules WHERE account_id = ? AND status = 'active' AND COALESCE(strategy_id, '') = COALESCE(?, '')",
+        (account_id, strategy_id),
     ).fetchall()
     replace_ids = [r["id"] for r in active_rows if _kotak_symbols_match(str(r["symbol"] or ""), symbol)]
     if replace_ids:
@@ -3411,9 +3571,9 @@ def _upsert_active_sltp_rule(
     sl_clean = round_to_tick(sl_price, tick) if sl_price is not None else None
     tp_clean = round_to_tick(tp_price, tick) if tp_price is not None else None
     cur = conn.execute(
-        """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-        (utc_now(), symbol, exchange_segment, eff_prod, side, int(max(1, quantity)), float(entry_price or 0.0), sl_clean, tp_clean, account_id, market_mode),
+        """INSERT INTO sltp_rules(created_at, symbol, exchange_segment, product, side, quantity, entry_price, sl_price, tp_price, status, account_id, market_mode, trailing_dist, strategy_id, instrument_token)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)""",
+        (utc_now(), symbol, exchange_segment, eff_prod, side, int(max(1, quantity)), float(entry_price or 0.0), sl_clean, tp_clean, account_id, market_mode, trailing_dist, strategy_id, instrument_token),
     )
     return int(cur.lastrowid)
 
@@ -3428,7 +3588,7 @@ def _execute_order(payload: OrderPayload):
         message, broker_order_id, response = sdk_order(payload)
         row_id = add_order_record(payload, "live", "submitted", message, broker_order_id, response, account_id="KOTAK_OWNER")
         audit("live_order_submitted", {"id": row_id, "symbol": payload.symbol, "side": payload.side, "quantity": int_qty, "order_id": broker_order_id})
-        if payload.sl_price or payload.tp_price:
+        if (payload.sl_price or payload.tp_price) and not payload.strategy_id:
             try:
                 entry_p = float(payload.price or payload.trigger_price or 0.0)
                 if entry_p <= 0 and not os.getenv("PYTEST_CURRENT_TEST"):
@@ -3447,6 +3607,9 @@ def _execute_order(payload: OrderPayload):
                         sl_price=payload.sl_price,
                         tp_price=payload.tp_price,
                         market_mode="indian",
+                        trailing_dist=payload.trailing_dist,
+                        strategy_id=payload.strategy_id,
+                        instrument_token=payload.instrument_token,
                     )
                     conn.commit()
                 audit("sltp_rule_auto_created", {
@@ -3674,7 +3837,7 @@ def cancel_order(
         status = str(target.get("ordSt") or target.get("status") or "").lower()
         if status not in {"open", "pending", "trigger pending", "validation pending", "after market order req received", "put order req received", "modify pending", "partially filled"}:
             raise HTTPException(status_code=409, detail=f"Order is {status or 'not pending'} and cannot be cancelled")
-        result = client.cancel_order(order_id=order_id, isVerify=True)
+        result = dispatch_kotak_mutation(client, "cancel_order", order_id=order_id, isVerify=True)
         error = _kotak_response_error(result)
         if error:
             raise HTTPException(status_code=502, detail=f"Kotak cancellation failed: {error}")
@@ -3993,11 +4156,11 @@ def check_sltp_rules(
                                 net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
                                 if net_qty != 0:
                                     live_exit_side = "SELL" if net_qty > 0 else "BUY"
-                                    live_exit_qty = int(abs(net_qty))
+                                    live_exit_qty = min(qty, int(abs(net_qty)))
                                     live_prod = live_target.get("prod") or eff_prod
                                     live_ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg") or seg, r["symbol"])
                                     live_trd_sym = str(live_target.get("trdSym") or r["symbol"]).strip()
-                                    order_res = neo_client.place_order(
+                                    order_res = dispatch_kotak_mutation(neo_client, "place_order",
                                         exchange_segment=live_ex_seg,
                                         product=live_prod,
                                         price="0",
@@ -4062,11 +4225,35 @@ def check_sltp_rules(
     }
 
 
+def _mark_algo_exit_uncertain(strategy_id: str, account_id: str, symbol: str, rule_id: int | None, detail: str) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE algo_trades SET status='EXIT_UNKNOWN' WHERE strategy_id=? AND account_id=? "
+            "AND UPPER(symbol)=UPPER(?) AND status IN ('OPEN','EXIT_SUBMITTED')",
+            (strategy_id, account_id, symbol),
+        )
+        if rule_id is None:
+            conn.execute(
+                "UPDATE sltp_rules SET status='exit_error' WHERE strategy_id=? AND account_id=? "
+                "AND UPPER(symbol)=UPPER(?) AND status IN ('active','exit_pending')",
+                (strategy_id, account_id, symbol),
+            )
+        else:
+            conn.execute(
+                "UPDATE sltp_rules SET status='exit_error' WHERE id=? AND status IN ('active','exit_pending')",
+                (rule_id,),
+            )
+        conn.commit()
+    audit("algo_exit_uncertain", {"symbol": symbol, "rule_id": rule_id, "detail": detail})
+
+
 def _run_server_side_sltp_check():
     """Server-side autonomous SL/TP check daemon.
     Iterates over all active SL/TP rules and checks against latest live quotes
     even if user browser or chart tab is closed or throttled."""
     try:
+        if LIVE_TRADING_ENABLED and neo_authenticated and neo_client is not None:
+            _reconcile_algo_orders("INDIAN_ATM_OPTION_BUYING", algo_bot.account_id)
         with db() as conn:
             active_rules = conn.execute("SELECT * FROM sltp_rules WHERE status = 'active'").fetchall()
         if not active_rules:
@@ -4080,9 +4267,11 @@ def _run_server_side_sltp_check():
                 sym_map.setdefault(s, []).append(r)
 
         for sym, rules in sym_map.items():
-            q = _get_live_quote_data(sym)
+            quote_token = str(rules[0]["instrument_token"] or "") if rules and "instrument_token" in rules[0].keys() else ""
+            q = _get_live_quote_data(sym, token=quote_token or None)
             ltp = float(q.get("last_price") or q.get("ltp") or 0.0)
-            if ltp <= 0:
+            quote_age = time.time() - float(q.get("time") or 0.0)
+            if ltp <= 0 or q.get("is_fallback") or quote_age > 30:
                 continue
 
             for r in rules:
@@ -4095,6 +4284,8 @@ def _run_server_side_sltp_check():
                 prod = str(r["product"] or "NRML")
                 acc_id = str(r["account_id"] or "KOTAK_OWNER")
                 market_mode = str(r["market_mode"] or "indian")
+                strategy_id = str(r["strategy_id"] or "")
+                trailing_dist = float(r["trailing_dist"] or 0.0)
 
                 trigger_type = None
                 if side == "BUY":
@@ -4108,11 +4299,31 @@ def _run_server_side_sltp_check():
                     elif tp is not None and ltp <= tp:
                         trigger_type = "TP"
 
+                if not trigger_type and strategy_id and datetime.now(IST_TZ).time() >= dt_time(15, 29):
+                    trigger_type = "EOD"
+
+                if not trigger_type and trailing_dist > 0 and side == "BUY" and ltp >= float(r["entry_price"] or 0.0) + trailing_dist:
+                    tick = get_exchange_tick_size(sym, seg)
+                    proposed_sl = round_to_tick(ltp - trailing_dist, tick)
+                    if proposed_sl and (sl is None or proposed_sl > sl):
+                        with db() as conn:
+                            conn.execute("UPDATE sltp_rules SET sl_price = ? WHERE id = ? AND status = 'active'", (proposed_sl, rule_id))
+                            if strategy_id:
+                                conn.execute(
+                                    "UPDATE algo_trades SET sl_price = ? WHERE strategy_id = ? AND account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'OPEN'",
+                                    (proposed_sl, strategy_id, acc_id, sym),
+                                )
+                            conn.commit()
+                        sl = proposed_sl
+
                 if not trigger_type:
                     continue
 
                 exit_side = "SELL" if side == "BUY" else "BUY"
                 is_live_rule = (acc_id == "KOTAK_OWNER" and market_mode == "indian" and neo_authenticated and neo_client is not None and LIVE_TRADING_ENABLED)
+                if strategy_id and acc_id == "KOTAK_OWNER" and not is_live_rule:
+                    audit("algo_sltp_waiting_for_live_session", {"symbol": sym, "rule_id": rule_id})
+                    continue
 
                 try:
                     if is_live_rule:
@@ -4121,33 +4332,74 @@ def _run_server_side_sltp_check():
                             pos_data = neo_client.positions()
                             raw_pos = _rows_from_sdk_result(pos_data) if (isinstance(pos_data, dict) and not _kotak_response_error(pos_data)) else []
                             live_target = next((p for p in raw_pos if _kotak_symbols_match(str(p.get("trdSym") or p.get("sym") or ""), r["symbol"])), None)
-                            if live_target:
-                                calc = _calculate_single_position(live_target)
-                                net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
-                                if net_qty != 0:
-                                    live_exit_side = "SELL" if net_qty > 0 else "BUY"
-                                    live_exit_qty = int(abs(net_qty))
-                                    live_prod = str(live_target.get("prod") or prod or "NRML").upper()
-                                    live_ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg") or seg, r["symbol"])
-                                    live_trd_sym = str(live_target.get("trdSym") or r["symbol"]).strip()
-                                    order_res = neo_client.place_order(
-                                        exchange_segment=live_ex_seg,
-                                        product=live_prod,
-                                        price="0",
-                                        order_type="MKT",
-                                        quantity=str(live_exit_qty),
-                                        validity="DAY",
-                                        trading_symbol=live_trd_sym,
-                                        transaction_type=_kotak_tx_type(live_exit_side),
-                                        tag=f"SLTP_{trigger_type}",
-                                    )
-                                    _invalidate_kotak_portfolio_cache()
+                            if not live_target:
+                                if strategy_id:
+                                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, rule_id, "Broker position was not found when the exit condition triggered")
+                                continue
+                            calc = _calculate_single_position(live_target)
+                            net_qty = int(calc.get("quantity") or live_target.get("flQty") or live_target.get("netQty") or 0)
+                            if net_qty <= 0:
+                                if strategy_id:
+                                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, rule_id, "Broker position is not long; strategy exit requires manual reconciliation")
+                                continue
+                            live_exit_qty = min(qty, int(abs(net_qty)))
+                            if live_exit_qty <= 0:
+                                continue
+                            live_prod = str(live_target.get("prod") or prod or "NRML").upper()
+                            live_ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg") or seg, r["symbol"])
+                            live_trd_sym = str(live_target.get("trdSym") or r["symbol"]).strip()
+                            order_res = dispatch_kotak_mutation(neo_client, "place_order",
+                                exchange_segment=live_ex_seg,
+                                product=live_prod,
+                                price="0",
+                                order_type="MKT",
+                                quantity=str(live_exit_qty),
+                                validity="DAY",
+                                trading_symbol=live_trd_sym,
+                                transaction_type=_kotak_tx_type("SELL"),
+                                tag=f"SLTP_{trigger_type}",
+                            )
+                            error = _kotak_response_error(order_res)
+                            if error:
+                                raise RuntimeError(f"Kotak rejected algo exit: {error}")
+                            response_data = order_res if isinstance(order_res, dict) else {}
+                            exit_order_id = str(
+                                response_data.get("nOrdNo")
+                                or response_data.get("order_id")
+                                or response_data.get("orderId")
+                                or ""
+                            )
+                            if not exit_order_id:
+                                if strategy_id:
+                                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, rule_id, "Kotak did not return an exit order id")
+                                continue
+                            with db() as conn:
+                                conn.execute(
+                                    "UPDATE algo_trades SET status='EXIT_SUBMITTED', exit_order_id=?, exit_submitted_at=?, exit_price=?, exit_reason=? "
+                                    "WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='OPEN'",
+                                    (exit_order_id, utc_now(), ltp, trigger_type, strategy_id, acc_id, sym),
+                                )
+                                conn.execute(
+                                    "UPDATE sltp_rules SET status='exit_pending' WHERE id=? AND status='active'",
+                                    (rule_id,),
+                                )
+                                conn.commit()
+                            _invalidate_kotak_portfolio_cache()
+                            audit("algo_exit_submitted", {
+                                "rule_id": rule_id,
+                                "symbol": sym,
+                                "trigger_type": trigger_type,
+                                "broker_order_id": exit_order_id,
+                            })
+                            continue
                     else:
                         # Paper Account Execution
                         with db() as conn:
                             open_pos = get_open_positions(acc_id, conn)
                             tgt = next((p for p in open_pos if _kotak_symbols_match(p["trading_symbol"], sym)), None)
-                            exit_qty = int(tgt["quantity"]) if tgt else qty
+                            if strategy_id and not tgt:
+                                continue
+                            exit_qty = min(qty, int(tgt["quantity"])) if tgt else qty
                             mult_val = float(tgt.get("multiplier") or 1.0) if tgt else 1.0
                             seg_canon = "FOREX" if (seg.upper() == "FOREX" or _is_forex_symbol(r["symbol"])) else seg
                             prod_canon = str(tgt["product_type"]) if tgt else prod
@@ -4177,6 +4429,25 @@ def _run_server_side_sltp_check():
                             "UPDATE sltp_rules SET status = ? WHERE id = ?",
                             (f"triggered_{trigger_type.lower()}", rule_id),
                         )
+                        if strategy_id:
+                            active_trade = conn.execute(
+                                "SELECT id, entry_price, quantity, exchange_segment FROM algo_trades "
+                                "WHERE strategy_id = ? AND account_id = ? AND UPPER(symbol) = UPPER(?) AND status = 'OPEN' ORDER BY id DESC LIMIT 1",
+                                (strategy_id, acc_id, sym),
+                            ).fetchone()
+                            if active_trade:
+                                entry_price = float(active_trade["entry_price"] or 0.0)
+                                trade_qty = int(active_trade["quantity"] or qty)
+                                gross_pnl = (ltp - entry_price) * trade_qty if side == "BUY" else (entry_price - ltp) * trade_qty
+                                trade_seg = str(active_trade["exchange_segment"] or seg)
+                                entry_charges = calculate_statutory_charges(trade_seg, "BUY", trade_qty, Decimal(str(entry_price)))
+                                exit_charges = calculate_statutory_charges(trade_seg, "SELL", trade_qty, Decimal(str(ltp)))
+                                charges_total = float(entry_charges.get("total", 0) + exit_charges.get("total", 0))
+                                net_pnl = gross_pnl - charges_total
+                                conn.execute(
+                                    "UPDATE algo_trades SET status = 'CLOSED', exit_time = ?, exit_price = ?, gross_pnl = ?, charges = ?, net_pnl = ?, exit_reason = ? WHERE id = ?",
+                                    (utc_now(), ltp, gross_pnl, charges_total, net_pnl, trigger_type, active_trade["id"]),
+                                )
                         conn.commit()
                     audit("autonomous_sltp_triggered", {
                         "rule_id": rule_id,
@@ -4186,6 +4457,8 @@ def _run_server_side_sltp_check():
                         "is_live": is_live_rule,
                     })
                 except Exception as e:
+                    if is_live_rule and strategy_id:
+                        _mark_algo_exit_uncertain(strategy_id, acc_id, sym, rule_id, str(e))
                     audit("autonomous_sltp_failed", {"rule_id": rule_id, "symbol": r["symbol"], "error": str(e)})
     except Exception as exc:
         audit("autonomous_sltp_loop_error", {"error": str(exc)})
@@ -4494,7 +4767,7 @@ def exit_all_positions(
                         ord_id = str(item.get("nOrdNo") or item.get("order_id") or "")
                         if ord_id:
                             try:
-                                client.cancel_order(order_id=ord_id, isVerify=True)
+                                dispatch_kotak_mutation(client, "cancel_order", order_id=ord_id, isVerify=True)
                                 cancelled_orders += 1
                             except Exception as e:
                                 errors.append(f"Cancel order {ord_id}: {str(e)}")
@@ -4517,7 +4790,7 @@ def exit_all_positions(
                     try:
                         ex_s = _normalize_kotak_exchange_segment(seg, sym)
                         trd_s = str(p.get("trdSym") or sym).strip()
-                        client.place_order(
+                        dispatch_kotak_mutation(client, "place_order",
                             exchange_segment=ex_s,
                             product=prod.upper(),
                             price="0",
@@ -4637,7 +4910,7 @@ def exit_partial_position(
                         try:
                             ex_s = _normalize_kotak_exchange_segment(seg, sym)
                             trd_s = str(p.get("trdSym") or sym).strip()
-                            client.place_order(
+                            dispatch_kotak_mutation(client, "place_order",
                                 exchange_segment=ex_s,
                                 product=prod.upper(),
                                 price="0",
@@ -4791,7 +5064,7 @@ def exit_single_position(
                     exit_qty = max(1, int(round(abs(net_qty) * pct)))
                     prod = str(live_target.get("prod") or "NRML").upper()
                     ex_seg = _normalize_kotak_exchange_segment(live_target.get("exSeg"), trd_sym)
-                    order_res = neo_client.place_order(
+                    order_res = dispatch_kotak_mutation(neo_client, "place_order",
                         exchange_segment=ex_seg,
                         product=prod,
                         price="0",
@@ -4999,27 +5272,409 @@ def trail_sl_to_cost(
     }
 
 
-# --- QUANTITATIVE ALGO BOT ENGINE (EMA 9/15 + Vol, ATR > 10, 1:2.25 RR, ₹10K Loss Cap) ---
+# --- Indian ATM Option Buying Algo ---
 from app.algo_bot import QuantitativeAlgoBot, AlgoBotConfig
+
+
+def _square_off_algo_positions(strategy_id: str = "INDIAN_ATM_OPTION_BUYING") -> dict[str, Any]:
+    """Close this strategy's positions only; unrelated manual positions are left alone."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM algo_trades WHERE strategy_id = ? AND status = 'OPEN' ORDER BY id",
+            (strategy_id,),
+        ).fetchall()
+    closed = 0
+    submitted = 0
+    for trade in rows:
+        sym = str(trade["symbol"] or "")
+        acc_id = str(trade["account_id"] or "")
+        qty = int(trade["quantity"] or 0)
+        if not sym or qty <= 0:
+            continue
+        quote = _get_live_quote_data(sym, token=str(trade["instrument_key"] or ""))
+        exit_price = float(quote.get("ltp") or 0.0)
+        quote_age = time.time() - float(quote.get("time") or 0.0)
+        if quote.get("is_fallback") or exit_price <= 0 or quote_age > 30:
+            audit("algo_square_off_skipped", {"symbol": sym, "reason": "Live quote unavailable"})
+            continue
+
+        if acc_id == "KOTAK_OWNER":
+            if not (LIVE_TRADING_ENABLED and neo_authenticated and neo_client is not None):
+                continue
+            try:
+                position_data = neo_client.positions()
+                if _kotak_response_error(position_data):
+                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, "Kotak positions call failed during risk square-off")
+                    continue
+                broker_rows = _rows_from_sdk_result(position_data)
+                live_row = next(
+                    (row for row in broker_rows if _kotak_symbols_match(str(row.get("trdSym") or row.get("sym") or ""), sym)),
+                    None,
+                )
+                if not live_row:
+                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, "Broker position was not found during risk square-off")
+                    continue
+                calc = _calculate_single_position(live_row)
+                net_qty = int(calc.get("quantity") or live_row.get("flQty") or live_row.get("netQty") or 0)
+                if net_qty <= 0:
+                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, "Broker position is not long during risk square-off")
+                    continue
+                exit_qty = min(qty, net_qty)
+                if exit_qty <= 0:
+                    continue
+                response = dispatch_kotak_mutation(neo_client, "place_order",
+                    exchange_segment=_normalize_kotak_exchange_segment(live_row.get("exSeg"), sym),
+                    product=str(live_row.get("prod") or trade["product"] or "NRML"),
+                    price="0", order_type="MKT", quantity=str(exit_qty), validity="DAY",
+                    trading_symbol=str(live_row.get("trdSym") or sym),
+                    transaction_type=_kotak_tx_type("SELL"), tag="ALGO_RISK_HALT",
+                )
+                error = _kotak_response_error(response)
+                if error:
+                    audit("algo_square_off_failed", {"symbol": sym, "error": error})
+                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, f"Kotak rejected risk exit: {error}")
+                    continue
+                response_data = response if isinstance(response, dict) else {}
+                exit_order_id = str(
+                    response_data.get("nOrdNo")
+                    or response_data.get("order_id")
+                    or response_data.get("orderId")
+                    or ""
+                )
+                if not exit_order_id:
+                    _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, "Risk halt exit did not return a broker order id")
+                    continue
+                with db() as conn:
+                    conn.execute(
+                        "UPDATE algo_trades SET status='EXIT_SUBMITTED', exit_order_id=?, exit_submitted_at=?, exit_price=?, exit_reason='RISK_HALT' WHERE id=? AND status='OPEN'",
+                        (exit_order_id, utc_now(), exit_price, trade["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE sltp_rules SET status='exit_pending' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='active'",
+                        (strategy_id, acc_id, sym),
+                    )
+                    conn.commit()
+                _invalidate_kotak_portfolio_cache()
+                submitted += 1
+                continue
+            except Exception as exc:
+                audit("algo_square_off_failed", {"symbol": sym, "error": type(exc).__name__})
+                _mark_algo_exit_uncertain(strategy_id, acc_id, sym, None, f"Risk exit outcome is uncertain: {type(exc).__name__}")
+                continue
+        else:
+            with db() as conn:
+                process_execution({
+                    "account_id": acc_id,
+                    "broker_execution_id": f"ALGO-HALT-{trade['id']}-{int(time.time() * 1000) % 1000000}",
+                    "order_id": str(trade["order_id"] or ""),
+                    "instrument_key": str(trade["instrument_key"] or f"NSE_FO|{sym}"),
+                    "trading_symbol": sym,
+                    "exchange": "BSE" if "SENSEX" in sym else "NSE",
+                    "segment": str(trade["exchange_segment"] or "nse_fo"),
+                    "product_type": str(trade["product"] or "NRML"),
+                    "side": "SELL",
+                    "quantity": qty,
+                    "price": exit_price,
+                    "multiplier": 1,
+                    "execution_time": utc_now(),
+                    "source": "ALGO_RISK_HALT",
+                }, conn)
+                conn.commit()
+
+        entry_price = float(trade["entry_price"] or 0.0)
+        gross = (exit_price - entry_price) * qty
+        seg = str(trade["exchange_segment"] or "nse_fo")
+        charges = float(
+            calculate_statutory_charges(seg, "BUY", qty, Decimal(str(entry_price))).get("total", 0)
+            + calculate_statutory_charges(seg, "SELL", qty, Decimal(str(exit_price))).get("total", 0)
+        )
+        with db() as conn:
+            conn.execute(
+                "UPDATE algo_trades SET status='CLOSED', exit_time=?, exit_price=?, gross_pnl=?, charges=?, net_pnl=?, exit_reason='RISK_HALT' WHERE id=? AND status='OPEN'",
+                (utc_now(), exit_price, gross, charges, gross - charges, trade["id"]),
+            )
+            conn.execute(
+                "UPDATE sltp_rules SET status='cancelled' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='active'",
+                (strategy_id, acc_id, sym),
+            )
+            conn.commit()
+        closed += 1
+    return {"ok": True, "closed_positions": closed, "submitted_positions": submitted}
+
+
+_ALGO_ORDER_RECONCILE_LOCK = threading.Lock()
+_ALGO_ORDER_RECONCILE_LAST: dict[str, float] = {}
+
+
+def _reconcile_algo_orders(strategy_id: str, account_id: str) -> None:
+    """Reconcile live algo entry and exit orders from Kotak's order report."""
+    if not (LIVE_TRADING_ENABLED and neo_authenticated and neo_client is not None):
+        return
+    reconcile_key = f"{strategy_id}:{account_id}"
+    now_mono = time.monotonic()
+    with _ALGO_ORDER_RECONCILE_LOCK:
+        if now_mono - _ALGO_ORDER_RECONCILE_LAST.get(reconcile_key, 0.0) < 3.0:
+            return
+        _ALGO_ORDER_RECONCILE_LAST[reconcile_key] = now_mono
+    with db() as conn:
+        pending = conn.execute(
+            "SELECT * FROM algo_trades WHERE strategy_id=? AND account_id=? "
+            "AND status IN ('SUBMITTING','SUBMITTED','UNKNOWN','EXIT_SUBMITTED','EXIT_UNKNOWN') ORDER BY id",
+            (strategy_id, account_id),
+        ).fetchall()
+    if not pending:
+        return
+    try:
+        response = neo_client.order_report()
+        if _kotak_response_error(response):
+            return
+        broker_orders = _rows_from_sdk_result(response)
+    except Exception:
+        broker_orders = []
+    by_id = {
+        str(order.get("nOrdNo") or order.get("order_id") or order.get("orderId") or ""): order
+        for order in broker_orders
+    }
+    now = datetime.now(timezone.utc)
+    for trade in pending:
+        is_exit = str(trade["status"] or "") in {"EXIT_SUBMITTED", "EXIT_UNKNOWN"}
+        order_id = str((trade["exit_order_id"] if is_exit else trade["order_id"]) or "")
+        broker_order = by_id.get(order_id)
+        if broker_order:
+            state = str(broker_order.get("ordSt") or broker_order.get("status") or "").strip().lower()
+            try:
+                filled = int(float(
+                    broker_order.get("fldQty") or broker_order.get("flQty") or broker_order.get("fillQty")
+                    or broker_order.get("filled_quantity") or 0
+                ))
+            except (TypeError, ValueError):
+                filled = 0
+            requested = int(trade["quantity"] or 0)
+            is_filled = state in {"complete", "completed", "traded", "filled"} or (requested > 0 and filled >= requested)
+            if is_filled:
+                if filled <= 0:
+                    filled = requested
+                if filled != requested:
+                    with db() as conn:
+                        if is_exit:
+                            conn.execute("UPDATE algo_trades SET status='EXIT_UNKNOWN' WHERE id=?", (trade["id"],))
+                            conn.execute(
+                                "UPDATE sltp_rules SET status='exit_error' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status IN ('active','exit_pending')",
+                                (strategy_id, account_id, trade["symbol"]),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE algo_trades SET status='UNKNOWN', exit_reason='Broker reports a partial entry fill; reconcile remaining quantity manually' WHERE id=?",
+                                (trade["id"],),
+                            )
+                        conn.commit()
+                    continue
+                try:
+                    fill_price = float(
+                        broker_order.get("avgPrc") or broker_order.get("avgPrice") or broker_order.get("flPrc")
+                        or broker_order.get("trdPrc") or (trade["exit_price"] if is_exit else trade["entry_price"])
+                    )
+                except (TypeError, ValueError):
+                    fill_price = float((trade["exit_price"] if is_exit else trade["entry_price"]) or 0.0)
+                if is_exit:
+                    entry_price = float(trade["entry_price"] or 0.0)
+                    trade_qty = int(trade["quantity"] or requested)
+                    gross_pnl = (fill_price - entry_price) * trade_qty
+                    segment = str(trade["exchange_segment"] or "nse_fo")
+                    charges = float(
+                        calculate_statutory_charges(segment, "BUY", trade_qty, Decimal(str(entry_price))).get("total", 0)
+                        + calculate_statutory_charges(segment, "SELL", trade_qty, Decimal(str(fill_price))).get("total", 0)
+                    )
+                    reason = str(trade["exit_reason"] or "SLTP")
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE algo_trades SET status='CLOSED', exit_time=?, exit_price=?, gross_pnl=?, charges=?, net_pnl=?, exit_reason=?, exit_submitted_at=NULL WHERE id=? AND status IN ('EXIT_SUBMITTED','EXIT_UNKNOWN')",
+                            (utc_now(), fill_price, gross_pnl, charges, gross_pnl - charges, reason, trade["id"]),
+                        )
+                        conn.execute(
+                            "UPDATE sltp_rules SET status=? WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status IN ('active','exit_pending','exit_error')",
+                            (f"triggered_{reason.lower()}", strategy_id, account_id, trade["symbol"]),
+                        )
+                        conn.commit()
+                else:
+                    old_entry = float(trade["entry_price"] or 0.0)
+                    old_sl = float(trade["sl_price"] or 0.0)
+                    risk_per_unit = old_entry - old_sl
+                    if risk_per_unit > 0:
+                        tick = get_exchange_tick_size(str(trade["symbol"]), str(trade["exchange_segment"]))
+                        adjusted_sl = round_to_tick(fill_price - risk_per_unit, tick) or old_sl
+                        adjusted_tp = round_to_tick(fill_price + risk_per_unit * 2.25, tick) or float(trade["tp_price"] or 0.0)
+                    else:
+                        adjusted_sl = old_sl
+                        adjusted_tp = float(trade["tp_price"] or 0.0)
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE algo_trades SET status='OPEN', entry_price=?, quantity=?, sl_price=?, tp_price=? WHERE id=? AND status IN ('SUBMITTING','SUBMITTED','UNKNOWN')",
+                            (fill_price, min(requested, filled), adjusted_sl, adjusted_tp, trade["id"]),
+                        )
+                        active_rule = conn.execute(
+                            "SELECT id FROM sltp_rules WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='active' ORDER BY id DESC LIMIT 1",
+                            (strategy_id, account_id, trade["symbol"]),
+                        ).fetchone()
+                        if active_rule:
+                            conn.execute(
+                                "UPDATE sltp_rules SET entry_price=?, quantity=?, sl_price=?, tp_price=? WHERE id=?",
+                                (fill_price, min(requested, filled), adjusted_sl, adjusted_tp, active_rule["id"]),
+                            )
+                        else:
+                            _upsert_active_sltp_rule(
+                                conn,
+                                account_id=account_id,
+                                symbol=str(trade["symbol"]),
+                                exchange_segment=str(trade["exchange_segment"]),
+                                product=str(trade["product"]),
+                                side="BUY",
+                                quantity=min(requested, filled),
+                                entry_price=fill_price,
+                                sl_price=adjusted_sl,
+                                tp_price=adjusted_tp,
+                                market_mode="indian",
+                                trailing_dist=float(trade["trailing_dist"]) if trade["trailing_dist"] is not None else None,
+                                strategy_id=strategy_id,
+                                instrument_token=str(trade["instrument_key"]),
+                            )
+                        conn.commit()
+                _invalidate_kotak_portfolio_cache()
+            elif state in {"rejected", "cancelled", "canceled", "expired"}:
+                with db() as conn:
+                    if is_exit:
+                        conn.execute("UPDATE algo_trades SET status='EXIT_UNKNOWN' WHERE id=?", (trade["id"],))
+                        conn.execute(
+                            "UPDATE sltp_rules SET status='exit_error' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status IN ('active','exit_pending')",
+                            (strategy_id, account_id, trade["symbol"]),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE algo_trades SET status='FAILED', exit_reason=? WHERE id=?",
+                            (f"Broker order {state}", trade["id"]),
+                        )
+                        conn.execute(
+                            "UPDATE sltp_rules SET status='cancelled' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='active'",
+                            (strategy_id, account_id, trade["symbol"]),
+                        )
+                    conn.commit()
+                continue
+
+        try:
+            sent_value = trade["exit_submitted_at"] if is_exit else trade["entry_time"]
+            sent_at = datetime.fromisoformat(str(sent_value))
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            sent_at = now
+        if (now - sent_at).total_seconds() > 45:
+            with db() as conn:
+                if is_exit:
+                    conn.execute("UPDATE algo_trades SET status='EXIT_UNKNOWN' WHERE id=?", (trade["id"],))
+                    conn.execute(
+                        "UPDATE sltp_rules SET status='exit_error' WHERE strategy_id=? AND account_id=? AND UPPER(symbol)=UPPER(?) AND status='exit_pending'",
+                        (strategy_id, account_id, trade["symbol"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE algo_trades SET status='UNKNOWN', exit_reason='Kotak entry order status could not be reconciled' WHERE id=?",
+                        (trade["id"],),
+                    )
+                conn.commit()
+
 
 algo_bot = QuantitativeAlgoBot(
     db_conn_factory=db,
     executor_fn=lambda payload: _execute_order(payload),
-    square_off_all_fn=lambda: exit_all_positions(),
+    paper_executor_fn=lambda payload, ctx: _execute_user_paper_order(payload, ctx),
+    square_off_all_fn=lambda strategy_id: _square_off_algo_positions(strategy_id),
 )
 
 
 class AlgoConfigPayload(BaseModel):
-    mode: str | None = None
-    underlyings: list[str] | None = None
-    fast_ema: int | None = None
-    slow_ema: int | None = None
-    atr_threshold: float | None = None
-    rr_ratio: float | None = None
-    max_loss_limit: float | None = None
-    lots_per_order: int | None = None
-    max_open_positions: int | None = None
-    cooldown_seconds: int | None = None
+    underlyings: list[str] | None = Field(default=None, min_length=1, max_length=8)
+    fast_ema: int | None = Field(default=None, ge=2, le=50)
+    slow_ema: int | None = Field(default=None, ge=3, le=100)
+    atr_threshold: float | None = Field(default=None, ge=14, le=14)
+    rr_ratio: float | None = Field(default=None, ge=2.25, le=2.25)
+    max_loss_limit: float | None = Field(default=None, ge=0)
+    max_daily_loss_pct: float | None = Field(default=None, gt=0, le=10)
+    max_drawdown_pct: float | None = Field(default=None, gt=0, le=30)
+    max_consecutive_losses: int | None = Field(default=None, ge=3, le=3)
+    loss_streak_window_seconds: int | None = Field(default=None, ge=1800, le=1800)
+    risk_pct_per_trade: float | None = Field(default=None, gt=0, le=0.5)
+    lots_per_order: int | None = Field(default=None, ge=1, le=100)
+    max_open_positions: int | None = Field(default=None, ge=0, le=20)
+
+
+class AlgoStartPayload(BaseModel):
+    mode: Literal["paper", "live"] = "paper"
+
+
+class AlgoBacktestRunPayload(BaseModel):
+    underlying: Literal["NIFTY", "BANKNIFTY", "SENSEX"] = "NIFTY"
+    option_type: Literal["CE", "PE"] = "CE"
+    days: int = Field(default=30, ge=1, le=30)
+
+
+class ResearchBacktestRunPayload(BaseModel):
+    dataset_id: Literal["banknifty_1m"] | None = None
+    underlying_candles: list[dict[str, Any]] | None = Field(default=None, min_length=30, max_length=1000000)
+    option_candles: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=2000000)
+    strategies: list[str] = Field(default_factory=lambda: ["orb", "ema_vwap", "supertrend_rsi", "adx_breakout", "volatility_expansion"], min_length=1, max_length=5)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    data_source: str = Field(default="User supplied historical candles", max_length=120)
+
+    @model_validator(mode="after")
+    def validate_candle_source(self):
+        if self.dataset_id:
+            if self.underlying_candles is not None or self.option_candles is not None:
+                raise ValueError("Choose a saved dataset or inline candle rows, not both.")
+        elif self.underlying_candles is None or self.option_candles is None:
+            raise ValueError("Provide both underlying and option candles, or select a saved dataset.")
+        return self
+
+    @field_validator("strategies")
+    @classmethod
+    def validate_strategy_ids(cls, value: list[str]) -> list[str]:
+        allowed = {"orb", "ema_vwap", "supertrend_rsi", "adx_breakout", "volatility_expansion"}
+        normalized = list(dict.fromkeys(str(item).strip().lower() for item in value))
+        if not normalized or any(item not in allowed for item in normalized):
+            raise ValueError("Choose one or more supported research strategies.")
+        return normalized
+
+
+class ResearchOptimizePayload(BaseModel):
+    strategy_id: str
+    method: Literal["grid", "random", "bayesian"] = "grid"
+    budget: int = Field(default=60, ge=1, le=200)
+    minimum_trades: int = Field(default=20, ge=5, le=1000)
+    parameter_space: dict[str, list[Any]] | None = None
+    dataset_id: Literal["banknifty_1m"] | None = None
+    underlying_candles: list[dict[str, Any]] | None = Field(default=None, min_length=30, max_length=1000000)
+    option_candles: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=2000000)
+
+    @model_validator(mode="after")
+    def validate_candle_source(self):
+        if self.dataset_id:
+            if self.underlying_candles is not None or self.option_candles is not None:
+                raise ValueError("Choose a saved dataset or inline candle rows, not both.")
+        elif self.underlying_candles is None or self.option_candles is None:
+            raise ValueError("Provide both underlying and option candles, or select a saved dataset.")
+        return self
+
+
+def _execution_status_snapshot() -> dict[str, Any]:
+    status = rust_execution_status()
+    status["live_trading_gate_enabled"] = LIVE_TRADING_ENABLED
+    status["kotak_session_authenticated"] = bool(neo_authenticated and neo_client is not None)
+    status["live_execution_prerequisites_met"] = bool(
+        status.get("available")
+        and LIVE_TRADING_ENABLED
+        and neo_authenticated
+        and neo_client is not None
+    )
+    return status
 
 
 @app.get("/api/algo/status")
@@ -5029,14 +5684,38 @@ def get_algo_status(
     authorization: str | None = Header(default=None, alias="Authorization"),
     neo_session: str | None = Cookie(default=None),
 ):
-    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=False)
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to view Algorithmic Trading Bot status")
     status_data = algo_bot.get_status()
     status_data["user_is_admin"] = ctx["is_admin"]
+    status_data["user_market_mode"] = ctx["market_mode"]
+    status_data["account_capital"] = ctx["base_balance"]
+    status_data["rust_execution"] = _execution_status_snapshot()
+    if not status_data.get("running") and not status_data.get("circuit_breaker_halted"):
+        status_data["config"]["initial_capital"] = ctx["base_balance"]
+        if algo_bot.config.max_loss_limit > 0:
+            status_data["daily_loss_limit"] = min(ctx["base_balance"] * algo_bot.config.max_daily_loss_pct / 100.0, algo_bot.config.max_loss_limit)
+        else:
+            status_data["daily_loss_limit"] = ctx["base_balance"] * algo_bot.config.max_daily_loss_pct / 100.0
     return status_data
+
+
+@app.get("/api/execution/status")
+def get_execution_status(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to inspect execution status.")
+    return {"ok": True, "execution": _execution_status_snapshot()}
 
 
 @app.post("/api/algo/start")
 def start_algo(
+    payload: AlgoStartPayload,
     market: str | None = None,
     x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -5045,7 +5724,27 @@ def start_algo(
     ctx = _get_user_context(x_owner_token, authorization, neo_session, market=market, require_auth=True)
     if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
         raise HTTPException(status_code=403, detail="Admin privileges required to operate Algorithmic Trading Bot")
-    return algo_bot.start()
+    if ctx["market_mode"] != "indian":
+        raise HTTPException(status_code=409, detail="Forex algo execution is not enabled yet. Switch to Indian market mode.")
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    if not up_token and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=503, detail="Connect live Upstox market data before starting the Indian options algo.")
+    if payload.mode == "live" and not (LIVE_TRADING_ENABLED and neo_authenticated and neo_client is not None):
+        raise HTTPException(status_code=403, detail="Live algo mode requires LIVE_TRADING_ENABLED and an authenticated Kotak Neo session.")
+    if payload.mode == "live":
+        if not is_rust_execution_available():
+            raise HTTPException(status_code=503, detail=rust_execution_status().get("reason") or "Rust execution is unavailable.")
+        try:
+            parsed_limits, limits_error = _parse_kotak_limits(neo_client.limits())
+        except Exception as exc:
+            parsed_limits, limits_error = None, _kotak_exception_summary(exc)
+        if not parsed_limits or float(parsed_limits.get("total_equity") or 0.0) <= 0:
+            raise HTTPException(status_code=503, detail=f"Kotak account equity is unavailable; cannot size the live algo risk limit. {limits_error or ''}".strip())
+        ctx["base_balance"] = float(parsed_limits["total_equity"])
+    result = algo_bot.start(execution_context=ctx, mode=payload.mode)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=str(result.get("message") or "Algo could not be started."))
+    return result
 
 
 @app.post("/api/algo/stop")
@@ -5091,16 +5790,727 @@ def reset_algo_circuit_breaker(
 
 
 @app.get("/api/algo/trades")
-def get_algo_trades():
-    return {"ok": True, "trades": algo_bot.trades_history}
+def get_algo_trades(
+    limit: int = 25,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to view Algorithmic Trading Bot trades")
+    limit = max(1, min(int(limit or 25), 100))
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM algo_trades WHERE strategy_id = ? AND account_id = ? ORDER BY id DESC LIMIT ?",
+                ("INDIAN_ATM_OPTION_BUYING", algo_bot.account_id, limit),
+            ).fetchall()
+        return {"ok": True, "trades": [dict(row) for row in rows]}
+    except Exception:
+        return {"ok": True, "trades": list(reversed(algo_bot.trades_history[-limit:]))}
+
+
+def _run_and_save_algo_backtest(
+    ctx: dict[str, Any],
+    symbol: str,
+    token: str,
+    days: int,
+    underlying: str | None = None,
+    option_type: str | None = None,
+    spot_price: float | None = None,
+    selected_expiry: str | None = None,
+    persist_run: bool = True,
+) -> dict[str, Any]:
+    from app.backtest_engine import run_option_buying_backtest
+
+    clean_symbol = str(symbol or "").strip().upper()
+    clean_token = str(token or "").strip()
+    clean_days = max(1, min(int(days or 30), 30))
+    if not _is_option_symbol(clean_symbol) or not clean_token.startswith(("NSE_FO|", "BSE_FO|")):
+        raise HTTPException(status_code=422, detail="Select an exact listed option contract from the live option chain.")
+
+    selected_contract = None
+    contract_underlying = str(underlying or "").strip().upper()
+    lookup_underlyings = (contract_underlying,) if contract_underlying else ("NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY")
+    for contract_market in lookup_underlyings:
+        selected_contract = next(
+            (contract for contract in _get_upstox_option_contracts(contract_market)
+             if str(contract.get("instrument_key") or "") == clean_token),
+            None,
+        )
+        if selected_contract:
+            contract_underlying = contract_market
+            break
+    if not selected_contract:
+        raise HTTPException(status_code=503, detail="Lot size for the selected option contract is unavailable.")
+    contract_symbol = str(selected_contract.get("trading_symbol") or "").strip().upper()
+    if contract_symbol and contract_symbol != clean_symbol:
+        raise HTTPException(status_code=422, detail="The symbol and instrument token identify different option contracts.")
+    clean_symbol = contract_symbol or clean_symbol
+    lot_size = int(selected_contract.get("lot_size") or 0)
+    if lot_size <= 0:
+        raise HTTPException(status_code=503, detail="Lot size for the selected option contract is unavailable.")
+
+    candle_result = _fetch_historical_or_intraday_candles(
+        clean_symbol,
+        token=clean_token,
+        requested_days=clean_days,
+        now_dt=datetime.now(IST_TZ),
+        require_current_session=False,
+    )
+    candles = candle_result.get("candles") or []
+    initial_capital = max(1.0, float(ctx.get("base_balance") or algo_bot.config.initial_capital))
+    exchange_segment = "bse_fo" if clean_token.startswith("BSE_FO|") else "nse_fo"
+    report = run_option_buying_backtest(
+        candles=candles,
+        symbol=clean_symbol,
+        lot_size=lot_size,
+        exchange_segment=exchange_segment,
+        lots_per_order=algo_bot.config.lots_per_order,
+        rr_ratio=2.25,
+        min_atr=14.0,
+        risk_pct_per_trade=algo_bot.config.risk_pct_per_trade,
+        initial_capital=initial_capital,
+        max_daily_loss_pct=10.0,
+        max_drawdown_pct=30.0,
+    )
+    if not candles and candle_result.get("reason"):
+        report["error"] = str(candle_result["reason"])
+    report.update({
+        "underlying": contract_underlying or "UNKNOWN",
+        "option_type": str(option_type or ((parse_option_sym(clean_symbol) or ("", 0.0, ""))[2]) or selected_contract.get("instrument_type") or "").upper(),
+        "lot_size": lot_size,
+        "instrument_key": clean_token,
+        "expiry": selected_expiry or selected_contract.get("expiry"),
+        "spot_price_at_run": spot_price,
+        "requested_days": clean_days,
+        "data_source": candle_result.get("source") or "unavailable",
+        "data_quality": "real_upstox_candles" if candles else "no_candle_data",
+    })
+    settings = {
+        "rr_ratio": 2.25,
+        "min_atr": 14.0,
+        "risk_pct_per_trade": algo_bot.config.risk_pct_per_trade,
+        "lots_per_order": algo_bot.config.lots_per_order,
+        "initial_capital": initial_capital,
+        "max_daily_loss_pct": 10.0,
+        "max_drawdown_pct": 30.0,
+        "max_consecutive_losses": 3,
+        "loss_streak_window_seconds": 1800,
+        "entry_window_ist": "09:20–15:28",
+        "forced_exit_ist": "15:29",
+    }
+    account_id = str(ctx.get("account_id") or "KOTAK_OWNER")
+    created_at = utc_now()
+    data_start = report.get("data_range_start")
+    data_end = report.get("data_range_end")
+    run_id = None
+    if persist_run:
+        with db() as conn:
+            cur = conn.execute(
+                """INSERT INTO algo_backtest_runs(
+                    strategy_id, account_id, created_at, underlying, option_type, symbol, instrument_key,
+                    requested_days, candle_count, data_start, data_end, settings_json, report_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "INDIAN_ATM_OPTION_BUYING", account_id, created_at,
+                    contract_underlying or "UNKNOWN", str(report.get("option_type") or ""), clean_symbol, clean_token,
+                    clean_days, int(report.get("candle_count") or len(candles)), data_start, data_end,
+                    json.dumps(settings, ensure_ascii=False), json.dumps(report, ensure_ascii=False),
+                ),
+            )
+            run_id = int(cur.lastrowid)
+            conn.commit()
+    return {
+        "ok": not bool(report.get("error")),
+        "run_id": run_id,
+        "created_at": created_at,
+        "data_source": candle_result.get("source") or "unavailable",
+        "report": report,
+    }
 
 
 @app.get("/api/algo/backtest")
-def get_algo_backtest(rr: float = 6.5, min_atr: float = 10.0):
-    from app.backtest_engine import run_full_expiry_portfolio_backtest
-    report = run_full_expiry_portfolio_backtest()
-    return {"ok": True, "report": report}
+def get_algo_backtest(
+    symbol: str,
+    token: str,
+    days: int = 30,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to run the Algo backtest")
+    return _run_and_save_algo_backtest(ctx, symbol, token, days)
 
+
+@app.post("/api/algo/backtests/run")
+def run_algo_backtest(
+    payload: AlgoBacktestRunPayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to run the Algo backtest")
+    chain = chart_option_chain(symbol=payload.underlying)
+    if not chain or not chain.get("ok") or chain.get("market_data_source") != "live":
+        raise HTTPException(status_code=503, detail="A live Upstox option chain is required to select the current ATM contract.")
+    rows = chain.get("chain") or []
+    spot = float(chain.get("spot_price") or 0.0)
+    if not rows or spot <= 0:
+        raise HTTPException(status_code=503, detail="The live option chain did not include a usable underlying spot price.")
+    atm = min(rows, key=lambda row: abs(float(row.get("strike") or 0.0) - spot))
+    option_key = "call" if payload.option_type == "CE" else "put"
+    option = atm.get(option_key) or {}
+    token = str(option.get("instrument_key") or atm.get(f"{option_key}_token") or "").strip()
+    symbol = str(option.get("trading_symbol") or atm.get(f"{option_key}_trading_symbol") or "").strip().upper()
+    if not token or not token.startswith(("NSE_FO|", "BSE_FO|")):
+        raise HTTPException(status_code=503, detail=f"The live ATM {payload.option_type} contract is unavailable for this expiry.")
+    if not symbol:
+        contract = next(
+            (item for item in _get_upstox_option_contracts(payload.underlying)
+             if str(item.get("instrument_key") or "") == token),
+            None,
+        )
+        symbol = str((contract or {}).get("trading_symbol") or "").strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=503, detail="The selected ATM contract's listed trading symbol is unavailable.")
+    result = _run_and_save_algo_backtest(
+        ctx,
+        symbol,
+        token,
+        payload.days,
+        underlying=payload.underlying,
+        option_type=payload.option_type,
+        spot_price=spot,
+        selected_expiry=chain.get("selected_expiry"),
+    )
+    result["atm_strike"] = float(atm.get("strike") or 0.0)
+    return result
+
+
+@app.get("/api/algo/backtests")
+def list_algo_backtests(
+    limit: int = 20,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to view Algo backtests")
+    safe_limit = max(1, min(int(limit or 20), 100))
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, underlying, option_type, symbol, requested_days, candle_count, data_start, data_end, report_json "
+            "FROM algo_backtest_runs WHERE strategy_id=? AND account_id=? ORDER BY id DESC LIMIT ?",
+            ("INDIAN_ATM_OPTION_BUYING", str(ctx.get("account_id") or "KOTAK_OWNER"), safe_limit),
+        ).fetchall()
+    runs = []
+    for row in rows:
+        report = json.loads(str(row["report_json"] or "{}"))
+        runs.append({
+            "id": int(row["id"]),
+            "created_at": row["created_at"],
+            "underlying": row["underlying"],
+            "option_type": row["option_type"],
+            "symbol": row["symbol"],
+            "requested_days": int(row["requested_days"] or 0),
+            "candle_count": int(row["candle_count"] or 0),
+            "data_start": row["data_start"],
+            "data_end": row["data_end"],
+            "total_trades": report.get("total_trades", 0),
+            "net_pnl": report.get("net_pnl", 0),
+            "sharpe_ratio": report.get("sharpe_ratio"),
+            "max_drawdown_pct": report.get("max_drawdown_pct"),
+            "error": report.get("error"),
+        })
+    return {"ok": True, "runs": runs}
+
+
+@app.get("/api/algo/backtests/{run_id}")
+def get_algo_backtest_run(
+    run_id: int,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges required to view Algo backtests")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM algo_backtest_runs WHERE id=? AND strategy_id=? AND account_id=?",
+            (int(run_id), "INDIAN_ATM_OPTION_BUYING", str(ctx.get("account_id") or "KOTAK_OWNER")),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Backtest run was not found.")
+    return {
+        "ok": True,
+        "run": {
+            "id": int(row["id"]),
+            "created_at": row["created_at"],
+            "underlying": row["underlying"],
+            "option_type": row["option_type"],
+            "symbol": row["symbol"],
+            "instrument_key": row["instrument_key"],
+            "requested_days": int(row["requested_days"] or 0),
+            "candle_count": int(row["candle_count"] or 0),
+            "data_start": row["data_start"],
+            "data_end": row["data_end"],
+            "settings": json.loads(str(row["settings_json"] or "{}")),
+            "report": json.loads(str(row["report_json"] or "{}")),
+        },
+    }
+
+
+
+@app.get("/api/research/registry")
+def get_research_registry(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    from app.research_engine import METRIC_REGISTRY, STRATEGIES
+    return {"ok": True, "strategies": STRATEGIES, "metrics": METRIC_REGISTRY}
+
+
+@app.get("/api/research/local-datasets")
+def get_local_research_datasets(
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    from app.research_data import local_dataset_manifest
+    return local_dataset_manifest()
+
+
+@app.post("/api/research/local-datasets/{dataset_id}/upload")
+async def upload_local_research_dataset_file(
+    dataset_id: str,
+    request: Request,
+    kind: str,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if not ctx["is_admin"] and not os.getenv("PYTEST_CURRENT_TEST"):
+        raise HTTPException(status_code=403, detail="Admin privileges are required to upload shared research data.")
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_rate_limit(f"research-upload:{client_ip}:{ctx.get('user_id', '')}", max_calls=6, window_seconds=900.0):
+            raise HTTPException(status_code=429, detail="Too many dataset uploads. Try again in 15 minutes.")
+
+    from app import research_data
+
+    config = research_data.LOCAL_DATASETS.get(dataset_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="Research dataset is not allowlisted for upload.")
+    if kind not in {"underlying", "options"}:
+        raise HTTPException(status_code=422, detail="File kind must be underlying or options.")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/csv", "application/octet-stream", "application/vnd.ms-excel"}:
+        raise HTTPException(status_code=415, detail="Upload a CSV file using text/csv or application/octet-stream.")
+
+    max_bytes = 200 * 1024 * 1024
+    try:
+        declared_length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length header.")
+    if declared_length < 0 or declared_length > max_bytes:
+        raise HTTPException(status_code=413, detail="CSV exceeds the 200 MB per-file upload limit.")
+
+    filename_key = "underlying_file" if kind == "underlying" else "options_file"
+    destination_name = config[filename_key]
+    dataset_dir = research_data.EXPORT_ROOT / config["directory"]
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    destination = dataset_dir / destination_name
+    temporary = dataset_dir / f".{destination_name}.{uuid.uuid4().hex}.part"
+    metadata_temporary: Path | None = None
+    total_bytes = 0
+    try:
+        with temporary.open("wb") as output:
+            async for chunk in request.stream():
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    raise HTTPException(status_code=413, detail="CSV exceeds the 200 MB per-file upload limit.")
+                output.write(chunk)
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="The selected CSV file is empty.")
+
+        from app.research_data import inspect_csv_file
+        try:
+            validation, engine = inspect_csv_file(temporary, kind)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if int(validation.get("rows") or 0) < 1:
+            raise HTTPException(status_code=422, detail="CSV must include at least one candle row.")
+        if int(validation.get("invalid_ohlc") or 0) or int(validation.get("duplicate_bars") or 0):
+            raise HTTPException(
+                status_code=422,
+                detail=f"CSV validation found {validation.get('invalid_ohlc', 0)} invalid OHLC rows and {validation.get('duplicate_bars', 0)} duplicate candles.",
+            )
+
+        underlying_path = temporary if kind == "underlying" else dataset_dir / config["underlying_file"]
+        options_path = temporary if kind == "options" else dataset_dir / config["options_file"]
+        metadata_path = dataset_dir / config["metadata_file"]
+        if underlying_path.is_file() and options_path.is_file():
+            metadata = research_data.summarize_csv_pair(underlying_path, options_path)
+            metadata_temporary = dataset_dir / f".{config['metadata_file']}.{uuid.uuid4().hex}.part"
+            metadata_temporary.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+        os.replace(temporary, destination)
+        if metadata_temporary:
+            os.replace(metadata_temporary, metadata_path)
+        return {
+            "ok": True,
+            "dataset_id": dataset_id,
+            "kind": kind,
+            "file_name": destination_name,
+            "bytes": total_bytes,
+            "validation_engine": engine,
+            "rows": validation["rows"],
+            "dataset_ready": (dataset_dir / config["underlying_file"]).is_file() and (dataset_dir / config["options_file"]).is_file(),
+        }
+    finally:
+        temporary.unlink(missing_ok=True)
+        if metadata_temporary:
+            metadata_temporary.unlink(missing_ok=True)
+
+
+@app.post("/api/research/local-datasets/{dataset_id}/validate")
+def validate_local_research_dataset(
+    dataset_id: str,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    from app.research_data import inspect_local_dataset
+    try:
+        return inspect_local_dataset(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/research/backtests/run")
+def run_research_backtest(
+    payload: ResearchBacktestRunPayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    if payload.dataset_id:
+        try:
+            from app.research_data import load_local_dataset, local_dataset_manifest
+            selected = next((item for item in local_dataset_manifest()["datasets"] if item["id"] == payload.dataset_id), None)
+            if not selected:
+                raise FileNotFoundError("The saved Bank Nifty dataset is not available on this computer.")
+            underlying_candles, option_candles = load_local_dataset(payload.dataset_id)
+            effective_data_source = f"Local Upstox files: {selected['underlying_file']} and {selected['options_file']}"
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    else:
+        underlying_candles = payload.underlying_candles or []
+        option_candles = payload.option_candles or []
+        effective_data_source = payload.data_source.strip() or "Historical candles"
+    settings = dict(payload.settings)
+    settings["data_source"] = f"Local files selected by the user: {effective_data_source}" if payload.dataset_id else f"User supplied label (not independently verified): {effective_data_source}"
+    if "initial_capital" not in settings:
+        settings["initial_capital"] = max(1.0, float(ctx.get("base_balance") or 1000000.0))
+    try:
+        from app.research_engine import run_comparison
+        report = run_comparison(underlying_candles, option_candles, settings, payload.strategies)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Research backtest failed")
+        raise HTTPException(status_code=500, detail="Research backtest failed. Check the candle columns and timestamp format.") from exc
+    created_at = utc_now()
+    account_id = str(ctx.get("account_id") or "KOTAK_OWNER")
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO research_backtest_runs(account_id, created_at, data_source_label, settings_json, report_json) VALUES(?,?,?,?,?)",
+            (account_id, created_at, effective_data_source[:120], json.dumps(settings, ensure_ascii=False), json.dumps(report, ensure_ascii=False)),
+        )
+        run_id = int(cur.lastrowid)
+        conn.commit()
+    audit("research_backtest_saved", {"run_id": run_id, "strategies": payload.strategies, "dataset_id": payload.dataset_id,
+                                      "sessions": report.get("strategies", [{}])[0].get("data_quality", {}).get("session_count", 0)})
+    return {"ok": True, "run_id": run_id, "created_at": created_at, "private": True, "report": report}
+
+
+@app.get("/api/research/backtests")
+def list_research_backtests(
+    limit: int = 20,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    safe_limit = max(1, min(int(limit or 20), 100))
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, data_source_label, settings_json, report_json FROM research_backtest_runs WHERE account_id=? ORDER BY id DESC LIMIT ?",
+            (str(ctx.get("account_id") or "KOTAK_OWNER"), safe_limit),
+        ).fetchall()
+    runs = []
+    for row in rows:
+        report = json.loads(str(row["report_json"] or "{}"))
+        runs.append({"id": int(row["id"]), "created_at": row["created_at"], "data_source": row["data_source_label"],
+                     "strategy_count": report.get("strategy_count", 0), "comparison": report.get("comparison", []),
+                     "settings": json.loads(str(row["settings_json"] or "{}"))})
+    return {"ok": True, "runs": runs}
+
+
+def _load_private_research_run(run_id: int, account_id: str) -> dict[str, Any] | None:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM research_backtest_runs WHERE id=? AND account_id=?", (run_id, account_id)).fetchone()
+    if not row:
+        return None
+    return {"id": int(row["id"]), "created_at": row["created_at"], "data_source": row["data_source_label"],
+            "settings": json.loads(str(row["settings_json"] or "{}")), "report": json.loads(str(row["report_json"] or "{}"))}
+
+
+@app.get("/api/research/backtests/{run_id}")
+def get_research_backtest(
+    run_id: int,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    run = _load_private_research_run(run_id, str(ctx.get("account_id") or "KOTAK_OWNER"))
+    if not run:
+        raise HTTPException(status_code=404, detail="Research result was not found.")
+    return {"ok": True, "run": run}
+
+
+@app.post("/api/research/backtests/{run_id}/optimize")
+def optimize_research_backtest(
+    run_id: int,
+    payload: ResearchOptimizePayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    account_id = str(ctx.get("account_id") or "KOTAK_OWNER")
+    run = _load_private_research_run(run_id, account_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Research result was not found.")
+    strategy = next((item for item in run["report"].get("strategies", []) if item.get("strategy_id") == payload.strategy_id), None)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy was not found in this research run.")
+    try:
+        from app.research_engine import optimize_strategy
+        if payload.dataset_id:
+            from app.research_data import load_local_dataset
+            underlying_candles, option_candles = load_local_dataset(payload.dataset_id)
+        else:
+            underlying_candles, option_candles = payload.underlying_candles or [], payload.option_candles or []
+        optimization = optimize_strategy(payload.strategy_id, underlying_candles, option_candles,
+                                         strategy.get("settings") or run["settings"], payload.method,
+                                         payload.parameter_space, payload.budget, minimum_trades=payload.minimum_trades)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Research parameter optimization failed")
+        raise HTTPException(status_code=500, detail="Optimization failed. Review the candle and parameter inputs.") from exc
+    strategy["optimization"] = optimization
+    with db() as conn:
+        conn.execute("UPDATE research_backtest_runs SET report_json=? WHERE id=? AND account_id=?",
+                     (json.dumps(run["report"], ensure_ascii=False), run_id, account_id))
+        conn.commit()
+    audit("research_optimization_completed", {"run_id": run_id, "strategy_id": payload.strategy_id, "method": payload.method,
+                                                "status": optimization.get("status"), "candidates": optimization.get("candidate_count")})
+    return {"ok": True, "run_id": run_id, "strategy_id": payload.strategy_id, "optimization": optimization}
+
+
+class ResearchSharePayload(BaseModel):
+    expires_days: int = Field(default=90, ge=1, le=365)
+    strategy_id: str | None = None
+
+
+@app.post("/api/research/backtests/{run_id}/share")
+def create_research_share(
+    run_id: int,
+    payload: ResearchSharePayload,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    account_id = str(ctx.get("account_id") or "KOTAK_OWNER")
+    run = _load_private_research_run(run_id, account_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Research result was not found.")
+    strategy_id = str(payload.strategy_id or "").strip() or None
+    if strategy_id and not any(item.get("strategy_id") == strategy_id for item in run["report"].get("strategies", [])):
+        raise HTTPException(status_code=404, detail="Strategy was not found in this research run.")
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    created = datetime.now(timezone.utc)
+    expires = created + timedelta(days=payload.expires_days)
+    with db() as conn:
+        conn.execute("INSERT INTO research_shares(token_hash, run_id, account_id, strategy_id, created_at, expires_at) VALUES(?,?,?,?,?,?)",
+                     (token_hash, run_id, account_id, strategy_id, created.isoformat(), expires.isoformat()))
+        conn.commit()
+    audit("research_share_created", {"run_id": run_id, "expires_at": expires.isoformat()})
+    suffix = f"/{strategy_id}" if strategy_id else ""
+    return {"ok": True, "private": False, "expires_at": expires.isoformat(), "share_url": f"/results/{token}{suffix}", "strategy_id": strategy_id}
+
+
+@app.get("/api/research/shared/{share_token}")
+def get_shared_research_result(share_token: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,100}", share_token):
+        raise HTTPException(status_code=404, detail="Shared result was not found.")
+    token_hash = hashlib.sha256(share_token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT r.id, r.created_at, r.data_source_label, r.settings_json, r.report_json, s.expires_at, s.strategy_id "
+            "FROM research_shares s JOIN research_backtest_runs r ON r.id=s.run_id WHERE s.token_hash=?",
+            (token_hash,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Shared result was not found.")
+    try:
+        expired = datetime.fromisoformat(str(row["expires_at"])) <= now
+    except ValueError:
+        expired = True
+    if expired:
+        with db() as conn:
+            conn.execute("DELETE FROM research_shares WHERE token_hash=?", (token_hash,)); conn.commit()
+        raise HTTPException(status_code=410, detail="This research share link has expired.")
+    report = json.loads(str(row["report_json"] or "{}"))
+    strategy_id = str(row["strategy_id"] or "").strip()
+    if strategy_id:
+        selected = [item for item in report.get("strategies", []) if item.get("strategy_id") == strategy_id]
+        if not selected:
+            raise HTTPException(status_code=404, detail="Shared strategy was not found.")
+        report["strategies"] = selected
+        report["strategy_count"] = 1
+        report["comparison"] = [item for item in report.get("comparison", []) if item.get("strategy_id") == strategy_id]
+    return {"ok": True, "run": {"id": int(row["id"]), "created_at": row["created_at"],
+            "data_source": row["data_source_label"], "settings": json.loads(str(row["settings_json"] or "{}")),
+            "report": report, "expires_at": row["expires_at"], "strategy_id": strategy_id or None}}
+
+
+@app.get("/api/research/shared/{share_token}/trades.csv")
+def export_shared_research_trades_csv(share_token: str):
+    shared = get_shared_research_result(share_token)
+    trades = [trade for item in shared["run"]["report"].get("strategies", []) for trade in item.get("trades", [])]
+    keys = sorted({key for trade in trades for key in trade})
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=keys, extrasaction="ignore")
+    writer.writeheader()
+    for trade in trades:
+        row = {key: ("'" + value if isinstance(value := trade.get(key), str) and value.startswith(("=", "+", "-", "@")) else value) for key in keys}
+        writer.writerow(row)
+    return Response(output.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="neo_pip_shared_research_{shared["run"]["id"]}_trades.csv"'})
+
+
+@app.get("/api/research/shared/{share_token}/report.xlsx")
+def export_shared_research_xlsx(share_token: str):
+    shared = get_shared_research_result(share_token)
+    from app.research_exports import xlsx_bytes
+    content = xlsx_bytes(shared["run"]["report"])
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="neo_pip_shared_research_{shared["run"]["id"]}.xlsx"'})
+
+
+@app.get("/api/research/shared/{share_token}/report.pdf")
+def export_shared_research_pdf(share_token: str):
+    shared = get_shared_research_result(share_token)
+    from app.research_exports import pdf_bytes
+    content = pdf_bytes(shared["run"]["report"])
+    return Response(content, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="neo_pip_shared_research_{shared["run"]["id"]}.pdf"'})
+
+
+@app.get("/api/research/backtests/{run_id}/trades.csv")
+def export_research_trades_csv(
+    run_id: int,
+    strategy_id: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    run = _load_private_research_run(run_id, str(ctx.get("account_id") or "KOTAK_OWNER"))
+    if not run:
+        raise HTTPException(status_code=404, detail="Research result was not found.")
+    strategies = run["report"].get("strategies", [])
+    if strategy_id:
+        strategies = [item for item in strategies if item.get("strategy_id") == strategy_id]
+        if not strategies:
+            raise HTTPException(status_code=404, detail="Strategy was not found in this run.")
+    trades = [trade for item in strategies for trade in item.get("trades", [])]
+    keys = sorted({key for trade in trades for key in trade})
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=keys, extrasaction="ignore")
+    writer.writeheader()
+    for trade in trades:
+        row = {}
+        for key in keys:
+            value = trade.get(key)
+            if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+                value = "'" + value
+            row[key] = value
+        writer.writerow(row)
+    safe_name = f"neo_pip_research_{run_id}_{strategy_id or 'all'}_trades.csv"
+    return Response(output.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'})
+
+
+@app.get("/api/research/backtests/{run_id}/report.xlsx")
+def export_research_xlsx(
+    run_id: int,
+    strategy_id: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    run = _load_private_research_run(run_id, str(ctx.get("account_id") or "KOTAK_OWNER"))
+    if not run: raise HTTPException(status_code=404, detail="Research result was not found.")
+    from app.research_exports import xlsx_bytes
+    content = xlsx_bytes(run["report"], strategy_id)
+    safe_name = f"neo_pip_research_{run_id}_{strategy_id or 'all'}.xlsx"
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'})
+
+
+@app.get("/api/research/backtests/{run_id}/report.pdf")
+def export_research_pdf(
+    run_id: int,
+    strategy_id: str | None = None,
+    x_owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    neo_session: str | None = Cookie(default=None),
+):
+    ctx = _get_user_context(x_owner_token, authorization, neo_session, require_auth=True)
+    run = _load_private_research_run(run_id, str(ctx.get("account_id") or "KOTAK_OWNER"))
+    if not run: raise HTTPException(status_code=404, detail="Research result was not found.")
+    from app.research_exports import pdf_bytes
+    content = pdf_bytes(run["report"], strategy_id)
+    safe_name = f"neo_pip_research_{run_id}_{strategy_id or 'all'}.pdf"
+    return Response(content, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}"'})
 
 
 @app.get("/api/indices/quotes")
@@ -5611,9 +7021,11 @@ def change_api_keys(
     if not os.getenv("PYTEST_CURRENT_TEST") and not ctx["is_admin"] and not is_owner_request(token):
         raise HTTPException(status_code=403, detail="Only Admin can modify API keys.")
 
-    expected_pin = OWNER_PIN or os.getenv("OWNER_PIN", "2026")
+    expected_pin = _configured_owner_pin()
+    if not expected_pin:
+        raise HTTPException(status_code=503, detail="Owner PIN is not configured on this server.")
     if payload.mpin:
-        if payload.mpin.strip() != expected_pin.strip():
+        if not secrets.compare_digest(payload.mpin.strip(), expected_pin.strip()):
             raise HTTPException(status_code=401, detail="Invalid MPIN. Authorization denied.")
     elif not is_owner and not os.getenv("PYTEST_CURRENT_TEST"):
         raise HTTPException(status_code=401, detail="Please enter your MPIN to authorize changing API keys.")
@@ -6225,11 +7637,13 @@ def _fetch_upstox_1m_merged(
     days_back: int,
     upstox_headers: dict[str, str],
 ) -> tuple[list[list[Any]], str]:
-    """Fetch Upstox prior historical 1m bars AND today's live intraday 1m bars, merged seamlessly."""
+    """Fetch and merge exact-instrument 1m candles using Upstox Historical Candle V3."""
     today_str = today_dt.strftime("%Y-%m-%d")
-    from_date_str = (today_dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    range_url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{today_str}/{from_date_str}"
-    intraday_url = f"https://api.upstox.com/v2/historical-candle/intraday/{quote_url(inst_key)}/1minute"
+    bounded_days = max(1, min(int(days_back or 1), 30))
+    from_date_str = (today_dt - timedelta(days=bounded_days - 1)).strftime("%Y-%m-%d")
+    encoded_key = quote_url(inst_key)
+    range_url = f"https://api.upstox.com/v3/historical-candle/{encoded_key}/minutes/1/{today_str}/{from_date_str}"
+    intraday_url = f"https://api.upstox.com/v3/historical-candle/intraday/{encoded_key}/minutes/1"
 
     hist_raw: list[list[Any]] = []
     intra_raw: list[list[Any]] = []
@@ -6254,10 +7668,10 @@ def _fetch_upstox_1m_merged(
     if merged:
         return merged, today_str
 
-    # Fallback: probe recent single trading sessions over past 7 IST days
-    for i in range(7):
+    # Probe recent sessions individually for contracts with sparse/expired history.
+    for i in range(min(7, bounded_days)):
         try_date = (today_dt - timedelta(days=i)).strftime("%Y-%m-%d")
-        url = f"https://api.upstox.com/v2/historical-candle/{quote_url(inst_key)}/1minute/{try_date}/{try_date}"
+        url = f"https://api.upstox.com/v3/historical-candle/{encoded_key}/minutes/1/{try_date}/{try_date}"
         try:
             with httpx.Client(timeout=4.0) as client:
                 resp = client.get(url, headers=upstox_headers)
@@ -6269,6 +7683,57 @@ def _fetch_upstox_1m_merged(
         except Exception:
             continue
     return [], today_str
+
+
+def _fetch_historical_or_intraday_candles(
+    symbol: str,
+    interval: str = "1m",
+    token: str | None = None,
+    requested_days: int = 2,
+    now_dt: datetime | None = None,
+    require_current_session: bool = True,
+) -> dict[str, Any]:
+    """Fetch real, closed option candles for the algo; never derive or synthesize bars."""
+    inst_key = str(token or "").strip()
+    if not inst_key.startswith(("NSE_FO|", "BSE_FO|")):
+        return {"ok": False, "source": "unavailable", "candles": [], "reason": "A real listed option instrument key is required."}
+    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+    if not up_token:
+        return {"ok": False, "source": "unavailable", "candles": [], "reason": "Upstox access token is not configured."}
+
+    now_ist = (now_dt or datetime.now(IST_TZ)).astimezone(IST_TZ)
+    headers = {"User-Agent": "NeoPIP/1.0", "Accept": "application/json", "Authorization": f"Bearer {up_token}"}
+    raw_candles, _ = _fetch_upstox_1m_merged(inst_key, now_ist, max(1, min(int(requested_days or 2), 30)), headers)
+    closed: list[dict[str, Any]] = []
+    for candle in raw_candles:
+        try:
+            bar_dt = datetime.fromisoformat(str(candle[0]))
+            if bar_dt.tzinfo is None:
+                bar_dt = bar_dt.replace(tzinfo=IST_TZ)
+            bar_dt = bar_dt.astimezone(IST_TZ)
+            minutes = bar_dt.hour * 60 + bar_dt.minute
+            if (
+                (require_current_session and bar_dt.date() != now_ist.date())
+                or bar_dt + timedelta(minutes=1) > now_ist
+                or bar_dt.weekday() >= 5
+                or not (9 * 60 + 15 <= minutes <= 15 * 60 + 29)
+            ):
+                continue
+            opened, high, low, close = (float(candle[i]) for i in range(1, 5))
+            volume = int(float(candle[5] or 0)) if len(candle) > 5 else 0
+            closed.append({
+                "time": int(bar_dt.timestamp()),
+                "open": opened,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+            })
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+    if not closed or (require_current_session and now_ist.timestamp() - closed[-1]["time"] > 150):
+        return {"ok": False, "source": "stale", "candles": [], "reason": "No fresh closed option candles are available."}
+    return {"ok": True, "symbol": symbol, "instrument_key": inst_key, "interval": interval, "source": "upstox_live", "candles": closed}
 
 
 @app.get("/api/candles")
@@ -7332,6 +8797,9 @@ def live_quotes_batch(payload: LiveQuotesBatchPayload):
 
 @app.websocket("/api/terminal/ws")
 async def terminal_ws_endpoint(websocket: WebSocket):
+    if CLOUD_DEPLOYMENT:
+        await websocket.close(code=1008, reason="Remote terminal is disabled in cloud deployments.")
+        return
     if pty is None:
         await websocket.close(code=1011)
         return
@@ -7761,6 +9229,11 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
         valid_expiries = exp_list or [today_str]
 
     selected_exp = expiry if (expiry and expiry in valid_expiries) else (valid_expiries[0] if valid_expiries else today_str)
+    contracts_by_key = {
+        str(contract.get("instrument_key") or ""): contract
+        for contract in contracts
+        if str(contract.get("expiry") or "") == selected_exp and contract.get("instrument_key")
+    }
 
     up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
     headers = {"Accept": "application/json"}
@@ -7770,6 +9243,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
     chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key={quote_url(und_key)}&expiry_date={selected_exp}"
     rows = []
     spot_price = 0.0
+    live_chain_loaded = False
 
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -7777,6 +9251,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
             if resp.status_code == 200:
                 raw_data = resp.json().get("data", [])
                 if raw_data:
+                    live_chain_loaded = True
                     spot_price = float(raw_data[0].get("underlying_spot_price") or 0.0)
                     for item in raw_data:
                         strike = float(item.get("strike_price") or 0.0)
@@ -7795,14 +9270,20 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
                         p_diff = round(p_ltp - p_prev, 2)
                         p_pct = round((p_diff / p_prev) * 100, 2) if p_prev > 0 else 0.0
 
+                        c_key = str(call_opt.get("instrument_key") or "")
+                        p_key = str(put_opt.get("instrument_key") or "")
+                        c_contract = contracts_by_key.get(c_key) or {}
+                        p_contract = contracts_by_key.get(p_key) or {}
                         oc_default_lot = 30 if und_name == "BANKNIFTY" else (20 if und_name == "SENSEX" else (60 if und_name == "FINNIFTY" else (120 if und_name == "MIDCPNIFTY" else 65)))
-                        oc_lot = int(contracts[0].get("lot_size") or oc_default_lot) if contracts else oc_default_lot
+                        oc_lot = int(c_contract.get("lot_size") or p_contract.get("lot_size") or oc_default_lot)
                         rows.append({
                             "strike": strike,
                             "lot_size": oc_lot,
                             "call": {
                                 "instrument_key": call_opt.get("instrument_key", ""),
                                 "symbol": f"{und_name} {int(strike)} CE",
+                                "trading_symbol": str(c_contract.get("trading_symbol") or ""),
+                                "expiry": selected_exp,
                                 "ltp": c_ltp,
                                 "change": c_diff,
                                 "change_percent": c_pct,
@@ -7812,6 +9293,8 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
                             "put": {
                                 "instrument_key": put_opt.get("instrument_key", ""),
                                 "symbol": f"{und_name} {int(strike)} PE",
+                                "trading_symbol": str(p_contract.get("trading_symbol") or ""),
+                                "expiry": selected_exp,
                                 "ltp": p_ltp,
                                 "change": p_diff,
                                 "change_percent": p_pct,
@@ -7823,6 +9306,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
         pass
 
     if not rows:
+        live_chain_loaded = False
         # Fallback to realistic option chain centered at spot price
         quote = _get_live_quote_data(und_name)
         if quote and quote.get("ltp"):
@@ -7864,6 +9348,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
                 "call": {
                     "instrument_key": f"NSE_FO|{und_name}{int(strike)}CE",
                     "symbol": f"{und_name} {int(strike)} CE",
+                    "trading_symbol": "",
                     "ltp": c_ltp,
                     "change": c_diff,
                     "change_percent": c_pct,
@@ -7873,6 +9358,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
                 "put": {
                     "instrument_key": f"NSE_FO|{und_name}{int(strike)}PE",
                     "symbol": f"{und_name} {int(strike)} PE",
+                    "trading_symbol": "",
                     "ltp": p_ltp,
                     "change": p_diff,
                     "change_percent": p_pct,
@@ -7897,6 +9383,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
         p = r.get("put") or {}
         r["call_symbol"] = c.get("symbol", f"{und_name} {int(stk)} CE")
         r["call_token"] = c.get("instrument_key", "")
+        r["call_trading_symbol"] = c.get("trading_symbol", "")
         r["call_ltp"] = c.get("ltp", 0.0)
         r["call_vol"] = c.get("volume", 0)
         r["call_oi"] = c.get("oi", 0)
@@ -7905,6 +9392,7 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
 
         r["put_symbol"] = p.get("symbol", f"{und_name} {int(stk)} PE")
         r["put_token"] = p.get("instrument_key", "")
+        r["put_trading_symbol"] = p.get("trading_symbol", "")
         r["put_ltp"] = p.get("ltp", 0.0)
         r["put_vol"] = p.get("volume", 0)
         r["put_oi"] = p.get("oi", 0)
@@ -7917,6 +9405,8 @@ def chart_option_chain(symbol: str = "NIFTY", expiry: str | None = None):
         "spot_price": spot_price,
         "expiries": valid_expiries,
         "selected_expiry": selected_exp,
+        "market_data_source": "live" if live_chain_loaded else "synthetic",
+        "is_fallback": not live_chain_loaded,
         "rows": rows,
         "chain": rows,
     }

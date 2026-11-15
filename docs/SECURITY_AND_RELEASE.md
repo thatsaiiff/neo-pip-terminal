@@ -1,38 +1,44 @@
 # Security, Operational Safety & Release Checklist
 
-## Before using the project
+## Before releasing the hosted site
 
-- [ ] Use a personal desktop account and keep the backend bound to loopback (`127.0.0.1`).
-- [ ] Confirm `.env` is ignored by Git and file permissions are appropriate for the machine.
-- [ ] Generate a high-entropy `BRIDGE_TOKEN`; copy it to `extension/bridge-config.js` and do not commit/share it.
-- [ ] Check that the extension is loaded only in a browser profile used for Kotak Neo.
-- [ ] Confirm the correct Kotak Neo domain is explicitly covered by the extension match list.
-- [ ] Confirm the symbol shown in Neo PIP is exactly the canonical symbol the broker order API expects.
-- [ ] Verify the exchange segment, product eligibility, lot size, quantity and stop/limit inputs manually.
-- [ ] Run `pytest -q` and test the UI in simulation mode before attempting any live interaction.
+- [ ] Keep `.env` out of Git and Docker; use mode `0600` on the VM.
+- [ ] Configure unique owner `ADMIN_USERNAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `OWNER_PIN` values. Never reuse the Kotak MPIN for the owner PIN.
+- [ ] Keep `LIVE_TRADING_ENABLED=false` until the live deployment has been separately reviewed.
+- [ ] Set `BACKEND_DOMAIN` to a hostname or reserved public IPv4 for the Oracle VM and confirm the Caddy TLS certificate is valid. For IP mode, check its IP SAN, expiry, and renewal logs.
+- [ ] Allow inbound TCP 80/443 and UDP 443 in the Oracle VCN. Remove TCP 8000 ingress.
+- [ ] Set Vercel Production `NEO_PIP_BACKEND_URL` to the HTTPS origin and set the allowed frontend origins.
+- [ ] Confirm external port 8000 is unreachable and the HTTPS API health route reports the expected version.
+- [ ] Confirm `/`, `/chart`, `/research`, and `/api/research/local-datasets` load on the hosted deployment.
+- [ ] Transfer local research data to the VM only when the hosted app should use those CSVs; do not put them in Git or the image.
+- [ ] Review deployment diffs and perform the rollout outside trading hours.
 
 ## Before enabling live orders
 
-- [ ] Read and verify the current official Kotak Neo API rules, allowed static IP/registration requirements, product types, market/stop orders and order rate limits for the account.
-- [ ] Confirm consumer key, mobile number and UCC from Kotak Neo app/web; never share credentials in chat.
-- [ ] Complete TOTP registration and test authentication only when ready.
-- [ ] Decide whether live orders are actually intended, then change `LIVE_TRADING_ENABLED=false` to `true` locally and restart.
-- [ ] Start with the smallest correct quantity and a supported product/order type.
-- [ ] Check broker orderbook/tradebook after each submission; never infer fills from a successful HTTP response.
-- [ ] If a timeout, exception or uncertain status occurs, reconcile with Kotak Neo first. Do not blindly retry.
-- [ ] Keep this application off the public internet; do not expose it via port forwarding or tunnels.
+- [ ] Run an end-to-end paper session first. Confirm real quotes, exact listed contracts, candle source, quantity, stop, target, charges, and risk state.
+- [ ] Confirm the backend, network, and quote polling can stay available for the entire session. Algo stops are software monitored, not exchange-held.
+- [ ] Verify current official Kotak API requirements, source IP, account/product eligibility, order types, and order limits.
+- [ ] Configure Kotak credentials on the Oracle VM through its protected `.env`; never share them in chat or frontend code.
+- [ ] Complete TOTP registration and test authentication when ready.
+- [ ] Enable `LIVE_TRADING_ENABLED=true` only with deliberate operator intent. The setup script never enables it.
+- [ ] Confirm position sizing and start with the smallest supported size.
+- [ ] Check Kotak order/trade books after every submission. Reconcile ambiguous requests before retrying.
+- [ ] Before restarting or deploying, stop running algos and check broker positions because a restart interrupts quote monitoring.
 
-## Hardening gaps before any shared or hosted release
+## Known operational risks
 
-- Add OS-level access control and a per-session CSRF defense if any remote browser access is introduced.
-- Add stricter user confirmation or per-order live PIN; consider requiring typed confirmation text for live orders.
-- Use a canonical instrument master lookup to validate symbol, segment, expiry, strike and lot size.
-- Add order idempotency/reconciliation workflow based on broker orderbook before any retry.
-- Implement price timestamps, quote-staleness guard and order-size/margin guardrails before adding trailing stop.
-- Persist lifecycle statuses from broker order feed, not only order-submission responses.
-- Add automated browser tests for PiP, accessibility, and target Kotak Neo pages.
-- Review logging and storage lifecycle; add export/redaction/retention controls.
+- Algo stop, target, trailing, and end-of-day exits depend on the backend process and market data connection. A crash, stale feed, network interruption, or slippage can leave risk open.
+- The login limiter is in memory per backend process. If the service is scaled to multiple replicas, use a shared limiter.
+- Session tokens are stored in SQLite. Restrict database and backup access; revoke/rotate sessions if a copy is exposed.
+- Broker API integration, order status mapping, account permissions, and live market data have not been validated against this user's account in this release.
+- Historical backtest metrics are limited by the supplied candles and their scope. They do not establish future profitability.
+
+## Local development
+
+- [ ] Keep the local backend bound to `127.0.0.1:8000` unless LAN mode is deliberately enabled on a trusted private network.
+- [ ] Keep the Chrome extension limited to the browser profile used for Kotak Neo and use a high-entropy bridge token.
+- [ ] Confirm exact symbol, contract, exchange segment, product, lot size, quantity, stop, and order type before any real order.
 
 ## Risk statement
 
-This is a single-user local trading helper. It is not a recommendation service or a guarantee of trading outcomes. Browser DOM detection, price feed, broker acceptance, execution and exchange behaviour are independent failure points. Never rely on this UI alone to confirm an order filled or a stop-loss is active.
+Neo PIP is a trading tool, not a recommendation service or guarantee of results. The strategy's Sharpe target is not a promised or optimized outcome. Software-managed exits are not exchange-held protective orders. Always verify orders and positions in the broker's own interface.

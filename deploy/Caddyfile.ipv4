@@ -1,0 +1,22 @@
+{$BACKEND_DOMAIN} {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+		}
+	}
+
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy neo-pip-backend:8000
+	}
+	respond "Not found" 404
+}

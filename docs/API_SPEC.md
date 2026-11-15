@@ -1,8 +1,8 @@
-# API Specification — Neo PIP Local Service
+# API Specification — Neo PIP Service
 
-Base URL: `http://127.0.0.1:8000`
+Local base URL: `http://127.0.0.1:8000`; hosted browser base URL: `https://neo-pip-terminal.vercel.app`.
 
-All routes are local-only and return JSON except `GET /` and `/static/*`. The bridge route requires `X-Bridge-Token`. Extension-origin requests are allowed only for the bridge route; UI routes accept only the local app origins on port 8000. No endpoint exposes API keys or SDK session tokens.
+The hosted Vercel frontend routes `/api/*` through `api/proxy.js` to the HTTPS Oracle backend. Direct local runs bind to loopback; the Oracle API is available only through Caddy TLS on ports 80/443, with FastAPI on a private Docker network. API routes return JSON except the HTML and static-file routes. The bridge route requires `X-Bridge-Token`. Cloud CORS uses the configured frontend origin allowlist. No endpoint should return API keys or Kotak SDK session credentials.
 
 ## `GET /api/health`
 
@@ -100,3 +100,54 @@ Returns newest-first audit events. Sensitive field names are removed before savi
 | 503 | Missing bridge config or SDK dependency |
 
 When a live call returns an uncertain error, check Kotak Neo's order book before retrying. The API is intentionally not idempotency-guaranteed by the broker; the client cannot safely assume the failed HTTP request means no order was placed.
+
+## Algo backtests and review history
+
+These admin-only endpoints use Upstox option data. Historical premium candles are fetched through the V3 1-minute candle API. The UI runner chooses the nearest current ATM call or put and tests that exact listed contract for up to 30 calendar days; it does not reconstruct historical ATM contract changes.
+
+### `POST /api/algo/backtests/run`
+
+Request:
+
+```json
+{ "underlying": "NIFTY", "option_type": "CE", "days": 30 }
+```
+
+Supported underlyings are `NIFTY`, `BANKNIFTY`, and `SENSEX`; `option_type` is `CE` or `PE`; `days` is 1–30. A successful contract selection creates a saved run, including no-trade or insufficient-candle results.
+
+### `GET /api/algo/backtests?limit=20`
+
+Returns saved run summaries for the signed-in admin account. `limit` is bounded to 1–100.
+
+### `GET /api/algo/backtests/{run_id}`
+
+Returns the saved settings, full metrics, daily performance, and completed trade ledger for one run.
+
+## Multi-strategy options research
+
+The CSV research workspace is served at `/research`. Detailed fields, fill assumptions, metric definitions, and limitations are in [OPTIONS_RESEARCH.md](OPTIONS_RESEARCH.md). All private API routes use the existing signed-in owner session and account scoping.
+
+### `GET /api/research/registry`
+
+Returns five strategy definitions and the central core, options, and execution metric registries. Each core metric includes its formula, unit, interpretation, benchmark, calculation identifier, required fields, and per-run data-quality state.
+
+### `POST /api/research/local-datasets/{dataset_id}/upload?kind=underlying|options`
+
+Owner only raw CSV upload. The request body is the file bytes (`Content-Type: text/csv`), streamed directly to the HTTPS Oracle origin by the hosted browser. The current allowlist accepts `banknifty_1m`; the server writes only canonical filenames, caps each upload at 200 MB, validates required columns, OHLC values, and duplicate candles, then regenerates compact metadata after both files exist.
+
+### `POST /api/research/backtests/run`
+
+Accepts `underlying_candles`, `option_candles`, `strategies`, `settings`, and a user-supplied `data_source` label, or the `banknifty_1m` dataset ID. Inline history is limited to 1,000,000 underlying rows and 2,000,000 option rows. Options rows require instrument/contract ID, expiry, CE/PE, strike, lot size, time, and OHLC. Successful results are persisted privately to SQLite.
+
+### `POST /api/research/backtests/{run_id}/optimize`
+
+Accepts `strategy_id`, method (`grid`, `random`, or `bayesian`), budget (maximum 200), minimum training trades, and the same candle arrays. Grid and random searches rank training candidates, then report validation, an untouched per-run holdout, walk-forward folds, and sensitivity. Bayesian mode is currently unavailable and returns an explanation.
+
+### Saved results and sharing
+
+- `GET /api/research/backtests?limit=20` lists private runs; `GET /api/research/backtests/{run_id}` loads a private run.
+- `POST /api/research/backtests/{run_id}/share` accepts `expires_days` (1–365) and optional `strategy_id`; tokens are stored as hashes and links are read-only.
+- `GET /api/research/shared/{token}` returns the unexpired run or the single strategy scoped to that share.
+- Private tradebook/Excel/PDF exports are available at `/api/research/backtests/{run_id}/trades.csv`, `/report.xlsx`, and `/report.pdf`; `strategy_id` scopes an export.
+- Read-only token URLs also support `/api/research/shared/{token}/trades.csv`, `/report.xlsx`, and `/report.pdf`.
+- Pages: `/research/results/{run_id}` for private results and `/results/{token}/{strategy_id}` for strategy shares.

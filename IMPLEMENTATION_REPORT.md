@@ -1,4 +1,6 @@
 # Implementation Report: Production Audit & Hardening
+
+> Historical status report dated November 11, 2026. The `Completed & Verified` label applies only to that earlier scope. The current hosted deployment is still on version 0.1.1; see [docs/DEPLOYMENT_AUDIT.md](docs/DEPLOYMENT_AUDIT.md).
 **Project:** Kotak Neo PIP Trading Terminal  
 **Date:** November 11, 2026  
 **Status:** Completed & Verified

@@ -1,4 +1,6 @@
 # Master Architecture Audit
+
+> Historical assessment dated November 11, 2026. The deployment path has since changed to Vercel + Oracle TLS proxy; use [docs/DEPLOYMENT_AUDIT.md](docs/DEPLOYMENT_AUDIT.md) for current hosted findings.
 **Project:** Kotak Neo PIP Trading Terminal  
 **Date:** November 11, 2026  
 **Auditor:** Principal Software & Quantitative Systems Architect  

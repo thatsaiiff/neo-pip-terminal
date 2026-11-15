@@ -10,6 +10,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "test.sqlite3")
     monkeypatch.setattr(main, "BRIDGE_TOKEN", "unit-test-bridge-token")
     monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", False)
+    monkeypatch.setattr(main, "ADMIN_USERNAME", "test-admin")
+    monkeypatch.setattr(main, "ADMIN_EMAIL", "admin@example.test")
+    monkeypatch.setattr(main, "ADMIN_PASSWORD", "test-admin-password-with-entropy-42")
     monkeypatch.setattr(main, "neo_client", None)
     monkeypatch.setattr(main, "neo_authenticated", False)
     main.selected_symbol.update({"symbol": "NIFTY", "exchange_segment": "nse_fo", "source": "demo default", "confidence": 0.0, "updated_at": None})
@@ -122,6 +125,8 @@ def test_ui_and_stylesheet_are_served(client):
 
 
 def test_live_order_uses_mocked_sdk_once_and_records_order(client, monkeypatch):
+    if not main.is_rust_execution_available():
+        pytest.skip("Build the Rust execution module to test the live broker gateway.")
     class FakeNeo:
         def __init__(self):
             self.calls = []
@@ -144,6 +149,8 @@ def test_live_order_uses_mocked_sdk_once_and_records_order(client, monkeypatch):
 
 
 def test_live_broker_rejection_shows_errmsg_and_is_logged_locally(client, monkeypatch):
+    if not main.is_rust_execution_available():
+        pytest.skip("Build the Rust execution module to test the live broker gateway.")
     class FakeNeo:
         def place_order(self, **kwargs):
             return {"stat": "Not_Ok", "emsg": "Insufficient balance", "stCode": 1004}
@@ -642,17 +649,17 @@ def test_option_chain_normalized_structure(client):
 
 def test_auth_email_check_and_admin_login(client):
     # 1. Admin Email Check
-    res_admin = client.post("/api/auth/check-email", json={"email": "osaifala@gmail.com"})
+    res_admin = client.post("/api/auth/check-email", json={"email": main.ADMIN_EMAIL})
     assert res_admin.status_code == 200
     assert res_admin.json()["is_admin"] is True
     assert res_admin.json()["step"] == "password"
 
     # 2. Bad Admin Password
-    res_bad = client.post("/api/auth/login-admin", json={"email": "osaifala@gmail.com", "password": "wrong"})
+    res_bad = client.post("/api/auth/login-admin", json={"email": main.ADMIN_EMAIL, "password": "wrong"})
     assert res_bad.status_code == 401
 
     # 3. Correct Admin Password
-    res_ok = client.post("/api/auth/login-admin", json={"email": "osaifala@gmail.com", "password": "saif7788"})
+    res_ok = client.post("/api/auth/login-admin", json={"email": main.ADMIN_EMAIL, "password": main.ADMIN_PASSWORD})
     assert res_ok.status_code == 200
     data = res_ok.json()
     assert data["ok"] is True
@@ -1038,8 +1045,8 @@ def test_signup_signin_and_per_user_isolation(client, monkeypatch):
 def test_admin_signin_and_users_analytics(client, monkeypatch):
     # Static chart HTML must NEVER expose admin username or password
     html = client.get("/chart").text
-    assert "S@if7246" not in html
-    assert "osaifala" not in html
+    assert main.ADMIN_PASSWORD not in html
+    assert main.ADMIN_USERNAME not in html
 
     # Sign up verified normal trader first
     u_res = _signup_verified(client, "alice_fx", "alice_pwd", "alice.fx@yahoo.com")
@@ -2255,7 +2262,7 @@ def test_algo_bot_circuit_breaker_halts_at_10k_loss(client, monkeypatch):
 
     is_halted = bot.check_circuit_breaker()
     assert is_halted is True
-    assert bot.status == "HALTED_MAX_LOSS"
+    assert bot.status == "HALTED_DAILY_LOSS"
     assert bot.circuit_breaker_triggered is True
     assert "CRITICAL CIRCUIT BREAKER TRIPPED" in (bot.halt_reason or "")
     assert len(squared_off) == 1
@@ -2272,25 +2279,21 @@ def test_algo_api_endpoints(client):
     assert status_res.status_code == 200
     st = status_res.json()
     assert "status" in st
-    assert st["config"]["atr_threshold"] == 10.0
+    assert st["config"]["atr_threshold"] == 14.0
     assert st["config"]["rr_ratio"] == 2.25
-    assert st["config"]["max_loss_limit"] == 10000.0
+    assert st["config"]["max_loss_limit"] == 0.0
+    assert st["config"]["max_daily_loss_pct"] == 10.0
 
     # Config update
     cfg_res = client.post("/api/algo/config", json={"fast_ema": 9, "slow_ema": 15, "rr_ratio": 2.25})
     assert cfg_res.status_code == 200
     assert cfg_res.json()["rr_ratio"] == 2.25
 
-    # Backtest endpoint
+    # A historical backtest must identify an exact listed option contract;
+    # the endpoint must not manufacture an underlying-only result.
     bt_res = client.get("/api/algo/backtest")
-    assert bt_res.status_code == 200
-    report = bt_res.json()["report"]
-    assert "portfolio" in report
-    port = report["portfolio"]
-    assert port["target_rr"] >= 6.5
-    assert port["win_rate_pct"] >= 25.0
-    assert port["max_drawdown_pct"] < 30.0
-    assert port["sharpe_ratio"] >= 1.3
+    assert bt_res.status_code == 422
+    assert any("symbol" in item.get("loc", []) for item in bt_res.json()["detail"])
 
 
 

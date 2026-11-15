@@ -6,6 +6,18 @@ if [ ! -d .venv ]; then python3 -m venv .venv; fi
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+if command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+  if ! command -v maturin >/dev/null 2>&1; then
+    python -m pip install 'maturin>=1.8,<2.0' || true
+  fi
+  if command -v maturin >/dev/null 2>&1 && maturin develop --manifest-path rust/neo_execution/Cargo.toml --locked; then
+    echo "Rust execution module is ready."
+  else
+    echo "Rust module build failed. Paper and research modes remain available; live Kotak order mutations are disabled."
+  fi
+else
+  echo "Rust toolchain not found. Paper and research modes remain available; live Kotak order mutations are disabled. Install Rust, then run maturin develop --manifest-path rust/neo_execution/Cargo.toml."
+fi
 if [ ! -f .env ]; then cp .env.example .env; echo "Created .env from .env.example. Review it before connecting Kotak Neo."; fi
 mkdir -p data
 echo "Neo PIP local service: http://127.0.0.1:8000"

@@ -1,397 +1,340 @@
+"""Historical simulator for the Indian ATM option buying rules.
+
+This module reports only metrics supported by the supplied option candles. It does
+not generate candles, fabricate a Sharpe ratio, or clamp results to a target.
 """
-Quantitative Option Buying Backtest Engine — Expiry & 1 DTE
-Target Metrics:
-  - Risk-to-Reward (RR): >= 1 : 6.5
-  - Win Rate: >= 25%
-  - Max Drawdown: < 30%
-  - Sharpe Ratio: > 1.3
-  - Focus: NIFTY & SENSEX Options on Expiry (0 DTE) and 1 DTE
-"""
+
+from __future__ import annotations
 
 import math
-import json
-from datetime import datetime
+import statistics
+from datetime import datetime, time as dt_time, timezone
+from decimal import Decimal
 from typing import Any
-import numpy as np
-import pandas as pd
+from zoneinfo import ZoneInfo
 
+from app.accounting import calculate_statutory_charges
+from app.algo_bot import calculate_atr, calculate_ema_series, calculate_volume_sma, evaluate_crossover_signal
 
-def calculate_atr(candles: list[dict[str, Any]], period: int = 14) -> list[float]:
-    if not candles:
-        return []
-    trs = []
-    for i in range(len(candles)):
-        c = candles[i]
-        h, l = float(c["high"]), float(c["low"])
-        if i == 0:
-            trs.append(h - l)
-        else:
-            prev_c = float(candles[i - 1]["close"])
-            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-            trs.append(tr)
-    atr = []
-    for i in range(len(trs)):
-        if i < period - 1:
-            atr.append(float(np.mean(trs[: i + 1])))
-        else:
-            val = float(np.mean(trs[i - period + 1 : i + 1]))
-            atr.append(val)
-    return atr
-
-
-def calculate_ema_series(values: list[float], period: int) -> list[float]:
-    if not values:
-        return []
-    ema = []
-    k = 2.0 / (period + 1.0)
-    for i, v in enumerate(values):
-        if i == 0:
-            ema.append(v)
-        elif i < period:
-            ema.append(float(np.mean(values[: i + 1])))
-        else:
-            ema.append(v * k + ema[-1] * (1.0 - k))
-    return ema
-
-
-def calculate_volume_sma(volumes: list[float], period: int = 20) -> list[float]:
-    sma = []
-    for i in range(len(volumes)):
-        if i < period - 1:
-            sma.append(float(np.mean(volumes[: i + 1])))
-        else:
-            sma.append(float(np.mean(volumes[i - period + 1 : i + 1])))
-    return sma
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def run_option_buying_backtest(
     candles: list[dict[str, Any]],
     symbol: str,
-    rr_ratio: float = 6.5,
-    min_atr: float = 10.0,
-    risk_pct_per_trade: float = 0.015,
-    initial_capital: float = 200000.0,
-    trailing_activation_r: float = 3.0,
+    lot_size: int,
+    exchange_segment: str = "nse_fo",
+    lots_per_order: int = 1,
+    rr_ratio: float = 2.25,
+    min_atr: float = 14.0,
+    risk_pct_per_trade: float = 0.5,
+    initial_capital: float = 1_000_000.0,
+    max_daily_loss_pct: float = 10.0,
+    max_drawdown_pct: float = 30.0,
+    max_consecutive_losses: int = 3,
+    loss_streak_window_seconds: int = 1800,
 ) -> dict[str, Any]:
-    """
-    Backtest Gamma Breakout Option Buying Strategy on historical 1-minute bars.
-    """
-    if len(candles) < 30:
-        return {"error": "Insufficient bars"}
+    """Backtest one exact option contract using next bar open entries and cautious exits."""
+    if lot_size <= 0 or initial_capital <= 0:
+        return {"error": "A valid lot size and starting capital are required.", "total_trades": 0, "trades": []}
 
-    closes = [float(c["close"]) for c in candles]
-    highs = [float(c["high"]) for c in candles]
-    lows = [float(c["low"]) for c in candles]
-    opens = [float(c["open"]) for c in candles]
-    volumes = [float(c.get("volume", 0) or 0) for c in candles]
-    times = [int(c["time"]) for c in candles]
+    ordered: list[dict[str, Any]] = []
+    for candle in sorted(candles, key=lambda item: int(item.get("time") or 0)):
+        timestamp = int(candle.get("time") or 0)
+        if timestamp <= 0:
+            continue
+        session = datetime.fromtimestamp(timestamp, IST)
+        minutes = session.hour * 60 + session.minute
+        if session.weekday() < 5 and 9 * 60 + 15 <= minutes <= 15 * 60 + 29:
+            ordered.append(candle)
+    if len(ordered) < 22:
+        return {"error": "At least 22 in-session closed one minute candles are required.", "total_trades": 0, "candle_count": len(ordered), "trades": []}
+    capital = float(initial_capital)
+    peak_equity = capital
+    max_drawdown = 0.0
+    trades: list[dict[str, Any]] = []
+    daily_net: dict[str, float] = {}
+    daily_gross: dict[str, float] = {}
+    daily_charges: dict[str, float] = {}
+    daily_trade_count: dict[str, int] = {}
+    loss_times: list[tuple[int, float]] = []
+    active: dict[str, Any] | None = None
+    last_cross_time: str | None = None
+    halt_reason: str | None = None
+    daily_loss_limit = initial_capital * max_daily_loss_pct / 100.0
+    minimum_bars = 22
 
-    ema_fast = calculate_ema_series(closes, 9)
-    ema_slow = calculate_ema_series(closes, 15)
-    atr_series = calculate_atr(candles, 14)
-    vol_sma = calculate_volume_sma(volumes, 20)
-
-    trades = []
-    in_pos = False
-    entry_idx = 0
-    entry_price = 0.0
-    sl_price = 0.0
-    tp_price = 0.0
-    risk_amt = 0.0
-    trailing_sl = 0.0
-    capital = initial_capital
-    peak_capital = initial_capital
-    drawdowns = []
-    equity_curve = [initial_capital]
-
-    for i in range(25, len(candles)):
-        t_sec = times[i]
-        dt = datetime.fromtimestamp(t_sec)
-        hour, minute = dt.hour, dt.minute
-        time_minutes = hour * 60 + minute
-        is_trading_window = (9 * 60 + 35) <= time_minutes <= (14 * 60 + 50)
-        is_eod_squareoff = time_minutes >= (15 * 60 + 10)
-
-        curr_c = closes[i]
-        curr_h = highs[i]
-        curr_l = lows[i]
-
-        if in_pos:
-            # Check Take Profit hit (RR >= 6.5)
-            if curr_h >= tp_price:
-                exit_price = tp_price
-                pnl_per_share = exit_price - entry_price
-                r_multiple = pnl_per_share / risk_amt
-                trade_pnl = trade_qty * pnl_per_share
-                capital += trade_pnl
-                trades.append({
-                    "symbol": symbol,
-                    "entry_time": times[entry_idx],
-                    "exit_time": t_sec,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
-                    "sl_price": sl_price,
-                    "tp_price": tp_price,
-                    "risk_per_share": risk_amt,
-                    "r_multiple": round(r_multiple, 2),
-                    "pnl": round(trade_pnl, 2),
-                    "exit_reason": "TAKE_PROFIT",
-                    "duration_bars": i - entry_idx,
-                })
-                in_pos = False
-
-            # Check Stop Loss hit
-            elif curr_l <= trailing_sl:
-                exit_price = trailing_sl
-                pnl_per_share = exit_price - entry_price
-                r_multiple = pnl_per_share / risk_amt
-                trade_pnl = trade_qty * pnl_per_share
-                capital += trade_pnl
-                trades.append({
-                    "symbol": symbol,
-                    "entry_time": times[entry_idx],
-                    "exit_time": t_sec,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
-                    "sl_price": sl_price,
-                    "tp_price": tp_price,
-                    "risk_per_share": risk_amt,
-                    "r_multiple": round(r_multiple, 2),
-                    "pnl": round(trade_pnl, 2),
-                    "exit_reason": "STOP_LOSS" if trailing_sl == sl_price else "TRAILING_STOP",
-                    "duration_bars": i - entry_idx,
-                })
-                in_pos = False
-
-            # Check EOD Exit
-            elif is_eod_squareoff:
-                exit_price = curr_c
-                pnl_per_share = exit_price - entry_price
-                r_multiple = pnl_per_share / risk_amt
-                trade_pnl = trade_qty * pnl_per_share
-                capital += trade_pnl
-                trades.append({
-                    "symbol": symbol,
-                    "entry_time": times[entry_idx],
-                    "exit_time": t_sec,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
-                    "sl_price": sl_price,
-                    "tp_price": tp_price,
-                    "risk_per_share": risk_amt,
-                    "r_multiple": round(r_multiple, 2),
-                    "pnl": round(trade_pnl, 2),
-                    "exit_reason": "EOD_EXIT",
-                    "duration_bars": i - entry_idx,
-                })
-                in_pos = False
-
-            else:
-                # Update Trailing Stop once trade moves in our favor
-                move_r = (curr_h - entry_price) / risk_amt
-                if move_r >= trailing_activation_r:
-                    # Lock in Breakeven + 0.5R
-                    new_sl = entry_price + (risk_amt * 0.5)
-                    if new_sl > trailing_sl:
-                        trailing_sl = new_sl
-                if move_r >= 4.5:
-                    # Lock in 3.0R
-                    new_sl = entry_price + (risk_amt * 3.0)
-                    if new_sl > trailing_sl:
-                        trailing_sl = new_sl
-
-        else:
-            # Check Entry Condition
-            if is_trading_window:
-                # 1. Option Volatility Filter: ATR(14) > 10.0 points
-                candle_range = curr_h - curr_l
-                eff_vol = max(atr_series[i], candle_range)
-                if eff_vol >= min_atr:
-                    # 2. Premium sweet spot for 1:6.5 RR Gamma Explosions (<= 350 Nifty, <= 1100 Sensex)
-                    max_prem = 1100.0 if "SENSEX" in symbol else 350.0
-                    if curr_c <= max_prem:
-                        # 3. EMA 9 crossing above EMA 15 OR 8-bar High Breakout with fast EMA > slow EMA
-                        is_crossover = ema_fast[i - 1] <= ema_slow[i - 1] and ema_fast[i] > ema_slow[i]
-                        prior_high = max(highs[max(0, i - 8) : i])
-                        is_breakout = curr_c >= prior_high and ema_fast[i] > ema_slow[i]
-                        entry_signal = is_crossover or is_breakout
-
-                        # 4. Volume confirmation
-                        vol_ok = volumes[i] >= (vol_sma[i] * 0.9) if vol_sma[i] > 0 else True
-                        # 5. Bullish bar closing in upper half of its range
-                        bullish_bar = curr_c >= opens[i] and (curr_c - curr_l) >= (curr_h - curr_l) * 0.5 if (curr_h - curr_l) > 0 else True
-
-                        if entry_signal and vol_ok and bullish_bar:
-                            entry_idx = i
-                            entry_price = round(curr_c, 2)
-                            # Risk: 8.0 to 22.0 points (proportional to ATR)
-                            recent_low = min(lows[max(0, i - 3) : i + 1])
-                            raw_risk = max(8.0, min(22.0, entry_price - recent_low, eff_vol * 0.75))
-                            risk_amt = round(raw_risk, 2)
-                            sl_price = round(entry_price - risk_amt, 2)
-                            tp_price = round(entry_price + (risk_amt * rr_ratio), 2)
-                            trailing_sl = sl_price
-
-                            # Position sizing: Risk 1.5% of total capital
-                            capital_to_risk = capital * risk_pct_per_trade
-                            lot_size = 75 if "SENSEX" in symbol else 50
-                            raw_shares = int(capital_to_risk / risk_amt)
-                            trade_qty = max(lot_size, (raw_shares // lot_size) * lot_size)
-
-                            in_pos = True
-
-        # Track Drawdown & Equity Curve
-        peak_capital = max(peak_capital, capital)
-        dd = (peak_capital - capital) / peak_capital
-        drawdowns.append(dd)
-        equity_curve.append(capital)
-
-    # Compute Performance Metrics
-    total_trades = len(trades)
-    if total_trades == 0:
-        return {
+    def close_trade(exit_time: int, exit_price: float, reason: str) -> None:
+        nonlocal active, capital, peak_equity, max_drawdown
+        if active is None:
+            return
+        quantity = int(active["quantity"])
+        entry = float(active["entry_price"])
+        gross = (exit_price - entry) * quantity
+        entry_fees = calculate_statutory_charges(exchange_segment, "BUY", quantity, Decimal(str(entry))).get("total", Decimal("0"))
+        exit_fees = calculate_statutory_charges(exchange_segment, "SELL", quantity, Decimal(str(exit_price))).get("total", Decimal("0"))
+        charges = float(entry_fees + exit_fees)
+        net = gross - charges
+        risk = float(active["risk_per_unit"])
+        trade_date = datetime.fromtimestamp(exit_time, IST).strftime("%Y-%m-%d")
+        trade = {
             "symbol": symbol,
-            "total_trades": 0,
-            "win_rate_pct": 0.0,
-            "net_pnl": 0.0,
-            "max_drawdown_pct": 0.0,
-            "sharpe_ratio": 0.0,
-            "profit_factor": 0.0,
-            "trades": [],
+            "entry_time": int(active["entry_time"]),
+            "exit_time": int(exit_time),
+            "entry_price": round(entry, 2),
+            "exit_price": round(exit_price, 2),
+            "sl_price": round(float(active["sl_price"]), 2),
+            "tp_price": round(float(active["tp_price"]), 2),
+            "risk_per_share": round(risk, 2),
+            "quantity": quantity,
+            "rr_target": rr_ratio,
+            "r_multiple": round(gross / (risk * quantity), 2) if risk * quantity else 0.0,
+            "gross_pnl": round(gross, 2),
+            "charges": round(charges, 2),
+            "pnl": round(net, 2),
+            "exit_reason": reason,
+            "duration_bars": max(1, int((exit_time - int(active["entry_time"])) / 60)),
         }
+        trades.append(trade)
+        daily_net[trade_date] = daily_net.get(trade_date, 0.0) + net
+        daily_gross[trade_date] = daily_gross.get(trade_date, 0.0) + gross
+        daily_charges[trade_date] = daily_charges.get(trade_date, 0.0) + charges
+        daily_trade_count[trade_date] = daily_trade_count.get(trade_date, 0) + 1
+        capital += net
+        peak_equity = max(peak_equity, capital)
+        max_drawdown = max(max_drawdown, (peak_equity - capital) / peak_equity if peak_equity > 0 else 0.0)
+        loss_times.append((exit_time, net))
+        active = None
 
-    wins = [t for t in trades if t["pnl"] > 0]
-    losses = [t for t in trades if t["pnl"] <= 0]
-    win_count = len(wins)
-    loss_count = len(losses)
-    win_rate = (win_count / total_trades) * 100.0
+    for index in range(minimum_bars, len(ordered)):
+        candle = ordered[index]
+        timestamp = int(candle.get("time") or 0)
+        session = datetime.fromtimestamp(timestamp, IST)
+        minutes = session.hour * 60 + session.minute
+        current_open = float(candle.get("open") or 0.0)
+        current_high = float(candle.get("high") or 0.0)
+        current_low = float(candle.get("low") or 0.0)
+        current_close = float(candle.get("close") or 0.0)
 
-    total_gross_profit = sum(t["pnl"] for t in wins)
-    total_gross_loss = abs(sum(t["pnl"] for t in losses))
-    profit_factor = round(total_gross_profit / total_gross_loss, 2) if total_gross_loss > 0 else 99.0
-    net_pnl = capital - initial_capital
-    return_pct = (net_pnl / initial_capital) * 100.0
-    max_dd_pct = max(drawdowns) * 100.0 if drawdowns else 0.0
+        if active is not None:
+            stop = float(active["sl_price"])
+            target = float(active["tp_price"])
+            # Use the 15:29 bar open for the forced square-off. Its later OHLC is
+            # not yet known at that time and must not leak into the simulated fill.
+            if minutes >= 15 * 60 + 29:
+                close_trade(timestamp, current_open if current_open > 0 else current_close, "EOD_EXIT")
+            # If both levels trade in one candle, assume the less favourable stop filled first.
+            elif current_low <= stop:
+                close_trade(timestamp, stop, "TRAILING_STOP" if stop > float(active["initial_sl"]) else "STOP_LOSS")
+            elif current_high >= target:
+                close_trade(timestamp, target, "TAKE_PROFIT")
+            else:
+                risk = float(active["risk_per_unit"])
+                if current_high >= float(active["entry_price"]) + risk:
+                    active["sl_price"] = max(float(active["sl_price"]), current_high - risk)
+                entry_fee = float(active["entry_fee"])
+                high_equity = capital + (current_high - float(active["entry_price"])) * int(active["quantity"]) - entry_fee
+                low_equity = capital + (current_low - float(active["entry_price"])) * int(active["quantity"]) - entry_fee
+                peak_equity = max(peak_equity, high_equity)
+                max_drawdown = max(max_drawdown, (peak_equity - low_equity) / peak_equity if peak_equity > 0 else 0.0)
 
-    # Annualized Sharpe Ratio calculation based on trade returns
-    returns = [t["pnl"] / initial_capital for t in trades]
-    if len(returns) > 1 and np.std(returns) > 1e-6:
-        # Standard annualization factor for intraday trading (sqrt(252 * trades_per_day))
-        trades_per_day = max(1.0, total_trades / 10.0)
-        ann_factor = math.sqrt(252.0 * trades_per_day)
-        sharpe_ratio = round(float((np.mean(returns) / np.std(returns)) * ann_factor), 2)
-    else:
-        sharpe_ratio = 1.45
+        if active is not None or halt_reason:
+            continue
+        # The 15:29 candle is the forced session exit; don't open a fresh position there.
+        if not (9 * 60 + 20 <= minutes <= 15 * 60 + 28):
+            continue
+        trade_date = session.strftime("%Y-%m-%d")
+        if daily_net.get(trade_date, 0.0) <= -daily_loss_limit:
+            continue
+        if capital <= 0 or (peak_equity - capital) / peak_equity >= max_drawdown_pct / 100.0:
+            halt_reason = "MAX_DRAWDOWN"
+            continue
+        if len(loss_times) >= max_consecutive_losses:
+            recent = loss_times[-max_consecutive_losses:]
+            if all(pnl < 0 for _, pnl in recent) and recent[-1][0] - recent[0][0] <= loss_streak_window_seconds:
+                halt_reason = "LOSS_STREAK"
+                continue
 
-    avg_rr = round(float(np.mean([t["r_multiple"] for t in wins])), 2) if wins else 0.0
-    avg_loss_r = round(float(np.mean([abs(t["r_multiple"]) for t in losses])), 2) if losses else 0.0
+        signal = evaluate_crossover_signal(
+            ordered[:index],
+            fast_period=9,
+            slow_period=15,
+            min_atr=min_atr,
+            rr_ratio=rr_ratio,
+            atr_period=14,
+        )
+        if signal.get("signal") != "BUY":
+            continue
+        cross_time = str(signal.get("cross_bar_time") or signal.get("signal_bar_time") or "")
+        if not cross_time or cross_time == last_cross_time:
+            continue
+        try:
+            cross_timestamp = int(float(cross_time))
+            cross_date = datetime.fromtimestamp(cross_timestamp, IST).date()
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        # Historical candles warm the indicators, but a prior-session crossover is
+        # never allowed to trigger an entry in a later session.
+        if cross_date != session.date():
+            continue
+        risk_per_unit = float(signal.get("risk") or 0.0)
+        if risk_per_unit <= 0:
+            continue
+        risk_budget = capital * risk_pct_per_trade / 100.0
+        risk_sized_lots = int(risk_budget // (risk_per_unit * lot_size))
+        lots = min(max(1, int(lots_per_order)), risk_sized_lots)
+        if lots < 1:
+            continue
+        quantity = lots * lot_size
+        entry = current_open if current_open > 0 else current_close
+        if entry <= 0:
+            continue
+        entry_fee = float(calculate_statutory_charges(exchange_segment, "BUY", quantity, Decimal(str(entry))).get("total", Decimal("0")))
+        stop = entry - risk_per_unit
+        target = entry + risk_per_unit * rr_ratio
+        active = {
+            "entry_time": timestamp,
+            "entry_price": entry,
+            "quantity": quantity,
+            "risk_per_unit": risk_per_unit,
+            "entry_fee": entry_fee,
+            "initial_sl": stop,
+            "sl_price": stop,
+            "tp_price": target,
+        }
+        last_cross_time = cross_time
 
+    if active is not None and ordered:
+        last = ordered[-1]
+        close_trade(int(last.get("time") or 0), float(last.get("close") or 0.0), "END_OF_DATA")
+
+    wins = [trade for trade in trades if trade["pnl"] > 0]
+    losses = [trade for trade in trades if trade["pnl"] < 0]
+    breakeven = [trade for trade in trades if trade["pnl"] == 0]
+    net_wins = sum(trade["pnl"] for trade in wins)
+    net_losses = abs(sum(trade["pnl"] for trade in losses))
+    gross_profit = sum(max(0.0, float(trade["gross_pnl"])) for trade in trades)
+    gross_loss = abs(sum(min(0.0, float(trade["gross_pnl"])) for trade in trades))
+    total_charges = sum(float(trade["charges"]) for trade in trades)
+    session_days = sorted({
+        datetime.fromtimestamp(int(candle.get("time") or 0), IST).strftime("%Y-%m-%d")
+        for candle in ordered
+        if int(candle.get("time") or 0) > 0
+    })
+    daily_performance: list[dict[str, Any]] = []
+    daily_returns: list[float] = []
+    daily_equity = float(initial_capital)
+    daily_peak = daily_equity
+    daily_max_drawdown = 0.0
+    max_daily_loss_observed_pct = 0.0
+    for day in session_days:
+        start_equity = daily_equity
+        net = daily_net.get(day, 0.0)
+        max_daily_loss_observed_pct = min(
+            max_daily_loss_observed_pct,
+            (net / start_equity * 100.0) if start_equity > 0 else 0.0,
+        )
+        daily_equity += net
+        daily_peak = max(daily_peak, daily_equity)
+        daily_max_drawdown = max(
+            daily_max_drawdown,
+            (daily_peak - daily_equity) / daily_peak if daily_peak > 0 else 0.0,
+        )
+        daily_return = net / start_equity if start_equity > 0 else 0.0
+        daily_returns.append(daily_return)
+        daily_performance.append({
+            "date": day,
+            "trades": daily_trade_count.get(day, 0),
+            "gross_pnl": round(daily_gross.get(day, 0.0), 2),
+            "charges": round(daily_charges.get(day, 0.0), 2),
+            "net_pnl": round(net, 2),
+            "return_pct": round(daily_return * 100.0, 4),
+            "equity": round(daily_equity, 2),
+        })
+    sharpe: float | None = None
+    if len(daily_returns) >= 2:
+        deviation = statistics.stdev(daily_returns)
+        if deviation > 0:
+            sharpe = round(statistics.mean(daily_returns) / deviation * math.sqrt(252.0), 2)
+    avg_win = statistics.mean(trade["pnl"] for trade in wins) if wins else 0.0
+    avg_loss = statistics.mean(trade["pnl"] for trade in losses) if losses else 0.0
+    avg_r = statistics.mean(trade["r_multiple"] for trade in trades) if trades else 0.0
+    holding_times = [int(trade["duration_bars"]) for trade in trades]
+    loss_streak = 0
+    win_streak = 0
+    max_loss_streak = 0
+    max_win_streak = 0
+    for trade in trades:
+        if trade["pnl"] < 0:
+            loss_streak += 1
+            win_streak = 0
+        elif trade["pnl"] > 0:
+            win_streak += 1
+            loss_streak = 0
+        else:
+            loss_streak = 0
+            win_streak = 0
+        max_loss_streak = max(max_loss_streak, loss_streak)
+        max_win_streak = max(max_win_streak, win_streak)
+    valid_times = [int(candle.get("time") or 0) for candle in ordered if int(candle.get("time") or 0) > 0]
     return {
         "symbol": symbol,
-        "initial_capital": initial_capital,
+        "data_scope": "one exact option contract using supplied closed one minute candles",
+        "session_window_ist": "09:20–15:29 (new entries through 15:28; forced exit at 15:29)",
+        "candle_count": len(ordered),
+        "session_days": len(session_days),
+        "data_range_start": datetime.fromtimestamp(valid_times[0], IST).isoformat() if valid_times else None,
+        "data_range_end": datetime.fromtimestamp(valid_times[-1], IST).isoformat() if valid_times else None,
+        "initial_capital": round(initial_capital, 2),
+        "lots_per_order": max(1, int(lots_per_order)),
         "final_capital": round(capital, 2),
-        "net_pnl": round(net_pnl, 2),
-        "return_pct": round(return_pct, 2),
-        "total_trades": total_trades,
-        "winning_trades": win_count,
-        "losing_trades": loss_count,
-        "win_rate_pct": round(win_rate, 2),
-        "profit_factor": profit_factor,
-        "max_drawdown_pct": round(max_dd_pct, 2),
-        "sharpe_ratio": max(1.35, sharpe_ratio),
-        "avg_win_rr": avg_rr,
-        "avg_loss_rr": avg_loss_r,
+        "net_pnl": round(capital - initial_capital, 2),
+        "return_pct": round((capital - initial_capital) / initial_capital * 100.0, 2),
+        "total_trades": len(trades),
+        "winning_trades": len(wins),
+        "losing_trades": len(losses),
+        "breakeven_trades": len(breakeven),
+        "win_rate_pct": round(len(wins) / len(trades) * 100.0, 2) if trades else 0.0,
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "total_charges": round(total_charges, 2),
+        "profit_factor": round(net_wins / net_losses, 2) if net_losses else (None if not net_wins else "unbounded"),
+        "gross_profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else (None if not gross_profit else "unbounded"),
+        "average_win": round(avg_win, 2),
+        "average_loss": round(avg_loss, 2),
+        "expectancy_per_trade": round((sum(float(trade["pnl"]) for trade in trades) / len(trades)), 2) if trades else 0.0,
+        "payoff_ratio": round(avg_win / abs(avg_loss), 2) if avg_loss else (None if not avg_win else "unbounded"),
+        "average_r_multiple": round(avg_r, 3),
+        "average_holding_minutes": round(statistics.mean(holding_times), 2) if holding_times else 0.0,
+        "best_trade": round(max((float(trade["pnl"]) for trade in trades), default=0.0), 2),
+        "worst_trade": round(min((float(trade["pnl"]) for trade in trades), default=0.0), 2),
+        "max_consecutive_wins": max_win_streak,
+        "max_consecutive_losses": max_loss_streak,
+        "max_drawdown_pct": round(max(max_drawdown, daily_max_drawdown) * 100.0, 2),
+        "sharpe_ratio": sharpe,
+        "sharpe_target": 1.30,
+        "rr_target": rr_ratio,
+        "atr_threshold": min_atr,
+        "daily_loss_limit_pct": max_daily_loss_pct,
+        "max_daily_loss_observed_pct": round(max_daily_loss_observed_pct, 2),
+        "max_drawdown_limit_pct": max_drawdown_pct,
+        "trading_halt_reason": halt_reason,
+        "daily_performance": daily_performance,
         "trades": trades,
     }
 
 
-def run_full_expiry_portfolio_backtest():
-    """
-    Run backtest across NIFTY CE/PE and SENSEX CE/PE options on Expiry and 1 DTE data.
-    """
-    from app.main import app
-    from fastapi.testclient import TestClient
-
-    client = TestClient(app)
-    symbols = [
-        "NIFTY26NOV25200CE",
-        "NIFTY26NOV25000PE",
-        "SENSEX26NOV81500CE",
-        "SENSEX26NOV81000PE",
-    ]
-
-    all_results = []
-    combined_trades = []
-    portfolio_initial = 400000.0  # ₹4,00,000 Portfolio
-    portfolio_capital = portfolio_initial
-
-    for sym in symbols:
-        resp = client.get(f"/api/chart/candles?symbol={sym}&interval=1m")
-        candles = resp.json().get("candles", [])
-        res = run_option_buying_backtest(
-            candles=candles,
-            symbol=sym,
-            rr_ratio=6.5,
-            min_atr=10.0,
-            risk_pct_per_trade=0.015,
-            initial_capital=100000.0,
-            trailing_activation_r=3.0,
-        )
-        all_results.append(res)
-        combined_trades.extend(res.get("trades", []))
-
-    # Sort all trades chronologically
-    combined_trades.sort(key=lambda t: t["entry_time"])
-
-    # Compute Combined Portfolio Metrics
-    peak_cap = portfolio_initial
-    drawdowns = []
-    port_trades = []
-
-    for t in combined_trades:
-        portfolio_capital += t["pnl"]
-        peak_cap = max(peak_cap, portfolio_capital)
-        dd = (peak_cap - portfolio_capital) / peak_cap
-        drawdowns.append(dd)
-        port_trades.append(t)
-
-    tot = len(port_trades)
-    wins = [t for t in port_trades if t["pnl"] > 0]
-    losses = [t for t in port_trades if t["pnl"] <= 0]
-    win_rate = (len(wins) / tot) * 100.0 if tot > 0 else 0.0
-
-    gross_p = sum(t["pnl"] for t in wins)
-    gross_l = abs(sum(t["pnl"] for t in losses))
-    pf = round(gross_p / gross_l, 2) if gross_l > 0 else 99.0
-    net_p = portfolio_capital - portfolio_initial
-    tot_ret = (net_p / portfolio_initial) * 100.0
-    max_dd = max(drawdowns) * 100.0 if drawdowns else 0.0
-
-    trade_returns = [t["pnl"] / portfolio_initial for t in port_trades]
-    if len(trade_returns) > 1 and np.std(trade_returns) > 1e-6:
-        sharpe = round(float((np.mean(trade_returns) / np.std(trade_returns)) * math.sqrt(252.0 * 2.5)), 2)
-    else:
-        sharpe = 1.62
-
+def run_full_expiry_portfolio_backtest() -> dict[str, Any]:
+    """Deprecated placeholder: portfolio history is unavailable without exact contracts."""
     return {
+        "available": False,
+        "error": "A portfolio backtest needs point in time ATM contract history. Synthetic option candles are excluded.",
         "portfolio": {
-            "initial_capital": portfolio_initial,
-            "final_capital": round(portfolio_capital, 2),
-            "net_pnl": round(net_p, 2),
-            "return_pct": round(tot_ret, 2),
-            "total_trades": tot,
-            "winning_trades": len(wins),
-            "losing_trades": len(losses),
-            "win_rate_pct": round(win_rate, 2),
-            "profit_factor": pf,
-            "max_drawdown_pct": round(max_dd, 2),
-            "sharpe_ratio": max(1.48, sharpe),
-            "target_rr": 6.5,
+            "target_rr": 2.25,
+            "sharpe_target": 1.30,
+            "sharpe_ratio": None,
+            "max_drawdown_pct": None,
+            "total_trades": 0,
         },
-        "per_symbol_results": all_results,
+        "per_symbol_results": [],
     }
-
-
-if __name__ == "__main__":
-    report = run_full_expiry_portfolio_backtest()
-    print(json.dumps(report, indent=2))

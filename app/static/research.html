@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#181818">
+  <meta name="description" content="Private options strategy backtests, trade analytics, and validation results.">
+  <title>Strategy research | Neo PIP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/research.css?v=0.2.1">
+  <script src="/static/runtime-config.js?v=0.2.1"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to research content</a>
+  <header class="research-topbar">
+    <a class="brand" href="/" aria-label="Return to Neo PIP terminal"><span class="brand-mark">N</span><span>NEO PIP <small>RESEARCH</small></span></a>
+    <nav class="top-actions" aria-label="Research navigation">
+      <a class="quiet-link" href="/">Trading terminal</a>
+      <button id="print-report" class="button button-secondary" type="button">Save report as PDF</button>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-shell">
+    <section class="page-heading">
+      <div>
+        <p class="eyebrow">OPTIONS STRATEGY WORKSPACE</p>
+        <h1>Strategy research</h1>
+        <p class="intro">Run five rule sets on historical index and option candles. Results are saved privately to this account until you create a share link.</p>
+      </div>
+      <div class="heading-actions">
+        <label class="run-picker">Saved runs <select id="saved-runs" aria-label="Load a saved research run"><option value="">Select a saved run</option></select></label>
+        <span id="run-state" class="status-pill">Ready</span>
+      </div>
+    </section>
+
+    <div id="research-error" class="notice notice-error hidden" role="alert"></div>
+    <div id="research-notice" class="notice hidden" role="status"></div>
+
+    <section id="data-panel" class="panel data-panel" aria-labelledby="data-title">
+      <div class="panel-heading">
+        <div><p class="eyebrow">01 / DATA AND RULES</p><h2 id="data-title">Load historical candles</h2></div>
+        <a class="quiet-link" href="/static/research-underlying-template.csv?v=0.2.1" download>Underlying CSV format</a>
+      </div>
+      <p class="muted copy">Import actual OHLC candles from your data provider. The option file must include contract metadata on every row so the backtest can select the nearest listed strike for each signal.</p>
+      <section class="local-dataset-card" aria-labelledby="local-dataset-title">
+        <div class="local-dataset-copy">
+            <p class="eyebrow">SAVED ON CONNECTED BACKEND</p>
+          <h3 id="local-dataset-title">Bank Nifty 1 minute export</h3>
+            <p id="local-dataset-status" class="muted" role="status" aria-live="polite">Checking the connected backend for saved Upstox CSV files…</p>
+        </div>
+        <div class="local-dataset-actions">
+          <button id="reload-local-dataset" class="button button-secondary" type="button">Find saved files</button>
+          <button id="validate-local-dataset" class="button button-primary" type="button" disabled>Verify files</button>
+          <button id="upload-local-dataset" class="button button-primary" type="button" disabled>Upload selected files</button>
+        </div>
+        <p id="local-validation-output" class="local-validation-output" role="status" aria-live="polite">Saved files are selected automatically when they are already on the connected backend. Choose both CSVs below to import files from this device.</p>
+      </section>
+      <div class="upload-grid">
+        <label class="upload-card" for="underlying-file"><span class="upload-number">A</span><strong>Underlying candles</strong><span>CSV with time, open, high, low, close and volume.</span><input id="underlying-file" type="file" accept=".csv,text/csv"></label>
+        <label class="upload-card" for="options-file"><span class="upload-number">B</span><strong>Option contract candles</strong><span>CSV with contract key, symbol, expiry, option type, strike, lot size and OHLC.</span><input id="options-file" type="file" accept=".csv,text/csv"></label>
+      </div>
+      <div class="data-status-grid">
+        <div id="underlying-file-status" class="file-status" role="status">No underlying file loaded</div>
+        <div id="options-file-status" class="file-status" role="status">No option file loaded</div>
+      </div>
+      <div class="upload-actions">
+        <button id="load-browser-csvs" class="button button-secondary" type="button" disabled>Load selected files in browser</button>
+        <p class="muted">Use browser loading for smaller custom CSVs. Upload larger files to the backend so the rows stay out of browser memory.</p>
+      </div>
+      <div class="control-grid">
+        <label class="field"><span>Underlying</span><select id="underlying"><option value="NIFTY">NIFTY</option><option value="BANKNIFTY">BANKNIFTY</option><option value="SENSEX">SENSEX</option><option value="OTHER">Other index</option><option value="STOCK">Stock option</option></select></label>
+        <label class="field"><span>Underlying symbol in CSV</span><input id="underlying-symbol" type="text" maxlength="24" value="NIFTY" placeholder="NIFTY or stock ticker"></label>
+        <label class="field"><span>Signal timeframe</span><select id="timeframe"><option value="1">1 minute</option><option value="5" selected>5 minutes</option></select></label>
+        <label class="field"><span>Expiry sessions</span><select id="expiry-mode"><option value="both">1 DTE and expiry</option><option value="expiry">Expiry only</option><option value="1dte">1 DTE only</option></select></label>
+        <label class="field"><span>Strike selection</span><select id="strike-selection"><option value="atm">Nearest ATM</option><option value="itm1">1 strike ITM</option><option value="itm2">2 strikes ITM</option><option value="otm1">1 strike OTM</option><option value="otm2">2 strikes OTM</option><option value="delta">Target absolute delta</option></select></label>
+        <label class="field"><span>Target absolute delta</span><input id="target-delta" type="number" min="0.01" max="0.99" step="0.01" value="0.5"></label>
+        <label class="field"><span>First entry time</span><input id="entry-start-time" type="time" value="09:20"></label>
+        <label class="field"><span>Last entry signal</span><input id="entry-end-time" type="time" value="15:25"></label>
+        <label class="field"><span>Square off time</span><input id="square-off-time" type="time" value="15:29"></label>
+        <label class="field"><span>Allocated capital (INR)</span><input id="capital" type="number" min="1" step="10000" value="1000000"></label>
+        <label class="field"><span>Risk per trade (%)</span><input id="risk-pct" type="number" min="0.01" max="10" step="0.05" value="0.5"></label>
+        <label class="field"><span>Maximum lots</span><input id="max-lots" type="number" min="1" max="1000" step="1" value="2"></label>
+        <label class="field"><span>Option stop (ATR multiple)</span><input id="stop-atr" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+        <label class="field"><span>Profit target (R)</span><input id="target-r" type="number" min="0.25" max="20" step="0.25" value="2.25"></label>
+        <label class="field"><span>Trail after (R)</span><input id="trail-r" type="number" min="0" max="10" step="0.25" value="1"></label>
+        <label class="field"><span>Maximum daily loss (%)</span><input id="daily-loss-pct" type="number" min="0.1" max="50" step="0.5" value="10"></label>
+        <label class="field"><span>Maximum drawdown stop (%)</span><input id="max-drawdown-pct" type="number" min="0.1" max="90" step="1" value="30"></label>
+        <label class="field"><span>Historical source label</span><input id="data-source" type="text" maxlength="120" value="Upstox historical export"></label>
+      </div>
+      <details class="advanced-settings"><summary>Strategy-specific indicator settings</summary><div class="control-grid">
+        <label class="field"><span>ORB range (minutes)</span><input id="opening-range-minutes" type="number" min="5" max="60" value="15"></label>
+        <label class="field"><span>Volume multiple</span><input id="volume-multiple" type="number" min="0" max="10" step="0.1" value="1.2"></label>
+        <label class="field"><span>Fast EMA</span><input id="fast-ema" type="number" min="2" max="100" value="9"></label>
+        <label class="field"><span>Slow EMA</span><input id="slow-ema" type="number" min="3" max="200" value="21"></label>
+        <label class="field"><span>Supertrend period</span><input id="supertrend-period" type="number" min="2" max="100" value="10"></label>
+        <label class="field"><span>Supertrend multiplier</span><input id="supertrend-multiplier" type="number" min="0.5" max="10" step="0.5" value="3"></label>
+        <label class="field"><span>RSI period</span><input id="rsi-period" type="number" min="2" max="50" value="14"></label>
+        <label class="field"><span>ADX period</span><input id="adx-period" type="number" min="2" max="50" value="14"></label>
+        <label class="field"><span>ADX threshold</span><input id="adx-threshold" type="number" min="5" max="60" value="20"></label>
+        <label class="field"><span>Breakout lookback</span><input id="breakout-lookback" type="number" min="2" max="100" value="20"></label>
+        <label class="field"><span>Bollinger period</span><input id="bollinger-period" type="number" min="5" max="100" value="20"></label>
+        <label class="field"><span>Squeeze lookback</span><input id="squeeze-lookback" type="number" min="5" max="100" value="20"></label>
+        <label class="field"><span>ATR expansion multiple</span><input id="atr-expansion-multiple" type="number" min="0.5" max="5" step="0.1" value="1.1"></label>
+        <label class="field"><span>Benchmark win rate (%)</span><input id="benchmark-win-rate" type="number" min="0" max="100" value="50"></label>
+        <label class="field"><span>Benchmark profit factor</span><input id="benchmark-pf" type="number" min="0" step="0.1" value="1.5"></label>
+        <label class="field"><span>Benchmark max drawdown (%)</span><input id="benchmark-max-dd" type="number" min="0" max="100" value="20"></label>
+        <label class="field"><span>Benchmark Sharpe</span><input id="benchmark-sharpe" type="number" step="0.1" value="1"></label>
+        <label class="field"><span>Minimum sample trades</span><input id="benchmark-trades" type="number" min="1" value="100"></label>
+      </div></details>
+      <div class="strategy-selectors" id="strategy-selectors" aria-label="Strategies to run">
+        <label><input type="checkbox" value="orb" checked> Opening range breakout</label>
+        <label><input type="checkbox" value="ema_vwap" checked> EMA and VWAP momentum</label>
+        <label><input type="checkbox" value="supertrend_rsi" checked> Supertrend and RSI</label>
+        <label><input type="checkbox" value="adx_breakout" checked> ADX trend breakout</label>
+        <label><input type="checkbox" value="volatility_expansion" checked> Volatility expansion</label>
+      </div>
+      <div class="form-footer">
+        <p class="fine-print">The source label is not verified by the app. Missing quotes, Greeks or IV stay unavailable. No synthetic premiums are generated.</p>
+        <button id="run-backtest" class="button button-primary" type="button">Run selected strategies</button>
+      </div>
+    </section>
+
+    <section id="results-panel" class="results-panel hidden" aria-labelledby="results-title">
+      <div class="results-header">
+        <div><p class="eyebrow">BACKTEST RESULTS</p><h2 id="results-title">Performance review</h2><p id="result-meta" class="muted"></p></div>
+        <div class="result-actions"><button id="share-result" class="button button-secondary" type="button">Create share link</button><button id="export-csv" class="button button-secondary" type="button">Export CSV</button><button id="export-xlsx" class="button button-secondary" type="button">Export Excel</button><button id="export-pdf" class="button button-secondary" type="button">Download PDF</button></div>
+      </div>
+      <div id="summary-cards" class="summary-grid"></div>
+      <div class="section-tabs" role="tablist" aria-label="Research result views">
+        <button class="section-tab active" type="button" role="tab" aria-selected="true" data-view="overview">Overview</button>
+        <button class="section-tab" type="button" role="tab" aria-selected="false" data-view="trades">Tradebook</button>
+        <button class="section-tab" type="button" role="tab" aria-selected="false" data-view="risk">Risk and options</button>
+        <button class="section-tab" type="button" role="tab" aria-selected="false" data-view="validation">Validation</button>
+      </div>
+
+      <div class="view-panel" data-panel="overview">
+        <div class="overview-grid">
+          <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">EQUITY</p><h3>Mark to market path</h3></div><select id="strategy-view" aria-label="Selected strategy results"></select></div><div id="equity-chart" class="chart-box" role="img" aria-label="Equity curve"></div><div id="equity-range" class="chart-caption"></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">DRAWDOWN</p><h3>Peak to trough</h3></div></div><div id="drawdown-chart" class="chart-box" role="img" aria-label="Drawdown curve"></div><div id="drawdown-caption" class="chart-caption"></div></article>
+        </div>
+        <article class="panel comparison-panel"><div class="panel-heading"><div><p class="eyebrow">OUT OF SAMPLE</p><h3>Strategy comparison</h3></div><span class="muted">All 12 core metrics use the chronological test segment. Screen score: tanh(expectancy / capital × 0.1%) + tanh((profit factor − 1) / 0.5) − min(1, drawdown / 30%). Ranking needs 20 trades.</span></div><input id="comparison-search" class="search-input comparison-search" type="search" placeholder="Find a strategy" aria-label="Search strategies"><div class="table-wrap"><table id="comparison-table"><thead></thead><tbody></tbody></table></div></article>
+        <article class="panel metrics-panel"><div class="panel-heading"><div><p class="eyebrow">CORE METRICS</p><h3 id="core-metrics-title">Metric definitions and results</h3></div><input id="metric-search" class="search-input" type="search" placeholder="Find a metric" aria-label="Search metrics"></div><div id="core-metrics" class="metric-grid"></div></article>
+        <article class="panel calculator-panel"><div class="panel-heading"><div><p class="eyebrow">EXPECTANCY TOOL</p><h3>Estimate per trade</h3></div><span class="muted">Enter average profit and loss before costs.</span></div><div class="calculator-grid"><label class="field"><span>Win rate (%)</span><input id="calc-win" type="number" min="0" max="100" value="40"></label><label class="field"><span>Average profit (INR)</span><input id="calc-win-amount" type="number" min="0" value="3000"></label><label class="field"><span>Average loss (INR)</span><input id="calc-loss-amount" type="number" min="0" value="1500"></label><label class="field"><span>Costs per trade (INR)</span><input id="calc-cost" type="number" min="0" value="80"></label><label class="field"><span>Trade count</span><input id="calc-count" type="number" min="1" value="100"></label><label class="field"><span>Allocated capital (INR)</span><input id="calc-capital" type="number" min="1" value="1000000"></label></div><div id="expectancy-output" class="expectancy-output" aria-live="polite"></div><h4>Expectancy by win rate and win/loss ratio</h4><div id="expectancy-heatmap" class="table-wrap" aria-label="Interactive expectancy heatmap"></div></article>
+      </div>
+
+      <div class="view-panel hidden" data-panel="trades">
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">CLOSED POSITIONS</p><h3>Tradebook</h3></div><input id="trade-search" class="search-input" type="search" placeholder="Filter symbol or exit reason" aria-label="Search trades"></div><div id="trade-count" class="chart-caption"></div><div class="table-wrap trade-table-wrap"><table id="trade-table"><thead><tr><th>Entry</th><th>Exit</th><th>Contract</th><th>CE/PE</th><th>Strike</th><th>Expiry</th><th>DTE</th><th>Units</th><th>Entry premium</th><th>Exit premium</th><th>Delta</th><th>Theta</th><th>Vega</th><th>Gamma</th><th>IV</th><th>Gross</th><th>Costs</th><th>Net</th><th>Slippage</th><th>MFE</th><th>MAE</th><th>Exit</th></tr></thead><tbody></tbody></table></div></article>
+      </div>
+
+      <div class="view-panel hidden" data-panel="risk">
+        <div class="overview-grid"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">RISK</p><h3>Drawdown and streaks</h3></div></div><div id="risk-details" class="detail-list"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TAIL RISK</p><h3>Historical loss estimates</h3></div></div><div id="tail-risk" class="detail-list"></div></article></div>
+        <article class="panel"><div class="overview-grid"><div><h4>Closed losing streaks</h4><div id="streak-distribution" class="distribution-chart" aria-label="Losing streak distribution"></div></div><div><h4>Realized R-multiples</h4><div id="r-distribution" class="distribution-chart" aria-label="Realized R-multiple distribution"></div></div></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">CONTRACT DATA</p><h3>Greeks, volatility and capital</h3></div></div><div id="options-details" class="metric-grid"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">EXECUTION QUALITY</p><h3>Modeled fills and costs</h3></div></div><div id="execution-details" class="metric-grid"></div><div class="overview-grid"><div><h4>MFE vs realized profit</h4><div id="mfe-chart" class="scatter-box" role="img" aria-label="MFE and realized profit scatterplot"></div></div><div><h4>MAE vs realized loss</h4><div id="mae-chart" class="scatter-box" role="img" aria-label="MAE and realized loss scatterplot"></div></div></div><p class="fine-print">Historical candles do not contain broker latency, order queue position, rejection, or partial fill records. Those fields are shown as unavailable rather than inferred.</p></article>
+      </div>
+
+      <div class="view-panel hidden" data-panel="validation">
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">CHRONOLOGICAL SPLIT</p><h3>In sample and out of sample</h3></div></div><div id="validation-details" class="table-wrap"></div></article>
+        <div class="overview-grid"><article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">OOS EQUITY</p><h3>Test segment path</h3></div></div><div id="oos-equity-chart" class="chart-box" role="img" aria-label="Out of sample equity curve"></div></article><article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">OOS DRAWDOWN</p><h3>Test segment drawdown</h3></div></div><div id="oos-drawdown-chart" class="chart-box" role="img" aria-label="Out of sample drawdown curve"></div></article></div>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">PARAMETER SEARCH</p><h3>Optimize one strategy</h3></div><span class="muted">Candidate ranking uses training data; validation and a later untouched holdout are reported separately.</span></div><div class="control-grid"><label class="field"><span>Search method</span><select id="optimization-method"><option value="grid">Grid search</option><option value="random">Random search</option><option value="bayesian">Bayesian (optional dependency)</option></select></label><label class="field"><span>Evaluation budget</span><input id="optimization-budget" type="number" min="1" max="200" value="60"></label><label class="field"><span>Minimum training trades</span><input id="optimization-min-trades" type="number" min="5" max="1000" value="20"></label><button id="run-optimization" class="button button-primary" type="button">Optimize selected strategy</button></div><p class="fine-print">Run from this browser session with the original candle files loaded. Repeatedly reviewing or changing parameters consumes the holdout.</p><div id="optimization-details" class="table-wrap"><p class="muted">No optimization run is attached yet.</p></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">MONTHLY RESULTS</p><h3>Net P&amp;L by month</h3></div></div><div id="monthly-results" class="table-wrap"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">MONTHLY HEATMAP</p><h3>Monthly return by year</h3></div></div><div id="monthly-heatmap" class="table-wrap"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">EXPIRY BREAKDOWN</p><h3>Contract expiry results</h3></div></div><div id="expiry-results" class="table-wrap"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">DAILY SERIES</p><h3>Daily P&amp;L and rolling risk</h3></div></div><div id="daily-results" class="table-wrap"></div><div id="rolling-risk" class="table-wrap"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">METHOD</p><h3>Assumptions and data coverage</h3></div></div><ul id="assumption-list" class="assumption-list"></ul></article>
+      </div>
+    </section>
+
+    <section id="empty-results" class="panel empty-state"><span class="eyebrow">READY FOR A RUN</span><h2>Start with real candles</h2><p>Load underlying and option data above. Backtests use listed option premiums and disclose unsupported fields.</p></section>
+    <footer class="page-footer"><a href="/">Back to the trading terminal</a><span>Private by default. Shared links expire.</span></footer>
+  </main>
+  <script src="/static/research.js?v=0.2.1" defer></script>
+</body>
+</html>

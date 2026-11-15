@@ -1,4 +1,6 @@
 # Indian Compliance, Regulatory & Privacy Audit
+
+> Historical technical notes dated November 11, 2026; not legal advice, a formal compliance opinion, or regulatory clearance. The current hosted topology sends authenticated API traffic through Vercel to Oracle and stores application data on the VM. Reassess applicable broker terms, personal-data handling, and deployment controls before enabling live use. See [docs/DEPLOYMENT_AUDIT.md](docs/DEPLOYMENT_AUDIT.md).
 **Project:** Kotak Neo PIP Trading Terminal  
 **Date:** November 11, 2026  
 **Regulatory Focus:** Digital Personal Data Protection Act (DPDP), 2023 / Rules 2025; SEBI Broker API Guidelines; RBI Payment & Digital Lending Norms.

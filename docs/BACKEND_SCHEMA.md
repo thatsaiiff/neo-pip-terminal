@@ -1,6 +1,6 @@
 # Backend Data Schema — Neo PIP Trading Ticket
 
-Storage is SQLite; all timestamps are ISO 8601 UTC strings. Foreign keys are not required in v0.1 because order and audit records are independently append-oriented.
+Storage is SQLite; all timestamps are ISO 8601 UTC strings. Foreign keys are not required in v0.2 because order, audit and strategy records are independently append-oriented.
 
 ## 1. `orders`
 
@@ -44,6 +44,44 @@ Sensitive field names such as `totp`, `mpin`, `consumer_key`, `auth`, `token`, a
 - `neo_authenticated`: boolean for session state.
 - `selected_symbol`: symbol, segment, source, confidence and timestamp. It is transient in memory and resets at backend restart in v0.1.
 
-## 4. Future schema candidates (not implemented)
+## 4. Algo tables and stop rules
 
-For a later live price/trailing-stop release: instrument master cache with canonical tokens and lot sizes; streaming quote snapshots with timestamps; persisted positions/fills; bracket/guard orders and OCO groups; trailing stop state machine; idempotency/reconciliation records; durable session state design. These require separate validation before use with real funds.
+### algo_trades
+
+One row per strategy entry, scoped by strategy and account. Statuses include SUBMITTING, SUBMITTED, OPEN, EXIT_SUBMITTED, CLOSED, FAILED, UNKNOWN and EXIT_UNKNOWN. The instrument key pins each row to the exact option contract.
+
+| Column group | Meaning |
+|---|---|
+| strategy_id, account_id, trade_date | Strategy/account scope and India-local trading date |
+| symbol, option_type, instrument_key, exchange_segment, product | Exact listed option and broker/data identifiers |
+| entry_time, signal_bar_time, entry_price, quantity, lot_size | Entry request/fill, consumed signal and contract sizing |
+| sl_price, tp_price, trailing_dist | Initial and ratcheting software stop state plus fixed target |
+| status, order_id, exit_order_id, exit_submitted_at | Entry/exit lifecycle and reconciliation identifiers |
+| exit_time, exit_price, gross_pnl, charges, net_pnl, exit_reason | Closed trade result, recorded after broker fill reconciliation in live mode |
+
+### algo_risk_state and algo_session_days
+
+- algo_risk_state stores the persistent equity high-water mark per strategy/account for maximum drawdown checks.
+- algo_session_days records days on which the strategy ran; daily net returns from the trade ledger are used for the measured Sharpe ratio.
+
+### algo_backtest_runs
+
+One durable row per requested historical run, scoped to the authenticated account and strategy. `settings_json` stores the thresholds and risk settings used; `report_json` stores the complete metrics, daily performance and trade ledger so results can be reopened later. The report records the exact instrument key and data range used.
+
+### sltp_rules additions
+
+The existing stop table has account_id, market_mode, trailing_dist, strategy_id and instrument_token fields. Algo rules are scoped to their strategy and exact option token. Live exits remain software monitored and are matched to broker order reports before an algo trade is marked closed.
+
+## 5. Remaining schema candidates
+
+Exchange-hosted protective orders, durable per-instance strategy configuration, canonical instrument-master snapshots, and stronger broker idempotency/recovery records remain future work. Any live order lifecycle changes require validation against a real Kotak account before use with funds.
+
+## 6. Multi-strategy research tables
+
+### `research_backtest_runs`
+
+One private row per multi-strategy CSV backtest. `account_id` scopes access; `data_source_label` is supplied by the user and is not verified; `settings_json` stores the strategy and fill assumptions; `report_json` stores all strategy results, validation splits, metric registry values, tradebooks, and optional optimization reports. Raw CSV candle arrays are not persisted.
+
+### `research_shares`
+
+Maps only a SHA-256 hash of an unguessable URL token to a run, account, optional strategy ID, creation time, and expiry. Raw share tokens are returned once to the creator and are not stored. Share APIs expose read-only report/CSV/Excel/PDF output until expiry.

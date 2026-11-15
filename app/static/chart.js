@@ -603,19 +603,14 @@
     },
   ];
 
-  // URL query parameter parsing
+  // Keep non-authentication view parameters; never accept session tokens from URLs.
   const urlParams = new URLSearchParams(window.location.search);
-  const qAuth = urlParams.get('auth_token') || urlParams.get('session') || urlParams.get('key');
-  if (qAuth && qAuth.length >= 24) {
-    ownerToken = qAuth;
-    localStorage.setItem('neo_owner_token', qAuth);
+  const legacyAuthParams = ['auth_token', 'session', 'key'];
+  if (legacyAuthParams.some(name => urlParams.has(name))) {
     const cleanUrl = new URL(window.location.href);
-    cleanUrl.searchParams.delete('auth_token');
-    cleanUrl.searchParams.delete('session');
-    cleanUrl.searchParams.delete('key');
+    legacyAuthParams.forEach(name => cleanUrl.searchParams.delete(name));
     window.history.replaceState({}, document.title, cleanUrl.toString());
   }
-
   const qSym = urlParams.get('symbol');
   const qTok = urlParams.get('token');
   const qTf = urlParams.get('interval');
@@ -7988,6 +7983,156 @@
     const btnStop = $('btn-algo-stop');
     const btnSquareOff = $('btn-algo-squareoff');
     const btnResetCb = $('btn-algo-reset-cb');
+    const btnBacktest = $('btn-algo-backtest');
+    const executionMode = $('algo-execution-mode');
+    const modeNote = $('algo-mode-note');
+
+    const formatMetric = (value, decimals = 2) => {
+      if (value === null || value === undefined || value === '') return '—';
+      if (typeof value === 'string') return escapeHtml(value);
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : '—';
+    };
+    const metricCard = (label, value, color = '#e2e8f0') => `
+      <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 8px; min-width: 0;">
+        <div style="font-size: 9px; color: #64748b; text-transform: uppercase; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(label)}</div>
+        <div style="font-size: 12px; color: ${color}; font-weight: 800; font-family: monospace; margin-top: 4px; overflow-wrap: anywhere;">${value}</div>
+      </div>`;
+    const renderPerformanceMetrics = (metrics) => {
+      const root = $('algo-performance-metrics');
+      if (!root) return;
+      const m = metrics || {};
+      const cash = v => `₹${formatMetric(v)}`;
+      const sharpe = m.sharpe_ratio === null || m.sharpe_ratio === undefined ? 'Not enough data' : formatMetric(m.sharpe_ratio);
+      const pf = m.profit_factor === null || m.profit_factor === undefined ? '—' : (typeof m.profit_factor === 'string' ? escapeHtml(m.profit_factor) : formatMetric(m.profit_factor));
+      root.innerHTML = [
+        metricCard('Closed trades', formatMetric(m.closed_trades ?? m.total_trades, 0)),
+        metricCard('W / L / BE', `${formatMetric(m.winning_trades, 0)} / ${formatMetric(m.losing_trades, 0)} / ${formatMetric(m.breakeven_trades, 0)}`),
+        metricCard('Win rate', `${formatMetric(m.win_rate_pct)}%`),
+        metricCard('Net P&L', cash(m.net_pnl), Number(m.net_pnl || 0) >= 0 ? '#10b981' : '#f87171'),
+        metricCard('Return', `${formatMetric(m.return_pct)}%`),
+        metricCard('Gross profit', cash(m.gross_profit)),
+        metricCard('Gross loss', cash(m.gross_loss)),
+        metricCard('Charges', cash(m.total_charges), '#f87171'),
+        metricCard('Profit factor', pf),
+        metricCard('Gross profit factor', m.gross_profit_factor === 'unbounded' ? 'Unbounded' : formatMetric(m.gross_profit_factor)),
+        metricCard('Expectancy / trade', cash(m.expectancy_per_trade)),
+        metricCard('Average win', cash(m.average_win)),
+        metricCard('Average loss', cash(m.average_loss)),
+        metricCard('Average R', `${formatMetric(m.average_r_multiple, 3)}R`),
+        metricCard('Average hold', `${formatMetric(m.average_holding_minutes)} min`),
+        metricCard('Sharpe / 1.30 target', sharpe),
+        metricCard('Realized max DD', `${formatMetric(m.max_drawdown_pct)}% / ${formatMetric(m.max_drawdown_target_pct)}%`),
+        metricCard('Best trade', cash(m.best_trade)),
+        metricCard('Worst trade', cash(m.worst_trade)),
+        metricCard('Max win streak', formatMetric(m.max_consecutive_wins, 0)),
+        metricCard('Max loss streak', formatMetric(m.max_consecutive_losses, 0)),
+        metricCard('Active days', formatMetric(m.session_days, 0)),
+      ].join('');
+      const dailyRoot = $('algo-live-daily');
+      const daily = Array.isArray(m.daily_performance) ? m.daily_performance : [];
+      if (dailyRoot) {
+        dailyRoot.innerHTML = daily.length ? `
+          <table style="width: 100%; border-collapse: collapse; font-size: 10px; text-align: left;">
+            <thead><tr style="color: #64748b; border-bottom: 1px solid #1e293b;"><th style="padding: 5px;">Date</th><th style="padding: 5px;">Trades W/L</th><th style="padding: 5px;">Gross</th><th style="padding: 5px;">Fees</th><th style="padding: 5px;">Net</th><th style="padding: 5px;">Return</th><th style="padding: 5px;">Equity</th></tr></thead>
+            <tbody>${daily.slice().reverse().map(d => `<tr style="border-bottom: 1px solid rgba(255,255,255,0.04);"><td style="padding: 5px;">${escapeHtml(String(d.date || ''))}</td><td style="padding: 5px;">${formatMetric(d.trades, 0)} (${formatMetric(d.wins, 0)}/${formatMetric(d.losses, 0)})</td><td style="padding: 5px;">${cash(d.gross_pnl)}</td><td style="padding: 5px;">${cash(d.charges)}</td><td style="padding: 5px; color: ${Number(d.net_pnl || 0) >= 0 ? '#10b981' : '#f87171'};">${cash(d.net_pnl)}</td><td style="padding: 5px;">${formatMetric(d.return_pct, 4)}%</td><td style="padding: 5px;">${cash(d.equity)}</td></tr>`).join('')}</tbody>
+          </table>` : '<div style="font-size: 10px; color: #64748b;">No closed-session history yet.</div>';
+      }
+    };
+
+    const renderBacktestRun = (run) => {
+      const report = (run && run.report) || {};
+      const metricsRoot = $('algo-backtest-metrics');
+      const dailyRoot = $('algo-backtest-daily');
+      const tradesRoot = $('algo-backtest-trades');
+      const status = $('algo-backtest-status');
+      if (!metricsRoot) return;
+      const cash = v => `₹${formatMetric(v)}`;
+      const pf = report.profit_factor === null || report.profit_factor === undefined ? '—' : (typeof report.profit_factor === 'string' ? escapeHtml(report.profit_factor) : formatMetric(report.profit_factor));
+      const sharpe = report.sharpe_ratio === null || report.sharpe_ratio === undefined ? 'Not enough data' : formatMetric(report.sharpe_ratio);
+      const metricPairs = [
+        ['Underlying / contract', `${escapeHtml(String(report.underlying || run.underlying || ''))} ${escapeHtml(String(report.symbol || run.symbol || ''))}`],
+        ['Option side / expiry', `${escapeHtml(String(report.option_type || run.option_type || ''))} · ${escapeHtml(String(report.expiry || '—'))}`],
+        ['Net P&L', cash(report.net_pnl)],
+        ['Return', `${formatMetric(report.return_pct)}%`],
+        ['Gross profit', cash(report.gross_profit)],
+        ['Gross loss', cash(report.gross_loss)],
+        ['Statutory charges', cash(report.total_charges)],
+        ['Profit factor (net)', pf],
+        ['Profit factor (gross)', report.gross_profit_factor === 'unbounded' ? 'Unbounded' : formatMetric(report.gross_profit_factor)],
+        ['Win rate', `${formatMetric(report.win_rate_pct)}%`],
+        ['Trades · W/L/BE', `${formatMetric(report.total_trades, 0)} · ${formatMetric(report.winning_trades, 0)}/${formatMetric(report.losing_trades, 0)}/${formatMetric(report.breakeven_trades, 0)}`],
+        ['Expectancy / trade', cash(report.expectancy_per_trade)],
+        ['Average win / loss', `${cash(report.average_win)} / ${cash(report.average_loss)}`],
+        ['Payoff ratio', report.payoff_ratio === 'unbounded' ? 'Unbounded' : formatMetric(report.payoff_ratio)],
+        ['Average R multiple', `${formatMetric(report.average_r_multiple, 3)}R`],
+        ['Sharpe / target', `${sharpe} / ${formatMetric(report.sharpe_target)}`],
+        ['Max drawdown / limit', `${formatMetric(report.max_drawdown_pct)}% / ${formatMetric(report.max_drawdown_limit_pct)}%`],
+        ['Daily loss limit', `${formatMetric(report.daily_loss_limit_pct)}%`],
+        ['Worst daily loss', `${formatMetric(report.max_daily_loss_observed_pct)}%`],
+        ['Reward : risk', `1 : ${formatMetric(report.rr_target)}`],
+        ['Premium ATR threshold', `>${formatMetric(report.atr_threshold)} pts`],
+        ['Average hold', `${formatMetric(report.average_holding_minutes)} min`],
+        ['Best / worst trade', `${cash(report.best_trade)} / ${cash(report.worst_trade)}`],
+        ['Max win streak', formatMetric(report.max_consecutive_wins, 0)],
+        ['Max loss streak', formatMetric(report.max_consecutive_losses, 0)],
+        ['Halt reason', report.trading_halt_reason ? escapeHtml(String(report.trading_halt_reason)) : '—'],
+        ['Candles / sessions', `${formatMetric(report.candle_count ?? run.candle_count, 0)} / ${formatMetric(report.session_days, 0)}`],
+        ['Data source', escapeHtml(String(report.data_source || 'upstox_live'))],
+        ['Data range', `${escapeHtml(String(report.data_range_start || run.data_start || '—'))} → ${escapeHtml(String(report.data_range_end || run.data_end || '—'))}`],
+        ['Session window', escapeHtml(String(report.session_window_ist || '09:20–15:29 IST'))],
+      ];
+      metricsRoot.innerHTML = metricPairs.map(([label, value]) => metricCard(label, value)).join('');
+      if (status) {
+        status.textContent = report.error ? `Run #${run.id}: ${report.error}` : `Saved run #${run.id} · ${new Date(run.created_at).toLocaleString()}`;
+        status.style.color = report.error ? '#f87171' : '#10b981';
+      }
+      const daily = Array.isArray(report.daily_performance) ? report.daily_performance : [];
+      if (dailyRoot) {
+        dailyRoot.innerHTML = daily.length ? `
+          <div style="font-size: 10px; color: #94a3b8; font-weight: 700; margin-bottom: 5px;">DAILY RESULTS</div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 10px; text-align: left;">
+            <thead><tr style="color: #64748b; border-bottom: 1px solid #1e293b;"><th style="padding: 5px;">Date</th><th style="padding: 5px;">Trades</th><th style="padding: 5px;">Gross</th><th style="padding: 5px;">Fees</th><th style="padding: 5px;">Net</th><th style="padding: 5px;">Return</th><th style="padding: 5px;">Equity</th></tr></thead>
+            <tbody>${daily.map(d => `<tr style="border-bottom: 1px solid rgba(255,255,255,0.04);"><td style="padding: 5px;">${escapeHtml(String(d.date || ''))}</td><td style="padding: 5px;">${formatMetric(d.trades, 0)}</td><td style="padding: 5px;">${cash(d.gross_pnl)}</td><td style="padding: 5px;">${cash(d.charges)}</td><td style="padding: 5px; color: ${Number(d.net_pnl || 0) >= 0 ? '#10b981' : '#f87171'};">${cash(d.net_pnl)}</td><td style="padding: 5px;">${formatMetric(d.return_pct, 4)}%</td><td style="padding: 5px;">${cash(d.equity)}</td></tr>`).join('')}</tbody>
+          </table>` : '<div style="font-size: 10px; color: #64748b;">No daily candle results are available for this run.</div>';
+      }
+      const trades = Array.isArray(report.trades) ? report.trades : [];
+      if (tradesRoot) {
+        tradesRoot.innerHTML = trades.length ? `
+          <div style="font-size: 10px; color: #94a3b8; font-weight: 700; margin: 8px 0 5px;">TRADE LEDGER (${trades.length})</div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 10px; text-align: left;">
+            <thead><tr style="color: #64748b; border-bottom: 1px solid #1e293b;"><th style="padding: 5px;">Entry</th><th style="padding: 5px;">Exit</th><th style="padding: 5px;">Entry px</th><th style="padding: 5px;">Exit px</th><th style="padding: 5px;">Qty</th><th style="padding: 5px;">R</th><th style="padding: 5px;">Gross</th><th style="padding: 5px;">Fees</th><th style="padding: 5px;">Net</th><th style="padding: 5px;">Exit</th></tr></thead>
+            <tbody>${trades.map(t => `<tr style="border-bottom: 1px solid rgba(255,255,255,0.04);"><td style="padding: 5px;">${new Date(Number(t.entry_time) * 1000).toLocaleString()}</td><td style="padding: 5px;">${new Date(Number(t.exit_time) * 1000).toLocaleString()}</td><td style="padding: 5px;">₹${formatMetric(t.entry_price)}</td><td style="padding: 5px;">₹${formatMetric(t.exit_price)}</td><td style="padding: 5px;">${formatMetric(t.quantity, 0)}</td><td style="padding: 5px;">${formatMetric(t.r_multiple)}R</td><td style="padding: 5px;">${cash(t.gross_pnl)}</td><td style="padding: 5px;">${cash(t.charges)}</td><td style="padding: 5px; color: ${Number(t.pnl || 0) >= 0 ? '#10b981' : '#f87171'};">${cash(t.pnl)}</td><td style="padding: 5px;">${escapeHtml(String(t.exit_reason || ''))}</td></tr>`).join('')}</tbody>
+          </table>` : '<div style="font-size: 10px; color: #64748b; margin-top: 8px;">No completed trades in this candle sample.</div>';
+      }
+    };
+
+    const fetchAlgoBacktestRun = async (runId) => {
+      const res = await fetch(`/api/algo/backtests/${encodeURIComponent(runId)}`, {
+        headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.detail || 'Could not load the saved backtest.');
+      renderBacktestRun(data.run);
+    };
+
+    const fetchAlgoBacktestHistory = async (selectLatest = false) => {
+      const root = $('algo-backtest-history');
+      if (!root) return;
+      try {
+        const res = await fetch('/api/algo/backtests?limit=20', {
+          headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const runs = data.runs || [];
+        root.innerHTML = runs.length ? runs.map(run => `
+          <button type="button" data-algo-backtest-id="${Number(run.id)}" style="padding: 6px 8px; color: #cbd5e1; background: #111827; border: 1px solid #334155; border-radius: 4px; cursor: pointer; font-size: 10px;">
+            #${Number(run.id)} ${escapeHtml(String(run.symbol || run.underlying || 'Run'))} · ₹${formatMetric(run.net_pnl)} · ${formatMetric(run.total_trades, 0)} trades
+          </button>`).join('') : '<span style="font-size: 10px; color: #64748b;">No saved backtest runs yet.</span>';
+        if (selectLatest && runs.length) await fetchAlgoBacktestRun(runs[0].id);
+      } catch (_) {}
+    };
 
     const updateAlgoUiFromStatus = (st) => {
       if (!st) return;
@@ -8003,12 +8148,15 @@
       const netEl = $('algo-net-pnl');
       const lossBar = $('algo-loss-bar');
       const headroomEl = $('algo-loss-headroom');
+      const sharpeEl = $('algo-sharpe-current');
+      const drawdownEl = $('algo-dd-current');
+      const lossStreakEl = $('algo-loss-streak');
 
-      const isRunning = Boolean(st.running);
-      const isHalted = Boolean(st.circuit_breaker_halted);
+      const isRunning = Boolean(st.running || st.enabled);
+      const isHalted = Boolean(st.circuit_breaker_halted || st.circuit_breaker_triggered);
       const netLoss = Number(st.net_pnl || 0);
-      const maxLoss = Number((st.config && st.config.max_loss_limit) || 10000);
-      const remaining = Math.max(0, maxLoss + netLoss);
+      const maxLoss = Number(st.daily_loss_limit || (st.config && st.config.max_loss_limit) || 0);
+      const remaining = Math.max(0, maxLoss + Math.min(0, netLoss));
 
       if (statusPill) {
         if (isHalted) statusPill.textContent = 'ALGO: HALTED';
@@ -8024,15 +8172,15 @@
         statusBadge.textContent = isHalted ? 'CIRCUIT HALTED' : (isRunning ? 'ACTIVE' : 'IDLE');
         statusBadge.className = `algo-tag ${isHalted ? 'halted' : (isRunning ? 'running' : 'idle')}`;
       }
-      if (statusSub) statusSub.textContent = isHalted ? 'Hard Stop Hit (-₹10,000)' : (isRunning ? 'Live Forward Scanning' : 'Ready to Scan');
-      if (statusReason) statusReason.textContent = st.last_reason || (isRunning ? 'Scanning option chains & ATR signals' : 'Bot stopped.');
+      if (statusSub) statusSub.textContent = isHalted ? `Risk halt: ${st.halt_code || 'active'}` : (isRunning ? `${(st.config && st.config.mode) === 'live' ? 'Live' : 'Paper'} option scanning` : 'Ready to scan');
+      if (statusReason) statusReason.textContent = st.last_reason || st.halt_reason || (isRunning ? 'Scanning live ATM options and closed premium candles.' : 'Bot stopped.');
 
       if (cbStateText) {
         if (isHalted) {
           cbStateText.textContent = 'TRIPPED (Halted)';
           cbStateText.style.color = '#ef4444';
         } else {
-          cbStateText.textContent = `ARMED (₹${maxLoss.toLocaleString('en-IN')} max)`;
+          cbStateText.textContent = `ARMED (₹${maxLoss.toLocaleString('en-IN')} daily)`;
           cbStateText.style.color = '#10b981';
         }
       }
@@ -8042,10 +8190,10 @@
       if (chargesEl) chargesEl.textContent = `₹${Number(st.statutory_charges || 0).toFixed(2)}`;
       if (netEl) {
         netEl.textContent = `₹${netLoss.toFixed(2)}`;
-        netEl.style.color = netLoss >= 0 ? '#10b981' : (netLoss <= -8000 ? '#ef4444' : '#f59e0b');
+        netEl.style.color = netLoss >= 0 ? '#10b981' : (maxLoss > 0 && netLoss <= -maxLoss * 0.8 ? '#ef4444' : '#f59e0b');
       }
 
-      const lossPct = Math.min(100, Math.max(0, (Math.abs(Math.min(0, netLoss)) / maxLoss) * 100));
+      const lossPct = maxLoss > 0 ? Math.min(100, Math.max(0, (Math.abs(Math.min(0, netLoss)) / maxLoss) * 100)) : 0;
       if (lossBar) {
         lossBar.style.width = `${lossPct}%`;
         lossBar.style.background = lossPct >= 80 ? '#ef4444' : (lossPct >= 50 ? '#f59e0b' : '#10b981');
@@ -8055,7 +8203,27 @@
         headroomEl.style.color = remaining <= 2000 ? '#ef4444' : '#10b981';
       }
 
-      if (btnStart) btnStart.disabled = isRunning;
+      if (sharpeEl) {
+        const measured = st.performance && st.performance.sharpe_ratio;
+        sharpeEl.textContent = measured === null || measured === undefined ? 'Not enough closed days' : Number(measured).toFixed(2);
+      }
+      if (drawdownEl) drawdownEl.textContent = `${Number(st.drawdown_pct || 0).toFixed(2)}%`;
+      if (lossStreakEl) lossStreakEl.textContent = `${Number(st.loss_streak || 0)} / ${Number((st.config && st.config.max_consecutive_losses) || 3)}`;
+      renderPerformanceMetrics(st.performance || {});
+      if (executionMode && isRunning && st.config && st.config.mode) executionMode.value = st.config.mode;
+      if (executionMode) executionMode.disabled = isRunning || (st.user_market_mode || currentMarketMode) === 'forex';
+      if (modeNote) {
+        if ((st.user_market_mode || currentMarketMode) === 'forex') {
+          modeNote.textContent = 'Forex algo mode is planned. Switch to Indian market mode to start this strategy.';
+        } else {
+          const modeText = executionMode && executionMode.value === 'live'
+            ? 'Live mode sends Kotak orders and requires the live gate.'
+            : 'Paper mode simulates fills using live market data.';
+          modeNote.textContent = `Risk capital ₹${Number(st.account_capital || st.config?.initial_capital || 0).toLocaleString('en-IN')}. No daily trade count cap. ${modeText}`;
+        }
+      }
+
+      if (btnStart) btnStart.disabled = isRunning || (st.user_market_mode || currentMarketMode) === 'forex';
       if (btnStop) btnStop.disabled = !isRunning;
     };
 
@@ -8082,19 +8250,19 @@
           const data = await res.json();
           const trades = data.trades || [];
           if (!trades.length) {
-            tbody.innerHTML = '<tr><td colspan="8" style="padding: 16px; text-align: center; color: #64748b;">No forward-test orders placed yet.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" style="padding: 16px; text-align: center; color: #64748b;">No algo trades yet.</td></tr>';
             return;
           }
           tbody.innerHTML = trades.map(t => `
             <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
-              <td style="padding: 6px 10px; color: #94a3b8;">${new Date(t.timestamp * 1000).toLocaleTimeString()}</td>
-              <td style="padding: 6px 10px; font-weight: 700; color: #f8fafc;">${t.symbol}</td>
-              <td style="padding: 6px 10px; font-weight: 800; color: ${t.signal === 'BUY' ? '#38bdf8' : '#ef4444'};">${t.signal}</td>
+              <td style="padding: 6px 10px; color: #94a3b8;">${new Date(t.entry_time || t.timestamp).toLocaleTimeString()}</td>
+              <td style="padding: 6px 10px; font-weight: 700; color: #f8fafc;">${escapeHtml(String(t.symbol || ''))}</td>
+              <td style="padding: 6px 10px; font-weight: 800; color: #38bdf8;">BUY ${escapeHtml(String(t.option_type || ''))}</td>
               <td style="padding: 6px 10px; font-family: monospace;">₹${Number(t.entry_price || 0).toFixed(2)}</td>
               <td style="padding: 6px 10px; font-family: monospace; color: #ef4444;">₹${Number(t.sl_price || 0).toFixed(2)}</td>
               <td style="padding: 6px 10px; font-family: monospace; color: #10b981;">₹${Number(t.tp_price || 0).toFixed(2)}</td>
               <td style="padding: 6px 10px;">${t.quantity}</td>
-              <td style="padding: 6px 10px;"><span style="font-size: 10px; padding: 2px 6px; border-radius: 3px; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">${t.status || 'SUBMITTED'}</span></td>
+              <td style="padding: 6px 10px;"><span style="font-size: 10px; padding: 2px 6px; border-radius: 3px; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">${escapeHtml(String(t.status || 'OPEN'))}</span></td>
             </tr>
           `).join('');
         }
@@ -8106,6 +8274,7 @@
         if (modal) modal.classList.remove('hidden');
         fetchAlgoStatus();
         fetchAlgoTrades();
+        fetchAlgoBacktestHistory(true);
         if (!_algoPollInterval) {
           _algoPollInterval = setInterval(() => {
             fetchAlgoStatus();
@@ -8125,27 +8294,87 @@
       });
     }
 
+    const backtestHistory = $('algo-backtest-history');
+    if (backtestHistory) {
+      backtestHistory.addEventListener('click', async (event) => {
+        const button = event.target.closest('[data-algo-backtest-id]');
+        if (!button) return;
+        try {
+          await fetchAlgoBacktestRun(button.dataset.algoBacktestId);
+        } catch (err) {
+          const status = $('algo-backtest-status');
+          if (status) {
+            status.textContent = err.message;
+            status.style.color = '#f87171';
+          }
+        }
+      });
+    }
+
+    if (btnBacktest) {
+      btnBacktest.addEventListener('click', async () => {
+        const status = $('algo-backtest-status');
+        btnBacktest.disabled = true;
+        if (status) {
+          status.textContent = 'Fetching live ATM contract and historical candles…';
+          status.style.color = '#fbbf24';
+        }
+        try {
+          const days = Math.min(30, Math.max(1, Number($('algo-backtest-days')?.value || 30)));
+          const payload = {
+            underlying: $('algo-backtest-underlying')?.value || 'NIFTY',
+            option_type: $('algo-backtest-option-type')?.value || 'CE',
+            days,
+          };
+          const res = await fetch('/api/algo/backtests/run', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Backtest could not run.');
+          renderBacktestRun({ id: data.run_id, created_at: data.created_at, underlying: payload.underlying, option_type: payload.option_type, report: data.report });
+          await fetchAlgoBacktestHistory(false);
+          if (!data.ok) throw new Error(data.report?.error || 'The run was saved without a complete result.');
+          toast(`Backtest run #${data.run_id} saved for review.`);
+        } catch (err) {
+          if (status) {
+            status.textContent = err.message;
+            status.style.color = '#f87171';
+          }
+          toast(`Backtest failed: ${err.message}`);
+        } finally {
+          btnBacktest.disabled = false;
+        }
+      });
+    }
+
     if (btnStart) {
       btnStart.addEventListener('click', async () => {
         try {
-          toast('🤖 Starting Quantitative Algo Bot...');
+          const mode = executionMode ? executionMode.value : 'paper';
+          if (mode === 'live' && !confirm('Start live Indian options trading? This can submit real orders through Kotak Neo.')) return;
+          toast(`Starting Indian options algo in ${mode} mode.`);
           const res = await fetch('/api/algo/start', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${getAuthToken()}`,
             },
-            body: JSON.stringify({ mode: 'forward_test' })
+            body: JSON.stringify({ mode })
           });
           const data = await res.json();
           if (res.ok && data.ok) {
-            toast('✅ Algo Bot started in Forward Test mode (EMA 9/15, ATR>10, 1:2.25 RR)!');
+            toast(`Indian options algo started in ${mode} mode.`);
             fetchAlgoStatus();
           } else {
-            toast(`❌ Failed to start algo: ${data.detail || data.reason || 'Error'}`);
+            toast(`Algo could not start: ${data.detail || data.reason || 'Unknown error'}`);
           }
         } catch (err) {
-          toast(`❌ ${err.message}`);
+          toast(`Algo could not start: ${err.message}`);
         }
       });
     }
@@ -8153,43 +8382,43 @@
     if (btnStop) {
       btnStop.addEventListener('click', async () => {
         try {
-          toast('⏹ Stopping Algo Bot...');
+          toast('Stopping the algo. Existing position protection remains active.');
           const res = await fetch('/api/algo/stop', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${getAuthToken()}`,
             },
-            body: JSON.stringify({ square_off: false })
           });
           const data = await res.json();
           if (res.ok && data.ok) {
-            toast('⏹ Algo Bot stopped.');
+            toast('Algo stopped. Existing position protection remains active.');
             fetchAlgoStatus();
           }
         } catch (err) {
-          toast(`❌ ${err.message}`);
+          toast(`Algo could not stop: ${err.message}`);
         }
       });
     }
 
     if (btnSquareOff) {
       btnSquareOff.addEventListener('click', async () => {
-        if (!confirm('Emergency Square Off All Algo Positions and Halt?')) return;
+        if (!confirm('Close the open algo positions and halt new entries? Manual positions will remain open.')) return;
         try {
-          toast('🚨 Squaring off all positions...');
-          const res = await fetch('/api/algo/stop', {
+          toast('Closing open algo positions.');
+          const res = await fetch('/api/algo/stop?square_off=true', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${getAuthToken()}`,
             },
-            body: JSON.stringify({ square_off: true })
           });
-          toast('🚨 All positions squared off & Algo halted.');
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Request failed');
+          toast('Algo stopped and its positions were submitted for closure.');
           fetchAlgoStatus();
         } catch (err) {
-          toast(`❌ ${err.message}`);
+          toast(`Algo positions could not be closed: ${err.message}`);
         }
       });
     }
@@ -8204,10 +8433,12 @@
               'Authorization': `Bearer ${getAuthToken()}`,
             }
           });
-          toast('🔄 Circuit breaker reset to active state.');
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.detail || data.message || 'Risk halt reset failed');
+          toast('Risk halt reset. Press Start to resume.');
           fetchAlgoStatus();
         } catch (err) {
-          toast(`❌ ${err.message}`);
+          toast(`Risk halt could not reset: ${err.message}`);
         }
       });
     }
