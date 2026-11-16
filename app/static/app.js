@@ -2573,23 +2573,26 @@
     state.siteAuthenticated = false;
     state.isAdmin = false;
     state.username = null;
-    document.body.classList.add('site-locked');
+    document.body.classList.remove('site-locked');
     closeMainModals();
     resetSensitiveMainUI();
     if ($('main-user-pill')) $('main-user-pill').classList.add('hidden');
     if ($('main-signin-trigger')) $('main-signin-trigger').classList.remove('hidden');
-    if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
     updateModeUI();
   }
 
   function applyMainSession(sess, reloadData = true) {
     if (!sess || !sess.authenticated) {
-      if (state.siteAuthenticated) {
-        lockMainSite();
-      } else {
-        document.body.classList.add('site-locked');
+      state.siteAuthenticated = false;
+      state.isAdmin = false;
+      state.username = null;
+      document.body.classList.remove('site-locked');
+      if ($('main-user-pill')) $('main-user-pill').classList.add('hidden');
+      if ($('main-signin-trigger')) $('main-signin-trigger').classList.remove('hidden');
+      updateModeUI();
+      if (mainAuthStep === 'otp' && loadMainPendingOtp()) {
+        restoreMainPendingOtpUI();
         if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
-        if (mainAuthStep !== 'otp') restoreMainPendingOtpUI();
       }
       return false;
     }
@@ -2636,7 +2639,15 @@
       if (sess && sess.token) {
         localStorage.setItem('neo_owner_token', sess.token);
       }
-      return applyMainSession(sess, reloadData);
+      const ok = applyMainSession(sess, reloadData);
+      if (sess && sess.authenticated) {
+        const urlParams = new URLSearchParams(window.location.search);
+        // Seamlessly take authenticated users to the Advanced Chart Terminal
+        if (window.location.pathname === '/' && !urlParams.has('stay') && !urlParams.has('ticket')) {
+          window.location.href = '/chart';
+        }
+      }
+      return ok;
     } catch (_) {
       return false;
     }
@@ -2719,6 +2730,29 @@
     if ($('main-signin-trigger')) $('main-signin-trigger').addEventListener('click', () => {
       if ($('main-auth-modal')) $('main-auth-modal').classList.remove('hidden');
     });
+    const authCloseBtn = $('main-auth-close-btn');
+    if (authCloseBtn) {
+      authCloseBtn.addEventListener('click', () => {
+        if ($('main-auth-modal')) $('main-auth-modal').classList.add('hidden');
+        document.body.classList.remove('site-locked');
+      });
+    }
+    const authGuestBtn = $('main-auth-guest-btn');
+    if (authGuestBtn) {
+      authGuestBtn.addEventListener('click', () => {
+        if ($('main-auth-modal')) $('main-auth-modal').classList.add('hidden');
+        document.body.classList.remove('site-locked');
+      });
+    }
+    const authModalBackdrop = $('main-auth-modal');
+    if (authModalBackdrop) {
+      authModalBackdrop.addEventListener('click', (e) => {
+        if (e.target === authModalBackdrop) {
+          authModalBackdrop.classList.add('hidden');
+          document.body.classList.remove('site-locked');
+        }
+      });
+    }
 
     if ($('main-auth-resend')) {
       $('main-auth-resend').addEventListener('click', async () => {
@@ -2769,6 +2803,9 @@
             if ($('main-auth-pass')) $('main-auth-pass').value = '';
             await syncMainAuthSession(true);
             toast(`Signed in as @${res.username}`, 'success');
+            const targetParams = new URLSearchParams(window.location.search);
+            const redirectUrl = targetParams.get('redirect') || targetParams.get('next') || '/chart';
+            window.location.href = redirectUrl;
           } else if (mainAuthMode === 'signup' && mainAuthStep === 'details') {
             const emailErr = validateTrustedEmailClient(email);
             if (emailErr) return showErr(emailErr);
@@ -2798,6 +2835,9 @@
             if ($('main-auth-otp')) $('main-auth-otp').value = '';
             await syncMainAuthSession(true);
             toast(`Email verified! Signed in as @${res.username}`, 'success');
+            const targetParams = new URLSearchParams(window.location.search);
+            const redirectUrl = targetParams.get('redirect') || targetParams.get('next') || '/chart';
+            window.location.href = redirectUrl;
           } else if (mainAuthMode === 'forgot' && mainAuthStep === 'details') {
             const emailErr = validateTrustedEmailClient(email);
             if (emailErr) return showErr(emailErr);

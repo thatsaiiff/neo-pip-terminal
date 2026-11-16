@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=0.2.1">
 </head>
-<body class="site-locked">
+<body>
   <div id="app-shell">
     <header class="topbar">
       <div class="brand-group">
@@ -623,8 +623,9 @@
   </div>
 
   <!-- Account Sign In / Create Account Gatekeeper Modal -->
-  <div id="main-auth-modal" class="modal-backdrop auth-gate-backdrop" role="dialog" aria-modal="true" aria-labelledby="main-auth-title">
+  <div id="main-auth-modal" class="modal-backdrop auth-gate-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="main-auth-title">
     <div class="modal-card main-auth-card">
+      <button type="button" id="main-auth-close-btn" class="main-auth-close-btn" title="Close &amp; View Terminal" aria-label="Close">✕</button>
       <div class="modal-top">
         <span class="modal-label">TERMINAL ACCESS</span>
         <span class="main-auth-shield">🔒 Encrypted Session</span>
@@ -691,6 +692,11 @@
         <div id="main-auth-error" class="main-auth-error hidden"></div>
         <button id="main-auth-submit" type="submit" class="confirm-order-button" style="width:100%;height:42px;margin-top:4px;">Sign In</button>
       </form>
+      <div class="main-auth-guest-row" style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;gap:12px;">
+        <a href="/chart" class="main-auth-link-btn" style="color:var(--brand-accent,#e5c07b);font-weight:600;font-size:12px;">📈 Open Advanced Charts (/chart) &rarr;</a>
+        <span style="color:var(--ink-muted);font-size:11px;">•</span>
+        <button type="button" id="main-auth-guest-btn" class="main-auth-link-btn" style="font-size:12px;">Continue as Guest</button>
+      </div>
       <p class="modal-footnote" style="margin-top:12px;">Your session stays synchronized cleanly across both Trading Ticket (<code>/</code>) and Advanced Charts (<code>/chart</code>).</p>
       <p class="modal-footnote" style="margin-top:6px;">
         Strictly for educational &amp; personal self-hosted use (public real-money use not allowed).

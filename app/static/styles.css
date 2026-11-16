@@ -3220,11 +3220,37 @@ body.site-locked #app-shell {
 }
 
 .main-auth-card {
+  position: relative;
   max-width: 400px;
   padding: 24px;
   border-radius: 16px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
   animation: modal-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.main-auth-close-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  z-index: 2;
+}
+
+.main-auth-close-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 @keyframes modal-pop {
