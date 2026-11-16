@@ -168,9 +168,6 @@
     let data = {};
     try { data = await response.json(); } catch (_) { data = {}; }
     if (!response.ok) {
-      if (response.status === 401 && !path.startsWith('/api/auth/')) {
-        if (typeof lockMainSite === 'function') lockMainSite();
-      }
       const detail = typeof data.detail === 'string' ? data.detail : `Request failed (${response.status})`;
       if (response.status === 404 && path.startsWith('/api/')) {
         throw new Error('Local API route not found (404). Restart the backend service.');
@@ -2636,9 +2633,11 @@
     }
     try {
       const sess = await api('/api/auth/session-status');
+      if (sess && sess.token) {
+        localStorage.setItem('neo_owner_token', sess.token);
+      }
       return applyMainSession(sess, reloadData);
     } catch (_) {
-      lockMainSite();
       return false;
     }
   }
@@ -2899,7 +2898,6 @@
   setupMoversControls();
   wireMainAuthModal();
   setupMainLegalModal();
-  lockMainSite();
 
   requestLanAccess().then(() => {
     syncMainAuthSession(true);

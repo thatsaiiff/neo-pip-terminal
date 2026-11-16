@@ -953,9 +953,10 @@
 
   async function api(path, options = {}) {
     const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    if (ownerToken) {
-      headers['X-Owner-Token'] = ownerToken;
-      headers['Authorization'] = `Bearer ${ownerToken}`;
+    const savedTok = ownerToken || localStorage.getItem('neo_owner_token') || '';
+    if (savedTok) {
+      headers['X-Owner-Token'] = savedTok;
+      headers['Authorization'] = `Bearer ${savedTok}`;
     }
     const res = await fetch(path, {
       cache: 'no-store',
@@ -966,11 +967,6 @@
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detailStr = String(data.detail || '');
-      if (res.status === 401 && !path.startsWith('/api/auth/') && !/kotak|broker/i.test(detailStr)) {
-        if (typeof window._handleLogoutFn === 'function' && isAuthenticated) {
-          window._handleLogoutFn('Session ended. Please sign in again.');
-        }
-      }
       throw new Error(detailStr || `HTTP ${res.status}`);
     }
     return data;
@@ -6053,6 +6049,18 @@
       });
     }
 
+    const btnCloseGate = $('btn-close-gatekeeper');
+    if (btnCloseGate) {
+      btnCloseGate.addEventListener('click', () => {
+        if (gateModal) gateModal.classList.add('hidden');
+      });
+    }
+    if (gateModal) {
+      gateModal.addEventListener('click', e => {
+        if (e.target === gateModal) gateModal.classList.add('hidden');
+      });
+    }
+
     async function checkSession() {
       try {
         const st = await api('/api/auth/session-status');
@@ -6062,6 +6070,11 @@
           isAdminUser = Boolean(st.is_admin);
           isOwner = isAdminUser;
           currentUser = { ...st, kotak_connected: kotakUp };
+          if (st.token) {
+            ownerToken = st.token;
+            localStorage.setItem('neo_owner_token', st.token);
+          }
+          recordUserActivity();
           if (gateModal) gateModal.classList.add('hidden');
 
           if (!isAdminUser && !st.market_mode) {
@@ -6080,19 +6093,13 @@
           isOwner = false;
           currentUser = null;
           updateAuthModeUI(false, '');
-          if (gateModal) {
-            if (!restorePendingOtpUI()) {
-              switchAuthTab('signin');
-            }
+          if (gateModal && loadPendingOtpState()) {
+            restorePendingOtpUI();
             gateModal.classList.remove('hidden');
           }
         }
       } catch (e) {
         updateAuthModeUI(false, '');
-        if (gateModal) {
-          restorePendingOtpUI();
-          gateModal.classList.remove('hidden');
-        }
       }
     }
 
@@ -6101,11 +6108,20 @@
       try {
         const st = await api('/api/auth/session-status');
         if (!st || !st.authenticated) {
-          if (isAuthenticated) handleLogout('Session signed out. Please sign in to continue.');
-          // Never call checkSession()/switchAuthTab('signin') when already unauthenticated —
-          // switching browser <-> Gmail to read an OTP must keep the active OTP view intact!
+          if (isAuthenticated) {
+            isAuthenticated = false;
+            isAdminUser = false;
+            isOwner = false;
+            currentUser = null;
+            updateAuthModeUI(false, '');
+          }
           return;
         }
+        if (st.token) {
+          ownerToken = st.token;
+          localStorage.setItem('neo_owner_token', st.token);
+        }
+        recordUserActivity();
         if (!isAuthenticated || !currentUser || currentUser.username !== st.username) {
           checkSession();
           return;
@@ -6129,19 +6145,11 @@
 
     clearInterval(inactivityTimerInterval);
     inactivityTimerInterval = setInterval(() => {
-      if (!isAdminUser || !isAuthenticated) return;
-      const elapsed = Date.now() - lastUserActivity;
-      const remainingMs = INACTIVITY_TIMEOUT_MS - elapsed;
-
-      if (remainingMs <= 0) {
-        handleLogout('Admin session expired after 5 minutes of inactivity.');
-      } else if (sessionTimerText) {
-        const totalSec = Math.floor(remainingMs / 1000);
-        const mins = Math.floor(totalSec / 60);
-        const secs = totalSec % 60;
-        sessionTimerText.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+      recordUserActivity();
+      if (sessionTimerText) {
+        sessionTimerText.textContent = isAuthenticated ? 'Active' : 'Guest';
       }
-    }, 1000);
+    }, 15000);
 
     checkSession();
   }

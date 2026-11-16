@@ -540,7 +540,7 @@ def current_mode() -> str:
 # --- MULTI-USER AUTHENTICATION, ADMIN & ISOLATED TRADING ENGINE ---
 _ACTIVE_OWNER_SESSIONS: dict[str, dict[str, Any]] = {}
 _ACTIVE_USER_SESSIONS: dict[str, dict[str, Any]] = {}
-OWNER_SESSION_TIMEOUT_SECONDS = 300  # 5 minutes inactivity timeout for owner badge display
+OWNER_SESSION_TIMEOUT_SECONDS = 3600 * 24 * 30  # 30 days persistent session for trading terminal
 _GUEST_DEMO_BALANCE: float = 1000000.0  # Default Indian INR virtual balance
 _FOREX_DEMO_BALANCE: float = 10000.0   # Default Forex USD virtual balance
 
@@ -930,23 +930,22 @@ def send_welcome_email(to_email: str, username: str) -> bool:
 def _is_owner_token_valid(token: str | None) -> bool:
     if not token:
         return False
+    now = time.time()
     sess = _ACTIVE_OWNER_SESSIONS.get(token)
     if sess:
-        now = time.time()
-        if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
-            _ACTIVE_OWNER_SESSIONS.pop(token, None)
-            return False
-        sess["last_active"] = now  # Refresh inactivity activity
-        return True
+        if now - sess.get("last_active", 0) <= OWNER_SESSION_TIMEOUT_SECONDS:
+            sess["last_active"] = now  # Refresh inactivity activity
+            return True
+        _ACTIVE_OWNER_SESSIONS.pop(token, None)
 
-    # Check database user_sessions for admin
+    # Check database user_sessions for admin (persistent across server restarts and active sessions)
     try:
         with db() as conn:
             row = conn.execute("SELECT user_id, email, is_admin, expires_at FROM user_sessions WHERE token = ?", (token,)).fetchone()
-            if row and row["is_admin"] and row["expires_at"] > time.time():
+            if row and row["is_admin"] and row["expires_at"] > now:
                 _ACTIVE_OWNER_SESSIONS[token] = {
-                    "created_at": time.time(),
-                    "last_active": time.time(),
+                    "created_at": now,
+                    "last_active": now,
                     "email": row["email"],
                     "is_admin": True,
                 }
@@ -1010,43 +1009,44 @@ def _get_active_session_info(token: str | None) -> dict[str, Any] | None:
     if token in _ACTIVE_OWNER_SESSIONS:
         sess = _ACTIVE_OWNER_SESSIONS[token]
         now = time.time()
-        if now - sess.get("last_active", 0) > OWNER_SESSION_TIMEOUT_SECONDS:
-            _ACTIVE_OWNER_SESSIONS.pop(token, None)
-            return None
-        sess["last_active"] = now
-        return {
-            "token": token,
-            "user_id": 1,
-            "email": sess.get("email", ADMIN_EMAIL),
-            "username": sess.get("username", ADMIN_USERNAME),
-            "name": "Saif",
-            "is_admin": True,
-            "mode": "owner",
-            "market_mode": sess.get("market_mode", "indian"),
-            "indian_balance": _GUEST_DEMO_BALANCE,
-            "forex_balance": _FOREX_DEMO_BALANCE,
-            "paper_balance": _GUEST_DEMO_BALANCE,
-            "last_active": sess["last_active"],
-            "remaining": max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (now - sess["last_active"]))),
-        }
+        if now - sess.get("last_active", 0) <= OWNER_SESSION_TIMEOUT_SECONDS:
+            sess["last_active"] = now
+            return {
+                "token": token,
+                "user_id": 1,
+                "email": sess.get("email", ADMIN_EMAIL),
+                "username": sess.get("username", ADMIN_USERNAME),
+                "name": "Saif",
+                "is_admin": True,
+                "mode": "owner",
+                "market_mode": sess.get("market_mode", "indian"),
+                "indian_balance": _GUEST_DEMO_BALANCE,
+                "forex_balance": _FOREX_DEMO_BALANCE,
+                "paper_balance": _GUEST_DEMO_BALANCE,
+                "last_active": sess["last_active"],
+                "remaining": max(0, int(OWNER_SESSION_TIMEOUT_SECONDS - (now - sess["last_active"]))),
+            }
+        _ACTIVE_OWNER_SESSIONS.pop(token, None)
 
     if token in _ACTIVE_USER_SESSIONS:
         sess = _ACTIVE_USER_SESSIONS[token]
         now = time.time()
-        sess["last_active"] = now
-        return {
-            "token": token,
-            "email": sess.get("email", ""),
-            "username": sess.get("username", "Trader"),
-            "is_admin": False,
-            "mode": sess.get("market_mode") or "paper",
-            "market_mode": sess.get("market_mode") or "",
-            "indian_balance": _GUEST_DEMO_BALANCE,
-            "forex_balance": _FOREX_DEMO_BALANCE,
-            "paper_balance": _GUEST_DEMO_BALANCE,
-            "last_active": sess["last_active"],
-            "remaining": OWNER_SESSION_TIMEOUT_SECONDS,
-        }
+        if now - sess.get("last_active", 0) <= OWNER_SESSION_TIMEOUT_SECONDS:
+            sess["last_active"] = now
+            return {
+                "token": token,
+                "email": sess.get("email", ""),
+                "username": sess.get("username", "Trader"),
+                "is_admin": False,
+                "mode": sess.get("market_mode") or "paper",
+                "market_mode": sess.get("market_mode") or "",
+                "indian_balance": _GUEST_DEMO_BALANCE,
+                "forex_balance": _FOREX_DEMO_BALANCE,
+                "paper_balance": _GUEST_DEMO_BALANCE,
+                "last_active": sess["last_active"],
+                "remaining": OWNER_SESSION_TIMEOUT_SECONDS,
+            }
+        _ACTIVE_USER_SESSIONS.pop(token, None)
     return None
 
 
@@ -2594,10 +2594,11 @@ def _issue_user_session(
     market_mode: str,
     indian_bal: float,
     forex_bal: float,
+    request: Request | None = None,
 ) -> str:
     token = secrets.token_hex(32)
     now = time.time()
-    expires_at = now + (3600 * 24 * 7)
+    expires_at = now + (3600 * 24 * 30)  # 30 days persistent session
     sess_dict = {
         "created_at": now,
         "last_active": now,
@@ -2624,7 +2625,7 @@ def _issue_user_session(
     response.set_cookie(
         key="neo_session",
         value=token,
-        max_age=3600 * 24 * 7,
+        max_age=3600 * 24 * 30,
         httponly=True,
         samesite="lax",
         secure=False if NEO_ENVIRONMENT == "dev" else True,
@@ -2873,7 +2874,7 @@ def auth_signin(payload: SigninPayload, response: Response, request: Request):
                     conn.execute("UPDATE users SET is_admin = 1, email = ?, username = ?, password_hash = ?, last_login = ? WHERE id = ?", (effective_email, effective_user, pw_hash, utc_now(), user_id))
                 conn.commit()
 
-            token = _issue_user_session(response, user_id, effective_email, effective_user, True, mmode, ind_b, fx_b)
+            token = _issue_user_session(response, user_id, effective_email, effective_user, True, mmode, ind_b, fx_b, request=request)
             audit("admin_signin", {"username": effective_user})
             return {
                 "ok": True,
@@ -2905,7 +2906,7 @@ def auth_signin(payload: SigninPayload, response: Response, request: Request):
         fx_b = float(row["forex_balance"] if row["forex_balance"] is not None else _FOREX_DEMO_BALANCE)
 
     is_user_admin = bool(row["is_admin"]) or (ident_lower in admin_idents)
-    token = _issue_user_session(response, user_id, row["email"], row["username"], is_user_admin, mmode, ind_b, fx_b)
+    token = _issue_user_session(response, user_id, row["email"], row["username"], is_user_admin, mmode, ind_b, fx_b, request=request)
     audit("user_signin", {"user_id": user_id, "username": row["username"], "is_admin": is_user_admin})
     return {
         "ok": True,
@@ -3494,6 +3495,7 @@ def session_status(
     return {
         "ok": True,
         "authenticated": bool(sess),
+        "token": (sess.get("token") or token) if sess else None,
         "is_owner": is_owner,
         "is_admin": is_owner,
         "email": sess.get("email") if sess else "guest",
