@@ -8845,22 +8845,13 @@
       if (pSym) pSym.textContent = sym;
 
       // Update or add tab in top symbol tab bar
-      const tabIdx = symbolTabs.findIndex(t => t.symbol === sym);
-      if (tabIdx >= 0) {
-        activeTabIdx = tabIdx;
+      if (typeof addNewTab === 'function' && pane.idx === 0) {
+        addNewTab(sym, ikey, item.segment || (ikey.split('|')[0] || 'NSE'));
       } else {
-        symbolTabs.push({
-          symbol: sym,
-          token: ikey,
-          interval: pane.tf || '1m',
-          isOption: isOptionSymbol(sym),
-          segment: ikey.split('|')[0] || 'NSE',
-          rangeDays: pane.rangeDays || 5,
-        });
-        activeTabIdx = symbolTabs.length - 1;
+        toast(`Loading ${sym} (${ikey || 'Upstox'})...`);
+        loadCandles(pane);
+        subscribeChartQuoteSocket(true);
       }
-      saveSymbolTabs();
-      renderSymbolTabs();
 
       toast(`Loading ${sym} (${ikey || 'Upstox'})...`);
       loadCandles(pane);
