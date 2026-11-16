@@ -356,10 +356,13 @@ body.ex-theme-dark {
   background: rgba(255, 183, 3, 0.25);
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1360px) {
   .ex-admin-pill .adm-full-lbl,
   .ex-header-opt-chain-btn .oc-full-lbl {
     display: none;
+  }
+  .ex-header-right {
+    gap: 5px;
   }
 }
 
@@ -1792,16 +1795,22 @@ body.ex-theme-dark {
   display: flex;
   align-items: center;
   padding: 0 14px;
-  gap: 20px;
+  gap: 12px;
   font-size: 11px;
   flex-shrink: 0;
   color: var(--text-dim);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ex-footer::-webkit-scrollbar {
+  display: none;
 }
 
 .footer-stat {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .stat-lbl {
@@ -1818,6 +1827,8 @@ body.ex-theme-dark {
   margin-left: auto;
   display: flex;
   align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .latency-stat b {
@@ -2929,6 +2940,19 @@ body.ex-theme-dark {
   }
   .ex-header-right::-webkit-scrollbar {
     display: none;
+  }
+
+  #btn-chart-engine,
+  #btn-algo-bot,
+  #btn-admin-users {
+    display: none !important;
+  }
+
+  .ex-brand {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   .ex-market-pill {
@@ -5281,8 +5305,8 @@ tr.closed-row-clickable:hover td.col-frozen-pnl {
 /* Candle Bar Countdown Timer + Progress Bar on Chart Canvas (clear of right-side trade badges & Y-axis) */
 .pane-cd-box {
   position: absolute;
-  left: 52px;
-  bottom: 28px;
+  right: 74px;
+  bottom: 30px;
   z-index: 22;
   pointer-events: none;
   background: rgba(14, 17, 23, 0.88);
@@ -6881,21 +6905,9 @@ tr.closed-row-clickable {
 }
 
 @media (max-width: 768px) {
+  /* On mobile phones, hide floating canvas dock to avoid obscuring candles and colliding with the bottom execution dock */
   .tv-floating-order-dock {
-    top: 8px;
-    left: 8px;
-    padding: 3px;
-    gap: 4px;
-  }
-  .tv-dock-btn {
-    min-width: 68px;
-    padding: 4px 6px;
-  }
-  .tv-dock-price {
-    font-size: 10.5px;
-  }
-  .tv-dock-lbl {
-    font-size: 8.5px;
+    display: none !important;
   }
 }
 

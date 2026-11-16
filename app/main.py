@@ -8037,6 +8037,18 @@ _upstox_ws_generation: int = 0
 _upstox_ws_thread: Any = None
 _upstox_ws_loop: Any = None
 _upstox_ws_wakeup: Any = None
+_QUOTES_WS_CLIENT_QUEUES: set[asyncio.Queue] = set()
+
+
+def _broadcast_upstox_ws_ticks(ticks_dict: dict[str, dict[str, Any]]) -> None:
+    """Sub-millisecond fanout of decoded Upstox ticks to all active browser WebSockets."""
+    if not _QUOTES_WS_CLIENT_QUEUES or not ticks_dict:
+        return
+    for q in list(_QUOTES_WS_CLIENT_QUEUES):
+        try:
+            q.put_nowait(ticks_dict)
+        except Exception:
+            pass
 
 _V3_REST_LOCK = threading.Lock()
 _v3_rest_last_fetch: dict[tuple[str, ...], float] = {}
@@ -8367,6 +8379,7 @@ async def _upstox_v3_ws_loop() -> None:
                                         merged["volume"] = existing["volume"]
                                     merged["received_at"] = recv_now
                                     _UPSTOX_WS_QUOTES[k] = merged
+                            _broadcast_upstox_ws_ticks(parsed)
                 finally:
                     sub_task.cancel()
         except Exception:
@@ -8828,6 +8841,22 @@ async def terminal_ws_endpoint(websocket: WebSocket):
 async def ws_quotes_stream(websocket: WebSocket):
     await websocket.accept()
     subscribed_items: list[dict[str, Any]] = []
+    resolved_pairs: list[tuple[str, str, str]] = []
+    client_queue: asyncio.Queue = asyncio.Queue(maxsize=150)
+    _QUOTES_WS_CLIENT_QUEUES.add(client_queue)
+
+    def _refresh_resolved_pairs():
+        nonlocal resolved_pairs
+        r_list = []
+        for it in subscribed_items:
+            sym = str(it.get("symbol") or "NIFTY").strip().upper()
+            tok = str(it.get("token") or "").strip()
+            if not _is_forex_symbol(sym):
+                inst_k, _ = _resolve_upstox_instrument(sym, token=tok)
+                r_list.append((sym, tok, inst_k))
+            else:
+                r_list.append((sym, tok, f"FOREX|{sym}"))
+        resolved_pairs = r_list
 
     async def receiver():
         nonlocal subscribed_items
@@ -8836,37 +8865,62 @@ async def ws_quotes_stream(websocket: WebSocket):
                 msg = await websocket.receive_json()
                 if isinstance(msg, dict) and "items" in msg:
                     subscribed_items = msg["items"]
+                    _refresh_resolved_pairs()
+                    # Trigger immediate quote flush on subscription
+                    try:
+                        client_queue.put_nowait({})
+                    except Exception:
+                        pass
         except Exception:
             pass
 
     async def sender():
-        up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+        last_periodic_flush = 0.0
         while True:
-            await asyncio.sleep(0.15)
-            if not subscribed_items:
-                continue
-
             try:
+                incoming_ticks = None
+                try:
+                    # Event-driven: sub-millisecond wakeup when Upstox WS receives a frame
+                    incoming_ticks = await asyncio.wait_for(client_queue.get(), timeout=0.04)
+                except asyncio.TimeoutError:
+                    incoming_ticks = None
+
+                if not subscribed_items:
+                    continue
+
                 now_t = int(time.time())
+                now_f = time.time()
                 ticks = []
-                fx_items = [it for it in subscribed_items[:12] if _is_forex_symbol(str(it.get("symbol") or ""))]
-                ind_items = [it for it in subscribed_items[:20] if not _is_forex_symbol(str(it.get("symbol") or ""))]
 
-                if fx_items:
-                    for it in fx_items:
+                # If new ticks arrived from Upstox WS, check matching subscribed items (< 1ms dispatch)
+                if incoming_ticks:
+                    for sym, tok, inst_k in resolved_pairs:
+                        if inst_k in incoming_ticks:
+                            raw_q = incoming_ticks[inst_k]
+                            built = _build_live_quote_payload(sym, tok, raw_q, now_f)
+                            ticks.append(built)
+
+                # Periodic flush (every ~180ms) or if no ticks arrived
+                is_periodic = (now_f - last_periodic_flush) >= 0.18
+                if is_periodic or not incoming_ticks:
+                    last_periodic_flush = now_f
+                    up_token = UPSTOX_ACCESS_TOKEN or os.getenv("UPSTOX_ACCESS_TOKEN", "").strip() or _get_stored_setting("UPSTOX_ACCESS_TOKEN") or ""
+
+                    # Forex items
+                    for it in subscribed_items[:12]:
                         sym = str(it.get("symbol") or "XAUUSD")
-                        tok = str(it.get("token") or "")
-                        fq = await asyncio.to_thread(_get_live_quote_data, sym, tok)
-                        if fq and fq.get("ltp"):
-                            ticks.append(fq)
+                        if _is_forex_symbol(sym):
+                            tok = str(it.get("token") or "")
+                            fq = _get_forex_live_quote(sym)
+                            if fq and fq.get("ltp"):
+                                ticks.append(fq)
 
-                if ind_items and up_token:
-                    pairs = [(str(it.get("symbol") or "NIFTY"), str(it.get("token") or "")) for it in ind_items]
-                    # The batch helper may make a synchronous REST fallback request.
-                    # Keep it off the ASGI event loop so the receiver can process a
-                    # subscription promptly and the socket can flush each tick.
-                    batch = await asyncio.to_thread(_get_upstox_ws_or_v3_batch, pairs, up_token)
-                    ticks.extend(batch.values())
+                    # Indian items if no immediate tick came through
+                    if not ticks and up_token:
+                        pairs = [(str(it.get("symbol") or "NIFTY"), str(it.get("token") or "")) for it in subscribed_items[:20] if not _is_forex_symbol(str(it.get("symbol") or ""))]
+                        if pairs:
+                            batch = await asyncio.to_thread(_get_upstox_ws_or_v3_batch, pairs, up_token)
+                            ticks.extend(batch.values())
 
                 if ticks:
                     await websocket.send_json({"type": "ticks", "quotes": ticks, "timestamp": now_t})
@@ -8879,8 +8933,8 @@ async def ws_quotes_stream(websocket: WebSocket):
         done, pending = await asyncio.wait([rec_task, send_task], return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
-    except Exception:
-        pass
+    finally:
+        _QUOTES_WS_CLIENT_QUEUES.discard(client_queue)
 
 
 @app.get("/api/chart/search")

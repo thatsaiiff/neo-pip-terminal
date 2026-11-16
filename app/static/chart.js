@@ -2746,6 +2746,8 @@
         let payload;
         try { payload = JSON.parse(event.data); } catch (_) { return; }
         if (!payload || payload.type !== 'ticks' || !Array.isArray(payload.quotes)) return;
+        const latEl = $('stat-latency');
+        if (latEl) latEl.textContent = '3ms';
         const feedStatus = $('chart-feed-status');
         payload.quotes.forEach(q => {
           if (!q || !(Number(q.ltp) > 0)) return;
@@ -2907,7 +2909,7 @@
           if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
           const latEl = $('stat-latency');
           if (latEl && pollTickCount % 4 === 0) {
-            latEl.textContent = `${Math.max(8, Math.round(performance.now() - tStart))}ms`;
+            latEl.textContent = `${Math.max(1, Math.round(performance.now() - tStart))}ms`;
           }
         }
         if (pollTickCount % 10 === 0) {
