@@ -1,65 +1,47 @@
 # Security and Production Audit
 
-**Reviewed:** 15 November 2026 · **Scope:** repository deployment path and publicly reachable Vercel/Oracle endpoints
+**Reviewed:** 16 November 2026
+**Scope:** Vercel frontend, Oracle VM deployment, and deployment source
 **Trading activity:** none performed
 
-## Findings
+## Findings and current state
 
-| Severity | Finding | State |
+| Severity | Finding | Current state |
 |---|---|---|
-| Critical | The deployed `/terminal` page is publicly reachable and the `/api/terminal/ws` handler from the deployed 0.1.1 source accepts a websocket and starts `/bin/bash` without authentication or role checks. | Fixed in working source: cloud HTTP and websocket routes now refuse to start a PTY. Production is still exposed until the updated backend is deployed. |
-| Critical | The pushed Antigravity handoff documents contained a plaintext VM SSH password and reusable admin login token. GitHub `main` currently points to the commit containing those files. | Working copies are sanitized. Rotate the SSH credential, revoke/reset the leaked owner session, and scrub repository history before publishing the next revision. The history rewrite is not performed here. |
-| High | The deployed chart client accepted `auth_token`, `session`, or `key` URL parameters as owner credentials and saved them in local storage. | Fixed in working source: those query parameters are stripped without being accepted. The deployed client remains vulnerable until redeployment. |
-| Critical | The public Vercel API rewrite previously sent traffic to the Oracle public IP over plain HTTP. Session cookies, owner tokens, bridge headers, and request bodies were therefore exposed in transit. | Fixed in source: a Vercel Node proxy now accepts only an HTTPS backend origin. Production still needs a trusted certificate for the reserved IP or hostname, Vercel environment variables, and redeployment. |
-| High | The deployed API reported version `0.1.1`; `/research` returned Vercel 404 and `/api/research/local-datasets` returned `Not Found`. | Fixed in source: research pages/assets and research API code are included in the Vercel config and current backend. Not yet deployed. |
-| High | The previous Oracle setup script opened public port 8000 and told operators to add an internet-wide ingress rule. | Fixed in source: the new setup uses Caddy TLS on 80/443 and a private Docker network; it removes the script's known legacy 8000 firewall rules. Oracle VCN ingress must also be changed manually. |
-| High | The previous setup script changed a fresh `.env` to `LIVE_TRADING_ENABLED=true`. | Fixed in source: new deployments inherit the safe false default. The script preserves an existing value, refuses a live-enabled restart unless the operator explicitly acknowledges it, and never flips the gate on. |
-| High | The previous Docker build did not compile/install the Rust/PyO3 extension and could include `.env` and local historical CSVs in `COPY . .`. | Fixed in source: multi-stage Rust wheel build and `.dockerignore` exclusions. Docker is not installed on this workstation, so the image has not been built here. |
-| High | The application source contained default owner/admin credentials, and the owner PIN could fall back to the Kotak MPIN. | Fixed in source: credential defaults were removed; owner/admin sign-in fails closed when not configured; owner PIN is separate from Kotak MPIN. Existing deployments need explicit `ADMIN_*` and `OWNER_PIN` settings. |
-| Medium | The previous README and deployment guide described Vercel as static-only and still documented public port 8000, contradicting the deployed proxy/API behavior. | Fixed in source: README and deployment runbook now describe the TLS proxy and Research page. |
-| Medium | The Bank Nifty CSV exports are present only on this workstation; the Oracle backend will not see them automatically. | Source now has an owner-only streaming upload from `/research`; still needs deployment before use. Files remain excluded from the Docker build context and Git. |
+| Critical | Backend `0.1.1` exposes an unauthenticated terminal WebSocket that can start a shell. | Caddy now blocks `/api/terminal/ws` with 404. The backend has not been replaced. |
+| High | The backend previously served publicly on TCP 8000 over HTTP. | Removed TCP 8000 from the Oracle VCN ingress list and removed matching host firewall allows. Public TCP 8000 timed out during verification. The Docker port mapping remains, so do not restore the VCN rule. |
+| High | API requests need HTTPS between Vercel and Oracle. | Caddy is running with a trusted Let's Encrypt IP certificate. Vercel `/api/health` now returns HTTP 200 through HTTPS. |
+| High | Vercel and Oracle backend versions differ. | Vercel serves the new frontend, including `/research`; Oracle still reports `0.1.1` while the prepared source is `0.2.1`. Research API returns 404 until backend upgrade. |
+| High | Live records could be affected by replacing the backend. | Database has 5 open positions and 31 live orders marked `submitted`; algo status is `enabled=false`, `IDLE`. Reconcile those records with Kotak before restarting. |
+| Medium | Old VM password was exposed in a prior handoff. | Ubuntu password authentication is locked; the supplied SSH key remains usable. This invalidates the old password but does not create a replacement. |
+| Medium | Persisted sessions should be reviewed after credential exposure. | Database reports nine user-session rows and zero admin sessions. No token values were accessed. |
+| Medium | Old Git refs may retain credential-bearing history. | Clean commit `652bba9` was force-pushed to `main`, and Vercel reports it ready. Local stash/checkpoint refs still retain old history; cleanup was blocked by workspace permissions. |
 
-## Live deployment observations
+## Verification results
 
-The public checks found:
+- `https://neo-pip-terminal.vercel.app/`: HTTP 200.
+- `https://neo-pip-terminal.vercel.app/research`: HTTP 200.
+- `https://neo-pip-terminal.vercel.app/api/health`: HTTP 200, backend version `0.1.1`.
+- `https://92.4.87.82/api/health`: HTTP 200 with the same backend version.
+- `https://neo-pip-terminal.vercel.app/api/research/local-datasets`: HTTP 404.
+- `https://neo-pip-terminal.vercel.app/api/terminal/ws`: HTTP 404.
+- `https://neo-pip-terminal.vercel.app/terminal`: HTTP 404.
+- `http://92.4.87.82:8000/api/health`: connection timeout after the ingress rule was removed.
+- `LIVE_TRADING_ENABLED=true` remains set. No backend restart or order submission was performed.
 
-- Vercel `https://neo-pip-terminal.vercel.app/api/health` returned `ok=true`, service `neo-pip-terminal`, version `0.1.1`.
-- Direct Oracle `http://92.4.87.82:8000/api/health` returned the same old version over cleartext HTTP.
-- Oracle `http://92.4.87.82/terminal` returned HTTP 200; the deployed source connects that page to an unauthenticated bash PTY.
-- Oracle `http://92.4.87.82:8000/api/health` returned HTTP 200; HTTPS to the IP timed out and no reverse-DNS hostname was found. Source now supports direct IP HTTPS with a short-lived Let's Encrypt certificate; that configuration has not yet been deployed or validated against the VM.
-- The GitHub repository page is publicly reachable, and its `main` branch includes the handoff commit containing the credential-bearing documents.
-- `https://neo-pip-terminal.vercel.app/research` returned Vercel 404.
-- `https://neo-pip-terminal.vercel.app/api/research/local-datasets` returned `{"detail":"Not Found"}`.
+The Caddy IP site uses a short-lived Let's Encrypt certificate and persistent Caddy storage. It sets `default_sni` for clients that omit SNI when connecting to an IP literal. Caddy documents `default_sni` as the default TLS server name for ClientHello messages without SNI: [Caddy global options](https://caddyserver.com/docs/caddyfile/options).
 
-These observations identify the currently deployed state at the time of review. The source changes in this checkout do not update production until they are pushed/deployed and the Oracle VM is rebuilt.
+## Source-level controls in the prepared release
 
-### Mitigation applied on 15 November 2026
+- Live order capability defaults off for new deployments; deployment preserves an existing live flag and explicitly guards live restarts.
+- Owner/admin authentication fails closed when credentials are absent; owner PIN is separate from Kotak MPIN.
+- Cloud terminal access is disabled in the updated backend.
+- URL query parameters are stripped and never accepted as owner credentials.
+- Vercel forwards an explicit header allowlist to an HTTPS-only backend origin.
+- CORS uses the configured frontend origin allowlist.
+- `.env`, data exports, logs, and reports are excluded from the Docker build context.
+- The Dockerfile builds the Rust/PyO3 extension in a multi-stage image.
 
-- Rotated the Ubuntu account password and stored the replacement in the workstation's login Keychain.
-- Deleted four persisted admin sessions from `/opt/neo-pip-terminal/data/neo_pip.sqlite3`.
-- Copied the replacement Upstox token from the user's clipboard into the VM's `.env` without displaying it; verified the file remains mode `0600`. The user separately replaced the Vercel secret.
-- Stopped the legacy `neo-pip-backend` container. Subsequent requests to the public health endpoint and `/terminal` failed. The backend remains stopped until the patched build is deployed.
-- Began rewriting local `main` history to remove both credential-bearing handoff files. The cleaned history and source fixes are not pushed yet.
+## Deployment status
 
-## Remaining risk and rollout requirements
-
-- The current backend uses software-managed algo exits. A backend restart can stop quote monitoring. Check the broker order book, stop algos, and protect any open position before a production restart.
-- Owner credentials and `OWNER_PIN` must be set privately on the VM. They are deliberately empty in `.env.example`; local sign-in will stay unavailable until the operator configures them.
-- Vercel needs `NEO_PIP_BACKEND_URL=https://<backend-domain>` and the trusted frontend origin. DNS must point that hostname to the Oracle VM, and Caddy must obtain a valid certificate.
-- Oracle VCN Security Lists must allow 80/443 and remove port 8000. Host firewall changes do not update the VCN rules.
-- `setup-oracle.sh` and the Docker image have not been executed on Oracle. The current machine has no Vercel CLI/authentication or Oracle SSH key; remote rollout remains pending.
-- The login limiter is process-local. Multiple backend replicas would need shared rate-limit storage.
-- Session tokens are persisted in the SQLite database. Protect the VM and backups with OS permissions and encrypted storage; rotate sessions if a database backup is exposed.
-- Authentication and market/broker integrations have not been validated against the user's live accounts. No live orders or fills were tested.
-
-## Source-level controls now present
-
-- Live order capability is disabled by default and the deployment script cannot enable it.
-- Owner sign-in requires explicit environment credentials; the owner PIN no longer falls back to a broker MPIN.
-- Cloud remote terminal access is disabled. URL query parameters no longer authenticate users; sign in through the normal flow.
-- Owner email login is rate-limited per address and client IP; regular sign-in is rate-limited. OTP verification has a per-code attempt limit.
-- Cloud CORS responses use a configured origin allowlist rather than reflecting arbitrary origins.
-- Vercel forwards only the configured HTTPS backend origin and an explicit request-header allowlist.
-- `.env`, `data`, `logs`, and `reports` are excluded from the Docker context.
-
-This is an operational review of the source and observed endpoints, not a penetration test or a compliance certification.
+The separate Caddy proxy is deployed and running alongside the existing backend. The current live backend remains version `0.1.1`; version `0.2.1` has not been deployed because stored position/order records need reconciliation first. The prepared Docker image has not yet been built on the Oracle VM. The local Rust extension build is not proof of a Linux container build. No live account login or order flow was tested.

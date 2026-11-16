@@ -1,3 +1,7 @@
+{
+	default_sni {$BACKEND_DOMAIN}
+}
+
 {$BACKEND_DOMAIN} {
 	tls {
 		issuer acme https://acme-v02.api.letsencrypt.org/directory {
@@ -14,9 +18,14 @@
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
 
-	@api path /api/*
-	handle @api {
-		reverse_proxy neo-pip-backend:8000
+	route {
+		@disabled_terminal path /api/terminal/ws /api/terminal/ws/*
+		respond @disabled_terminal "Not found" 404
+
+		@api path /api/*
+		handle @api {
+			reverse_proxy neo-pip-backend:8000
+		}
+		respond "Not found" 404
 	}
-	respond "Not found" 404
 }

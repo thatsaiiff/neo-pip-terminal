@@ -2268,6 +2268,10 @@
       chgEl.className = `pane-chg ${isPos ? 'pos' : 'neg'}`;
     }
 
+    if (pane.idx === activePaneIdx) {
+      updateOrderFormPrices(ltp);
+    }
+
     // Update floating TradingView Buy/Sell Dock
     const dockPrefix = `p${pane.idx + 1}-tv`;
     const sellPriceEl = $(`${dockPrefix}-sell-price`);
@@ -2280,14 +2284,16 @@
     if (buyPriceEl) buyPriceEl.textContent = askPrice.toFixed(decs);
     if (spreadEl) spreadEl.textContent = spreadVal.toFixed(decs);
 
-    if (pane.idx === activePaneIdx) {
-      updateOrderFormPrices(ltp);
-    }
     const pSymU = String(pane.sym || '').trim().toUpperCase();
     if (pSymU && Number.isFinite(ltp) && ltp > 0) livePositionQuotes[pSymU] = ltp;
     updateActivePanePnlBadges();
     if (typeof refreshLivePositionsDomFn === 'function') refreshLivePositionsDomFn();
   }
+
+  const TF_SECONDS_MAP = {
+    '5s': 5, '15s': 15, '1m': 60, '2m': 120, '3m': 180, '5m': 300,
+    '15m': 900, '30m': 1800, '75m': 4500, '125m': 7500, '1h': 3600, '4h': 14400, '1d': 86400,
+  };
 
   const _candleClientCache = new Map();
 
@@ -2370,7 +2376,7 @@
     pane.volumes = pane.candles.map(c => {
       let v = Number(c.volume || 0);
       if (v <= 0) {
-        // Estimate realistic tick volume from candle range so volume candles are always visible
+        // Estimate realistic tick volume from candle range so volume candles are always visible (TradingView style)
         const rng = Math.abs(Number(c.high || 0) - Number(c.low || 0));
         v = Math.max(160, Math.round(rng * 1250 + ((c.time % 7) * 450)));
       }
@@ -2402,6 +2408,7 @@
       } catch (_) {}
       resizePaneChart(pane);
       renderPaneTradeLines(pane);
+      updatePaneHighLowAvgLines(pane);
       syncPaneVpvrFromChartRange(pane);
       if (drawingMgr) drawingMgr.renderPane(pane);
       // Lightweight Charts commits its auto-scaled Y-axis coordinates on the following paint frame
@@ -2409,6 +2416,7 @@
         if (!pane.chart || reqId !== pane._reqId) return;
         syncPaneVpvrFromChartRange(pane);
         renderPaneTradeLines(pane);
+        updatePaneHighLowAvgLines(pane);
         if (drawingMgr) drawingMgr.renderPane(pane);
       });
     });
@@ -2601,9 +2609,20 @@
 
   function applyLiveQuoteToPaneBar(paneOrIdx, rawLtp, nowSecOverride = null, rawDayVol = null) {
     const pane = typeof paneOrIdx === 'number' ? panes[paneOrIdx] : (paneOrIdx || getActivePane());
-    if (!pane || !pane.candleSeries || !pane.activeBar || !pane.candles || !pane.candles.length) return;
+    if (!pane || !pane.candleSeries) return;
     const ltp = Number(rawLtp);
     if (!Number.isFinite(ltp) || ltp <= 0) return;
+    if (!pane.activeBar || !pane.candles || !pane.candles.length) {
+      if (!isMarketLiveForTickBar(pane.sym)) return;
+      const step = TF_SECONDS_MAP[String(pane.tf || '1m').toLowerCase()] || 60;
+      const tickSec = nowSecOverride !== null ? Number(nowSecOverride) : Math.floor(Date.now() / 1000);
+      const seed = { time: Math.floor(tickSec / step) * step, open: ltp, high: ltp, low: ltp, close: ltp, volume: 0 };
+      pane.activeBar = { ...seed };
+      pane.candles = [seed];
+      try { pane.candleSeries.update(seed); } catch (_) {}
+      updatePaneHeaderQuote(pane, ltp, ltp, ltp, ltp);
+      return;
+    }
 
     const isIdx = isIndexSpotSymbol(pane.sym, pane.token);
     let volDelta = 0;
@@ -2683,7 +2702,81 @@
 
   // --- Sub-second Quotes Stream ---
   let refreshLivePositionsDomFn = null;
+  let chartQuoteSocket = null;
+  let chartSocketRetryMs = 750;
+  let chartSocketRetryTimer = null;
+  let chartSocketSubKey = '';
+
+  function getVisibleChartPanes() {
+    const count = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
+    return panes.slice(0, count).filter(p => p && p.sym);
+  }
+
+  function chartQuoteSocketUrl() {
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // Vercel's HTTP function proxy does not forward WebSocket upgrades; connect
+    // directly to the Oracle TLS endpoint used by the REST proxy.
+    const host = location.hostname.endsWith('.vercel.app') ? '92.4.87.82' : location.host;
+    return `${scheme}//${host}/api/ws/quotes`;
+  }
+
+  function subscribeChartQuoteSocket(force = false) {
+    if (!chartQuoteSocket || chartQuoteSocket.readyState !== WebSocket.OPEN) return;
+    const items = getVisibleChartPanes().map(p => ({ symbol: p.sym, token: p.token || '' }));
+    const key = JSON.stringify(items);
+    if (!force && key === chartSocketSubKey) return;
+    chartSocketSubKey = key;
+    chartQuoteSocket.send(JSON.stringify({ items }));
+  }
+
+  function startChartQuoteSocket() {
+    if (!('WebSocket' in window) || (chartQuoteSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(chartQuoteSocket.readyState))) return;
+    try {
+      const socket = new WebSocket(chartQuoteSocketUrl());
+      chartQuoteSocket = socket;
+      const feedStatus = $('chart-feed-status');
+      if (feedStatus) feedStatus.textContent = 'Connecting';
+      socket.addEventListener('open', () => {
+        chartSocketRetryMs = 750;
+        chartSocketSubKey = '';
+        subscribeChartQuoteSocket(true);
+        if (feedStatus) feedStatus.textContent = 'Connected · waiting for quote';
+      });
+      socket.addEventListener('message', event => {
+        let payload;
+        try { payload = JSON.parse(event.data); } catch (_) { return; }
+        if (!payload || payload.type !== 'ticks' || !Array.isArray(payload.quotes)) return;
+        const feedStatus = $('chart-feed-status');
+        payload.quotes.forEach(q => {
+          if (!q || !(Number(q.ltp) > 0)) return;
+          const ageSeconds = Math.max(0, Math.round(Date.now() / 1000 - Number(q.time || payload.timestamp || Date.now() / 1000)));
+          if (feedStatus) feedStatus.textContent = ageSeconds <= 5 ? `Live · Upstox (${ageSeconds}s)` : `Stale · ${ageSeconds}s`;
+          const status = $('tv-chart-status');
+          if (status) status.textContent = ageSeconds <= 5 ? 'Live · Upstox' : `Stale · ${ageSeconds}s`;
+          const pane = getVisibleChartPanes().find(p => p.sym === q.symbol || (q.instrument_key && p.token === q.instrument_key));
+          if (!pane) return;
+          updatePaneQuote(pane, q);
+      const tickSec = Number(q.time || q.timestamp || q.ltt || payload.timestamp || Math.floor(Date.now() / 1000));
+          applyLiveQuoteToPaneBar(pane, q.ltp, tickSec, q.volume);
+          maybeCheckLiveTriggers(pane, Number(q.ltp));
+        });
+      });
+      socket.addEventListener('close', () => {
+        if (chartQuoteSocket === socket) chartQuoteSocket = null;
+        if (feedStatus) feedStatus.textContent = 'Disconnected · retrying';
+        chartSocketSubKey = '';
+        chartSocketRetryTimer = setTimeout(startChartQuoteSocket, chartSocketRetryMs);
+        chartSocketRetryMs = Math.min(15000, Math.round(chartSocketRetryMs * 1.8));
+      });
+      socket.addEventListener('error', () => { try { socket.close(); } catch (_) {} });
+    } catch (_) {
+      chartSocketRetryTimer = setTimeout(startChartQuoteSocket, chartSocketRetryMs);
+      chartSocketRetryMs = Math.min(15000, Math.round(chartSocketRetryMs * 1.8));
+    }
+  }
+
   function startQuotesPolling() {
+    startChartQuoteSocket();
     let pollTickCount = 0;
 
     refreshLivePositionsDomFn = () => {
@@ -2762,6 +2855,7 @@
         pollTickCount += 1;
         const visibleCount = activeLayout === 3 ? 3 : (activeLayout === 2 ? 2 : 1);
         const activePanes = panes.slice(0, visibleCount);
+        subscribeChartQuoteSocket();
         const items = activePanes.map(p => ({ symbol: p.sym, token: p.token || '' }));
         const seenReq = new Set(items.map(it => String(it.symbol || '').toUpperCase()));
         if (cachedPositions && cachedPositions.length) {
@@ -3422,7 +3516,7 @@
       })();
       if (unitsSub) unitsSub.textContent = labelTxt;
       if ($('ow-units-sub')) $('ow-units-sub').textContent = labelTxt;
-      if ($('m-lots-val')) $('m-lots-val').textContent = selectedLots;
+      if ($('m-lots-val') && document.activeElement !== $('m-lots-val')) $('m-lots-val').value = selectedLots;
       if (ap.lastLtp) updateOrderFormPrices(ap.lastLtp);
       else syncTradeButtonsForActivePane();
     }
@@ -3443,8 +3537,15 @@
       btnLotsPlus.addEventListener('click', () => adjustLots(1));
       inputLots.addEventListener('change', updateLotDisplay);
     }
-    if ($('m-lots-minus')) $('m-lots-minus').addEventListener('click', () => adjustLots(-1));
-    if ($('m-lots-plus')) $('m-lots-plus').addEventListener('click', () => adjustLots(1));
+    const mobileLotsInput = $('m-lots-val');
+    if (mobileLotsInput) {
+      mobileLotsInput.addEventListener('focus', () => mobileLotsInput.select());
+      mobileLotsInput.addEventListener('change', () => {
+        if (inputLots) inputLots.value = mobileLotsInput.value;
+        updateLotDisplay();
+      });
+      mobileLotsInput.addEventListener('keydown', e => { if (e.key === 'Enter') mobileLotsInput.blur(); });
+    }
 
     // Desktop Pending Open Price stepper
     const btnPriceMinus = $('btn-price-minus');
@@ -4979,9 +5080,12 @@
       modal.classList.add('hidden');
     }
 
+    const dockBtn = $('btn-chart-dock-opt-chain');
+
     if (openBtn) openBtn.addEventListener('click', openModal);
     if (headerBtn) headerBtn.addEventListener('click', openModal);
     if (railBtn) railBtn.addEventListener('click', openModal);
+    if (dockBtn) dockBtn.addEventListener('click', openModal);
     if (closeBtn) closeBtn.addEventListener('click', closeModal);
 
     if (undSelect) {
@@ -6863,6 +6967,8 @@
   // --- Mobile Exness App Flow Setup ---
   function setupMobileFlow() {
     const navItems = document.querySelectorAll('.mobile-nav-item');
+    let activeMobileNavItem = 'mnav-chart';
+    let mobileAccountTab = 'open';
     let currentCat = 'favorites';
     let mobileSearchSeq = 0;
     let activeOrdersTab = 'open';
@@ -6892,12 +6998,13 @@
       }
       closeAllOverlays(!isAuthenticated ? 'modal-gatekeeper' : null);
       navItems.forEach(item => {
-        item.classList.toggle('active', item.dataset.tab === tabKey);
+        item.classList.toggle('active', item.id === activeMobileNavItem);
       });
 
       if (tabKey === 'chart') {
         document.body.classList.remove('mobile-view-active');
         Object.values(views).forEach(v => v && v.classList.add('hidden'));
+        if (window.location.pathname === '/') window.scrollTo({ top: 0, behavior: 'smooth' });
 
         // Trigger chart canvas resize and fit for all visible panes (max 2 on mobile)
         const effLayout = (window.innerWidth <= 768 && activeLayout > 2) ? 2 : activeLayout;
@@ -6943,11 +7050,27 @@
           updateMobileProfileView();
         }
       }
+      if (tabKey === 'trade') {
+        const list = $('m-trade-list');
+        if (list) list.setAttribute('aria-label', 'Watchlist');
+        const title = document.querySelector('#mview-trade .m-header-title');
+        if (title) title.textContent = 'Watchlist';
+      }
+      if (tabKey === 'accounts') {
+        activeOrdersTab = mobileAccountTab;
+        document.querySelectorAll('.m-otab').forEach(tab => tab.classList.toggle('active', tab.dataset.otab === activeOrdersTab));
+        if (typeof renderMobileOrdersList === 'function') renderMobileOrdersList(activeOrdersTab);
+      }
     }
 
     window._switchMobileTabFn = switchMobileTab;
     navItems.forEach(item => {
-      item.addEventListener('click', () => switchMobileTab(item.dataset.tab));
+      item.addEventListener('click', () => {
+        activeMobileNavItem = item.id;
+        if (item.dataset.activity === 'orders') mobileAccountTab = 'pending';
+        else if (item.dataset.activity === 'positions') mobileAccountTab = 'open';
+        switchMobileTab(item.dataset.tab);
+      });
     });
 
     // Accounts screen Trade button
@@ -7648,11 +7771,6 @@
   }
 
   // --- Live Candle Bar Close Countdown Timer (per active TF) ---
-  const TF_SECONDS_MAP = {
-    '5s': 5, '15s': 15, '1m': 60, '3m': 180, '5m': 300,
-    '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400,
-  };
-
   function formatCountdownClock(sec) {
     const s = Math.max(0, Math.floor(sec));
     const h = Math.floor(s / 3600);
@@ -7892,86 +8010,7 @@
     });
   }
 
-  // --- Floating TradingView / Dhan Style 1-Tap Trading Dock ---
-  function setupFloatingOrderDocks() {
-    [0, 1, 2].forEach(idx => {
-      const pNum = idx + 1;
-      const sellBtn = $(`p${pNum}-tv-sell-btn`);
-      const buyBtn = $(`p${pNum}-tv-buy-btn`);
-      const qtyInput = $(`p${pNum}-tv-qty-input`);
-
-      const executeQuickTvOrder = async (side) => {
-        const pane = panes[idx];
-        if (!pane || !pane.sym) return;
-        const sym = pane.sym;
-        if (isIndexSpotSymbol(sym, pane.token)) {
-          toast('Index spot cannot be bought or sold directly — select an Option (CE/PE) or Stock');
-          return;
-        }
-
-        const lotCount = Math.max(1, parseInt((qtyInput && qtyInput.value) || '1', 10));
-        const lotSz = getSymbolLotSize(sym);
-        const totalQty = lotCount * lotSz;
-
-        const isFx = isForexSym(sym);
-        const ltp = Number(pane.lastLtp || 0);
-        const roundedPrice = roundToTick(ltp, isFx ? 0.0001 : 0.05) || ltp;
-
-        const seg = isFx ? 'forex' : inferOrderExchangeSegment(sym, pane.token);
-        const payload = {
-          symbol: sym,
-          transaction_type: side,
-          order_type: 'MKT',
-          quantity: totalQty,
-          price: roundedPrice,
-          product: 'MIS',
-          exchange_segment: seg,
-          instrument_token: pane.token || '',
-        };
-
-        try {
-          if (typeof playSoundFx === 'function') playSoundFx('order_submit');
-          toast(`⚡ Placing 1-Tap ${side} ${totalQty} ${sym}...`);
-          const res = await fetch('/api/orders', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${getAuthToken()}`,
-            },
-            body: JSON.stringify(payload),
-          });
-          const data = await res.json();
-          if (res.ok && (data.ok || data.status === 'success' || data.order_id)) {
-            toast(`✅ 1-Tap ${side} filled for ${totalQty} ${sym}!`);
-            if (typeof playSoundFx === 'function') playSoundFx('order_fill');
-            fetchPositionsAndOrders();
-          } else {
-            const errMsg = data.detail || data.message || 'Order rejected';
-            toast(`❌ 1-Tap Order Failed: ${errMsg}`);
-            if (typeof playSoundFx === 'function') playSoundFx('order_reject');
-          }
-        } catch (err) {
-          toast(`❌ Order failed: ${err.message}`);
-        }
-      };
-
-      if (sellBtn && !sellBtn.dataset.bound) {
-        sellBtn.dataset.bound = '1';
-        sellBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          executeQuickTvOrder('SELL');
-        });
-      }
-      if (buyBtn && !buyBtn.dataset.bound) {
-        buyBtn.dataset.bound = '1';
-        buyBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          executeQuickTvOrder('BUY');
-        });
-      }
-    });
-  }
-
+  // The chart always uses TradingView Lightweight Charts with this app's broker feed.
   // --- Quantitative Algo Bot Control Center ---
   let _algoPollInterval = null;
 
@@ -8447,77 +8486,833 @@
     setInterval(fetchAlgoStatus, 5000);
   }
 
-  // --- Official TradingView vs Pro PIP Chart Switcher ---
-  let _currentChartEngine = 'pro';
+  // --- Day High, Low & Average Price Lines (TradingView Style Right Scale Badges) ---
+  function updatePaneHighLowAvgLines(pane) {
+    if (!pane || !pane.candleSeries || !pane.candles || !pane.candles.length) return;
 
-  function setupChartEngineToggle() {
-    const btn = $('btn-chart-engine');
-    const label = $('engine-pill-status');
-    if (!btn) return;
-
-    btn.addEventListener('click', () => {
-      _currentChartEngine = _currentChartEngine === 'pro' ? 'tv' : 'pro';
-      btn.classList.toggle('tv-active', _currentChartEngine === 'tv');
-      if (label) label.textContent = _currentChartEngine === 'tv' ? 'TRADINGVIEW' : 'PRO PIP';
-
-      [0, 1, 2].forEach(idx => {
-        const wrap = $(`p${idx + 1}-tv-widget-wrap`);
-        const canvasContainer = $(`p${idx + 1}-chart-container`);
-        if (_currentChartEngine === 'tv') {
-          if (wrap) wrap.classList.remove('hidden');
-          if (canvasContainer) canvasContainer.style.visibility = 'hidden';
-          loadTradingViewWidgetForPane(panes[idx]);
-        } else {
-          if (wrap) wrap.classList.add('hidden');
-          if (canvasContainer) canvasContainer.style.visibility = 'visible';
-          resizePaneChart(panes[idx]);
-        }
-      });
-      toast(`Switched chart engine to ${_currentChartEngine === 'tv' ? 'Official TradingView' : 'Pro PIP Canvas'}`);
-    });
-  }
-
-  function loadTradingViewWidgetForPane(pane) {
-    if (!pane) return;
-    const containerId = `p${pane.idx + 1}-tv-widget-container`;
-    const container = $(containerId);
-    if (!container) return;
-    container.innerHTML = '';
-
-    if (typeof TradingView === 'undefined' || typeof TradingView.widget !== 'function') {
-      container.innerHTML = '<div style="padding: 24px; color: #94a3b8; font-size: 12px; text-align: center;">Loading TradingView Advanced Chart...</div>';
+    if (window._showHighLowLines === false) {
+      if (pane.highPriceLine) {
+        try { pane.candleSeries.removePriceLine(pane.highPriceLine); } catch (_) {}
+        pane.highPriceLine = null;
+      }
+      if (pane.lowPriceLine) {
+        try { pane.candleSeries.removePriceLine(pane.lowPriceLine); } catch (_) {}
+        pane.lowPriceLine = null;
+      }
+      if (pane.avgPriceLine) {
+        try { pane.candleSeries.removePriceLine(pane.avgPriceLine); } catch (_) {}
+        pane.avgPriceLine = null;
+      }
       return;
     }
 
-    const sym = String(pane.sym || 'NIFTY').toUpperCase();
-    let tvSym = 'NSE:NIFTY';
-    if (sym.includes('BANKNIFTY')) tvSym = 'NSE:BANKNIFTY';
-    else if (sym.includes('SENSEX')) tvSym = 'BSE:SENSEX';
-    else if (sym.includes('FINNIFTY')) tvSym = 'NSE:FINNIFTY';
-    else if (sym.includes('EURUSD')) tvSym = 'FX:EURUSD';
-    else if (sym.includes('BTC')) tvSym = 'BINANCE:BTCUSDT';
-    else if (sym.includes('RELIANCE')) tvSym = 'NSE:RELIANCE';
-    else tvSym = `NSE:${sym}`;
-
-    try {
-      new TradingView.widget({
-        autosize: true,
-        symbol: tvSym,
-        interval: pane.tf ? (pane.tf.replace('m', '') || '1') : '1',
-        timezone: 'Asia/Kolkata',
-        theme: 'dark',
-        style: '1',
-        locale: 'en',
-        toolbar_bg: '#0e1117',
-        enable_publishing: false,
-        hide_top_toolbar: false,
-        hide_legend: false,
-        save_image: false,
-        container_id: containerId,
-      });
-    } catch (e) {
-      console.warn('[TradingView] Failed to initialize widget:', e);
+    let hi = -Infinity;
+    let lo = Infinity;
+    let sum = 0;
+    let count = 0;
+    for (const c of pane.candles) {
+      const h = Number(c.high);
+      const l = Number(c.low);
+      const cl = Number(c.close);
+      if (h > hi) hi = h;
+      if (l < lo && l > 0) lo = l;
+      sum += (h + l + cl) / 3;
+      count++;
     }
+    const avg = count > 0 ? (sum / count) : ((hi + lo) / 2);
+    pane._highPrice = hi;
+    pane._lowPrice = lo;
+
+    if (Number.isFinite(hi) && hi > 0) {
+      if (!pane.highPriceLine) {
+        try {
+          pane.highPriceLine = pane.candleSeries.createPriceLine({
+            price: hi,
+            color: '#2962ff',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: 'High',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.highPriceLine.applyOptions({ price: hi }); } catch (_) {}
+      }
+    }
+
+    if (Number.isFinite(lo) && lo > 0 && lo < Infinity) {
+      if (!pane.lowPriceLine) {
+        try {
+          pane.lowPriceLine = pane.candleSeries.createPriceLine({
+            price: lo,
+            color: '#2962ff',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: 'Low',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.lowPriceLine.applyOptions({ price: lo }); } catch (_) {}
+      }
+    }
+
+    if (Number.isFinite(avg) && avg > 0 && window._showAvgLine !== false) {
+      if (!pane.avgPriceLine) {
+        try {
+          pane.avgPriceLine = pane.candleSeries.createPriceLine({
+            price: avg,
+            color: '#2962ff',
+            lineWidth: 1,
+            lineStyle: 3, // Dotted
+            axisLabelVisible: true,
+            title: 'Avg',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.avgPriceLine.applyOptions({ price: avg }); } catch (_) {}
+      }
+    } else if (pane.avgPriceLine && window._showAvgLine === false) {
+      try { pane.candleSeries.removePriceLine(pane.avgPriceLine); } catch (_) {}
+      pane.avgPriceLine = null;
+    }
+  }
+
+  // --- Floating TradingView / Dhan Style 1-Tap Trading Dock ---
+  function setupFloatingOrderDocks() {
+    [0, 1, 2].forEach(idx => {
+      const pNum = idx + 1;
+      const sellBtn = $(`p${pNum}-tv-sell-btn`);
+      const buyBtn = $(`p${pNum}-tv-buy-btn`);
+      const qtyInput = $(`p${pNum}-tv-qty-input`);
+
+      const executeQuickTvOrder = async (side) => {
+        const pane = panes[idx];
+        if (!pane || !pane.sym) return;
+        const sym = pane.sym;
+        if (isIndexSpotSymbol(sym, pane.token)) {
+          toast('Index spot cannot be traded directly — select an Option (CE/PE) or Stock');
+          return;
+        }
+
+        const lotCount = Math.max(1, parseInt((qtyInput && qtyInput.value) || '1', 10));
+        const lotSz = getSymbolLotSize(sym);
+        const totalQty = lotCount * lotSz;
+
+        const isFx = isForexSym(sym);
+        const ltp = Number(pane.lastLtp || 0);
+        const roundedPrice = roundToTick(ltp, isFx ? 0.0001 : 0.05) || ltp;
+
+        const seg = isFx ? 'forex' : inferOrderExchangeSegment(sym, pane.token);
+        const payload = {
+          symbol: sym,
+          transaction_type: side,
+          order_type: 'MKT',
+          quantity: totalQty,
+          price: roundedPrice,
+          product: 'MIS',
+          exchange_segment: seg,
+          instrument_token: pane.token || '',
+        };
+
+        try {
+          if (typeof playSoundFx === 'function') playSoundFx('order_submit');
+          toast(`⚡ Placing 1-Tap ${side} ${totalQty} ${sym}...`);
+          const res = await fetch('/api/orders', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken()}`,
+            },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.status === 'success' || data.order_id)) {
+            toast(`✅ 1-Tap ${side} filled for ${totalQty} ${sym}!`);
+            if (typeof playSoundFx === 'function') playSoundFx('order_fill');
+            fetchPositionsAndOrders();
+          } else {
+            const errMsg = data.detail || data.message || 'Order rejected';
+            toast(`❌ 1-Tap Order Failed: ${errMsg}`);
+            if (typeof playSoundFx === 'function') playSoundFx('order_reject');
+          }
+        } catch (err) {
+          toast(`❌ Order failed: ${err.message}`);
+        }
+      };
+
+      if (sellBtn && !sellBtn.dataset.bound) {
+        sellBtn.dataset.bound = '1';
+        sellBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          executeQuickTvOrder('SELL');
+        });
+      }
+      if (buyBtn && !buyBtn.dataset.bound) {
+        buyBtn.dataset.bound = '1';
+        buyBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          executeQuickTvOrder('BUY');
+        });
+      }
+    });
+  }
+
+  // --- TradingView Advanced Charts Symbol Search Modal ---
+  function setupTradingViewSymbolSearch() {
+    const modal = $('tv-symbol-search-modal');
+    const input = $('tv-ss-input');
+    const clearBtn = $('tv-ss-clear-btn');
+    const closeBtn = $('tv-ss-close-btn');
+    const resultsContainer = $('tv-ss-results');
+    const searchPill = $('btn-tv-symbol-search');
+    const pillSym = $('tv-pill-sym');
+    const pillSeg = $('tv-pill-seg');
+    const tabs = Array.from(document.querySelectorAll('.tv-ss-tab'));
+
+    let activeFilter = 'all';
+    let targetPaneIdx = 0;
+    let searchDebounce = null;
+    let selectedResultIndex = -1;
+    let currentResults = [];
+
+    function updatePillFromActivePane() {
+      const p = getActivePane();
+      if (!p) return;
+      if (pillSym) pillSym.textContent = p.sym || 'NIFTY';
+      if (pillSeg) {
+        const ikey = String(p.token || '');
+        const isFx = isForexSym(p.sym) || ikey.startsWith('FOREX|');
+        const isOpt = isOptionSymbol(p.sym) || ikey.includes('_FO|');
+        const isIdx = isIndexSpotSymbol(p.sym, ikey) || ikey.includes('_INDEX|');
+        const exch = ikey.startsWith('BSE') ? 'BSE' : (isFx ? 'FX' : 'NSE');
+        pillSeg.textContent = isFx ? 'FOREX' : (isOpt ? `${exch} F&O` : (isIdx ? `${exch} INDEX` : `${exch} EQ`));
+      }
+    }
+    window.updateTradingViewPill = updatePillFromActivePane;
+
+    function openModal(paneIdx = null) {
+      targetPaneIdx = paneIdx !== null ? paneIdx : activePaneIdx;
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      if (input) {
+        const curSym = (panes[targetPaneIdx] && panes[targetPaneIdx].sym) || '';
+        input.value = '';
+        input.placeholder = `Search symbol (currently ${curSym})...`;
+        if (clearBtn) clearBtn.classList.add('hidden');
+        input.focus();
+      }
+      renderDefaultPopularSymbols();
+    }
+
+    function closeModal() {
+      if (!modal) return;
+      modal.classList.add('hidden');
+      selectedResultIndex = -1;
+    }
+
+    function renderDefaultPopularSymbols() {
+      const popular = [
+        { symbol: 'NIFTY', name: 'Nifty 50 Index', instrument_key: 'NSE_INDEX|Nifty 50', type: 'INDEX', exchange: 'NSE' },
+        { symbol: 'BANKNIFTY', name: 'Nifty Bank Index', instrument_key: 'NSE_INDEX|Nifty Bank', type: 'INDEX', exchange: 'NSE' },
+        { symbol: 'SENSEX', name: 'S&P BSE SENSEX', instrument_key: 'BSE_INDEX|SENSEX', type: 'INDEX', exchange: 'BSE' },
+        { symbol: 'FINNIFTY', name: 'Nifty Financial Services', instrument_key: 'NSE_INDEX|Nifty Fin Service', type: 'INDEX', exchange: 'NSE' },
+        { symbol: 'RELIANCE', name: 'Reliance Industries Ltd', instrument_key: 'NSE_EQ|INE002A01018', type: 'EQUITY', exchange: 'NSE' },
+        { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', instrument_key: 'NSE_EQ|INE040A01034', type: 'EQUITY', exchange: 'NSE' },
+        { symbol: 'EURUSD', name: 'Euro / US Dollar', instrument_key: 'FOREX|EURUSD', type: 'FOREX', exchange: 'FX' },
+        { symbol: 'BTCUSD', name: 'Bitcoin / US Dollar', instrument_key: 'FOREX|BTCUSD', type: 'CRYPTO', exchange: 'FX' },
+      ];
+      renderResults(popular, 'POPULAR INSTRUMENTS');
+    }
+
+    function matchesFilter(item, filter) {
+      if (!filter || filter === 'all') return true;
+      const type = String(item.instrument_type || item.type || '').toUpperCase();
+      const ikey = String(item.instrument_key || item.token || '').toUpperCase();
+      const sym = String(item.symbol || '').toUpperCase();
+
+      if (filter === 'stocks') {
+        return (type === 'EQUITY' || type === 'EQ' || ikey.includes('NSE_EQ') || ikey.includes('BSE_EQ')) && !item.is_index && !sym.endsWith('CE') && !sym.endsWith('PE');
+      }
+      if (filter === 'options') {
+        return type === 'CE' || type === 'PE' || type === 'OPT' || item.is_option || sym.endsWith('CE') || sym.endsWith('PE') || ikey.includes('_FO|');
+      }
+      if (filter === 'futures') {
+        return type === 'FUT' || sym.endsWith('FUT') || sym.includes('FUT');
+      }
+      if (filter === 'indices') {
+        return item.is_index || type === 'INDEX' || ikey.includes('INDEX') || ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'].includes(sym);
+      }
+      if (filter === 'forex') {
+        return item.is_forex || type === 'FOREX' || type === 'CRYPTO' || ikey.startsWith('FOREX|') || isForexSym(sym);
+      }
+      return true;
+    }
+
+    function renderResults(list, headerTitle = null) {
+      currentResults = (list || []).filter(item => matchesFilter(item, activeFilter));
+      selectedResultIndex = currentResults.length > 0 ? 0 : -1;
+
+      if (!resultsContainer) return;
+      resultsContainer.innerHTML = '';
+
+      if (headerTitle) {
+        const hdr = document.createElement('div');
+        hdr.className = 'tv-ss-section-header';
+        hdr.textContent = headerTitle;
+        resultsContainer.appendChild(hdr);
+      }
+
+      if (!currentResults.length) {
+        resultsContainer.innerHTML = `<div class="tv-ss-hint">No symbols found for "${escapeHtml((input && input.value) || '')}" in category "${activeFilter.toUpperCase()}".</div>`;
+        return;
+      }
+
+      currentResults.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = `tv-ss-item ${idx === 0 ? 'selected' : ''}`;
+        row.dataset.idx = idx;
+
+        const sym = item.symbol || item.tradingsymbol || '';
+        const name = item.name || item.company_name || '';
+        const ikey = item.instrument_key || item.token || '';
+        let exch = 'NSE';
+        if (ikey.startsWith('BSE')) exch = 'BSE';
+        else if (ikey.startsWith('MCX')) exch = 'MCX';
+        else if (ikey.startsWith('FOREX') || isForexSym(sym)) exch = 'FOREX';
+
+        let segType = 'EQ';
+        if (item.is_index || ikey.includes('_INDEX')) segType = 'INDEX';
+        else if (item.is_option || sym.endsWith('CE') || sym.endsWith('PE') || ikey.includes('_FO')) segType = sym.endsWith('PE') ? 'PE' : (sym.endsWith('CE') ? 'CE' : 'OPT');
+        else if (sym.endsWith('FUT') || ikey.includes('FUT')) segType = 'FUT';
+        else if (exch === 'FOREX') segType = 'FX';
+
+        row.innerHTML = `
+          <div class="tv-ss-item-left">
+            <span class="tv-ss-sym">${escapeHtml(sym)}</span>
+            <span class="tv-ss-name">${escapeHtml(name)}</span>
+          </div>
+          <div class="tv-ss-item-right">
+            <span class="tv-ss-badge exch-${exch.toLowerCase()}">${exch}</span>
+            <span class="tv-ss-badge type-${segType.toLowerCase()}">${segType}</span>
+          </div>
+        `;
+
+        row.addEventListener('click', () => {
+          selectSymbolItem(item);
+        });
+
+        resultsContainer.appendChild(row);
+      });
+    }
+
+    async function executeSearch(query) {
+      const q = String(query || '').trim();
+      if (!q) {
+        renderDefaultPopularSymbols();
+        return;
+      }
+      if (resultsContainer) {
+        resultsContainer.innerHTML = '<div class="tv-ss-hint">Searching Upstox live instruments…</div>';
+      }
+      try {
+        const mkt = activeFilter === 'forex' ? 'forex' : currentMarketMode;
+        const res = await api(`/api/chart/search?q=${encodeURIComponent(q)}&market=${encodeURIComponent(mkt)}`);
+        const items = (res && (res.results || res.symbols || res.data)) || (Array.isArray(res) ? res : []);
+        renderResults(items);
+      } catch (err) {
+        if (resultsContainer) {
+          resultsContainer.innerHTML = `<div class="tv-ss-hint error">Search error: ${escapeHtml(err.message)}</div>`;
+        }
+      }
+    }
+
+    function selectSymbolItem(item) {
+      const pane = panes[targetPaneIdx] || getActivePane();
+      if (!pane) return;
+      const sym = item.symbol || item.tradingsymbol;
+      const ikey = item.instrument_key || item.token || '';
+
+      pane.sym = sym;
+      pane.token = ikey;
+      if (ikey) registerSymbolMeta(sym, { instrument_key: ikey });
+
+      closeModal();
+      updatePillFromActivePane();
+
+      // Update pane header title
+      const pSym = $(`p${pane.idx + 1}-sym`);
+      if (pSym) pSym.textContent = sym;
+
+      // Update or add tab in top symbol tab bar
+      const tabIdx = symbolTabs.findIndex(t => t.symbol === sym);
+      if (tabIdx >= 0) {
+        activeTabIdx = tabIdx;
+      } else {
+        symbolTabs.push({
+          symbol: sym,
+          token: ikey,
+          interval: pane.tf || '1m',
+          isOption: isOptionSymbol(sym),
+          segment: ikey.split('|')[0] || 'NSE',
+          rangeDays: pane.rangeDays || 5,
+        });
+        activeTabIdx = symbolTabs.length - 1;
+      }
+      saveSymbolTabs();
+      renderSymbolTabs();
+
+      toast(`Loading ${sym} (${ikey || 'Upstox'})...`);
+      loadCandles(pane);
+      subscribeChartQuoteSocket(true);
+
+      // Auto-fit 60 bars on select
+      requestAnimationFrame(() => {
+        if (pane.chart) {
+          pane.chart.priceScale('right').applyOptions({ autoScale: true });
+          const totalBars = (pane.candles || []).length;
+          if (totalBars > 0) {
+            pane.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+          }
+        }
+      });
+    }
+
+    // Event listeners
+    if (searchPill) {
+      searchPill.addEventListener('click', () => openModal(activePaneIdx));
+    }
+
+    // Clicking pane titles also opens search
+    [0, 1, 2].forEach(idx => {
+      const titleEl = $(`p${idx + 1}-sym`);
+      if (titleEl) {
+        titleEl.style.cursor = 'pointer';
+        titleEl.title = 'Click to change symbol (Press /)';
+        titleEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openModal(idx);
+        });
+      }
+    });
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+      });
+    }
+
+    if (clearBtn && input) {
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        clearBtn.classList.add('hidden');
+        input.focus();
+        renderDefaultPopularSymbols();
+      });
+    }
+
+    if (input) {
+      input.addEventListener('input', () => {
+        clearTimeout(searchDebounce);
+        const val = input.value.trim();
+        if (clearBtn) clearBtn.classList.toggle('hidden', !val);
+        searchDebounce = setTimeout(() => executeSearch(val), 180);
+      });
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          closeModal();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (currentResults.length > 0) {
+            selectedResultIndex = (selectedResultIndex + 1) % currentResults.length;
+            updateSelectionHighlight();
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (currentResults.length > 0) {
+            selectedResultIndex = (selectedResultIndex - 1 + currentResults.length) % currentResults.length;
+            updateSelectionHighlight();
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (selectedResultIndex >= 0 && selectedResultIndex < currentResults.length) {
+            selectSymbolItem(currentResults[selectedResultIndex]);
+          }
+        }
+      });
+    }
+
+    function updateSelectionHighlight() {
+      if (!resultsContainer) return;
+      const items = resultsContainer.querySelectorAll('.tv-ss-item');
+      items.forEach((it, i) => {
+        const isSel = i === selectedResultIndex;
+        it.classList.toggle('selected', isSel);
+        if (isSel) it.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeFilter = tab.dataset.filter || 'all';
+        const val = input ? input.value.trim() : '';
+        if (val) executeSearch(val);
+        else renderDefaultPopularSymbols();
+      });
+    });
+
+    // Global keyboard shortcut '/' and 'Ctrl+K'
+    window.addEventListener('keydown', (e) => {
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toUpperCase() : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '/' || ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K'))) {
+        e.preventDefault();
+        openModal(activePaneIdx);
+      }
+    });
+
+    // Initial pill setup
+    updatePillFromActivePane();
+  }
+
+  // --- TradingView / Dhan Style Settings Modal & Price Scale Context Menu ---
+  function setupTradingViewSettingsAndContextMenu() {
+    const modal = $('chart-tv-settings-modal');
+    const closeBtn = $('btn-close-tv-settings');
+    const cancelBtn = $('btn-cancel-tv-settings');
+    const okBtn = $('btn-ok-tv-settings');
+    const tabBtns = Array.from(document.querySelectorAll('.tv-settings-tab'));
+    const tabBodies = {
+      trading: $('tv-settings-tab-trading'),
+      scales: $('tv-settings-tab-scales'),
+    };
+
+    const cm = $('tv-scale-context-menu');
+    const cmReset = $('cm-scale-reset');
+    const cmAuto = $('cm-scale-auto');
+    const cmRegular = $('cm-scale-regular');
+    const cmPercent = $('cm-scale-percent');
+    const cmLog = $('cm-scale-log');
+    const cmCountdown = $('cm-scale-countdown');
+    const cmHighLow = $('cm-scale-highlow');
+    const cmMore = $('cm-scale-more');
+
+    const chkBuySell = $('chk-tv-buysell-buttons');
+    const chkCountdown = $('chk-tv-countdown');
+    const chkHighLow = $('chk-tv-high-low');
+    const chkAvgLine = $('chk-tv-avg-line');
+    const selScaleMode = $('sel-tv-scale-mode');
+
+    function openSettingsModal(initialTab = 'trading') {
+      if (!modal) return;
+      tabBtns.forEach(btn => {
+        const isTarget = btn.dataset.tab === initialTab;
+        btn.classList.toggle('active', isTarget);
+      });
+      Object.keys(tabBodies).forEach(k => {
+        if (tabBodies[k]) tabBodies[k].classList.toggle('hidden', k !== initialTab);
+        if (tabBodies[k]) tabBodies[k].classList.toggle('active', k === initialTab);
+      });
+      modal.classList.remove('hidden');
+      if (cm) cm.classList.add('hidden');
+    }
+    window.openTvSettingsModal = openSettingsModal;
+
+    function closeSettingsModal() {
+      if (!modal) return;
+      modal.classList.add('hidden');
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeSettingsModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeSettingsModal);
+    if (okBtn) okBtn.addEventListener('click', closeSettingsModal);
+
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeSettingsModal();
+      });
+    }
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const t = btn.dataset.tab;
+        tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+        Object.keys(tabBodies).forEach(k => {
+          if (tabBodies[k]) tabBodies[k].classList.toggle('hidden', k !== t);
+          if (tabBodies[k]) tabBodies[k].classList.toggle('active', k === t);
+        });
+      });
+    });
+
+    // Toggle Buy/Sell Floating Docks
+    if (chkBuySell) {
+      chkBuySell.addEventListener('change', () => {
+        const visible = chkBuySell.checked;
+        [1, 2, 3].forEach(idx => {
+          const dock = $(`p${idx}-tv-dock`);
+          if (dock) dock.style.display = visible ? 'flex' : 'none';
+        });
+      });
+    }
+
+    // Toggle Day High / Low Lines
+    if (chkHighLow) {
+      chkHighLow.addEventListener('change', () => {
+        window._showHighLowLines = chkHighLow.checked;
+        panes.forEach(p => updatePaneHighLowAvgLines(p));
+      });
+    }
+
+    // Toggle Day Average Line
+    if (chkAvgLine) {
+      chkAvgLine.addEventListener('change', () => {
+        window._showAvgLine = chkAvgLine.checked;
+        panes.forEach(p => updatePaneHighLowAvgLines(p));
+      });
+    }
+
+    // Toggle Countdown
+    if (chkCountdown) {
+      chkCountdown.addEventListener('change', () => {
+        const visible = chkCountdown.checked;
+        [1, 2, 3].forEach(idx => {
+          const box = $(`p${idx}-cd-box`);
+          if (box) box.style.display = visible ? 'block' : 'none';
+        });
+      });
+    }
+
+    // Scale Mode selector in modal
+    if (selScaleMode) {
+      selScaleMode.addEventListener('change', () => {
+        const mode = selScaleMode.value;
+        const p = getActivePane();
+        if (!p || !p.chart) return;
+        if (mode === 'auto') {
+          p.chart.priceScale('right').applyOptions({ autoScale: true, mode: 0 });
+        } else if (mode === 'log') {
+          p.chart.priceScale('right').applyOptions({ mode: 1 });
+        } else if (mode === 'percent') {
+          p.chart.priceScale('right').applyOptions({ mode: 2 });
+        } else {
+          p.chart.priceScale('right').applyOptions({ mode: 0 });
+        }
+      });
+    }
+
+    // Context Menu Handlers
+    if (cmReset) {
+      cmReset.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) {
+          p.chart.priceScale('right').applyOptions({ autoScale: true });
+          p.chart.timeScale().resetTimeScale();
+          const totalBars = (p.candles || []).length;
+          if (totalBars > 0) {
+            p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+          }
+        }
+        if (cm) cm.classList.add('hidden');
+        toast('Price scale reset');
+      });
+    }
+
+    if (cmAuto) {
+      cmAuto.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) {
+          p.chart.priceScale('right').applyOptions({ autoScale: true });
+          const totalBars = (p.candles || []).length;
+          if (totalBars > 0) {
+            p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+          }
+        }
+        if (cm) cm.classList.add('hidden');
+        toast('Scale: Auto (fits data to screen)');
+      });
+    }
+
+    if (cmRegular) {
+      cmRegular.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) p.chart.priceScale('right').applyOptions({ mode: 0 });
+        updateCmScaleCheck('regular');
+        if (cm) cm.classList.add('hidden');
+        toast('Scale: Regular');
+      });
+    }
+
+    if (cmPercent) {
+      cmPercent.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) p.chart.priceScale('right').applyOptions({ mode: 2 });
+        updateCmScaleCheck('percent');
+        if (cm) cm.classList.add('hidden');
+        toast('Scale: Percent');
+      });
+    }
+
+    if (cmLog) {
+      cmLog.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) p.chart.priceScale('right').applyOptions({ mode: 1 });
+        updateCmScaleCheck('log');
+        if (cm) cm.classList.add('hidden');
+        toast('Scale: Logarithmic');
+      });
+    }
+
+    function updateCmScaleCheck(activeType) {
+      const chkReg = $('cm-chk-regular');
+      const chkPct = $('cm-chk-percent');
+      const chkLog = $('cm-chk-log');
+      if (chkReg) chkReg.textContent = activeType === 'regular' ? '✓' : '';
+      if (chkPct) chkPct.textContent = activeType === 'percent' ? '✓' : '';
+      if (chkLog) chkLog.textContent = activeType === 'log' ? '✓' : '';
+    }
+
+    if (cmCountdown) {
+      cmCountdown.addEventListener('click', () => {
+        const chk = $('cm-chk-countdown');
+        const isChecked = chk && chk.textContent.includes('✓');
+        const nextVal = !isChecked;
+        if (chk) chk.textContent = nextVal ? '✓' : '';
+        if (chkCountdown) chkCountdown.checked = nextVal;
+        [1, 2, 3].forEach(idx => {
+          const box = $(`p${idx}-cd-box`);
+          if (box) box.style.display = nextVal ? 'block' : 'none';
+        });
+        if (cm) cm.classList.add('hidden');
+      });
+    }
+
+    if (cmHighLow) {
+      cmHighLow.addEventListener('click', () => {
+        const chk = $('cm-chk-highlow');
+        const isChecked = chk && chk.textContent.includes('✓');
+        const nextVal = !isChecked;
+        if (chk) chk.textContent = nextVal ? '✓' : '';
+        if (chkHighLow) chkHighLow.checked = nextVal;
+        window._showHighLowLines = nextVal;
+        panes.forEach(p => updatePaneHighLowAvgLines(p));
+        if (cm) cm.classList.add('hidden');
+      });
+    }
+
+    if (cmMore) {
+      cmMore.addEventListener('click', () => {
+        openSettingsModal('scales');
+      });
+    }
+
+    // Right click on price scales to show context menu
+    panes.forEach(pane => {
+      const container = $(`p${pane.idx + 1}-chart-container`);
+      if (container) {
+        container.addEventListener('contextmenu', (e) => {
+          const rect = container.getBoundingClientRect();
+          const fromRight = rect.right - e.clientX;
+          if (fromRight <= 75) {
+            e.preventDefault();
+            if (cm) {
+              cm.style.left = `${Math.min(window.innerWidth - 240, e.clientX - 180)}px`;
+              cm.style.top = `${Math.min(window.innerHeight - 320, e.clientY)}px`;
+              cm.classList.remove('hidden');
+            }
+          }
+        });
+      }
+    });
+
+    // Dismiss context menu on click outside
+    document.addEventListener('click', (e) => {
+      if (cm && !cm.contains(e.target)) {
+        cm.classList.add('hidden');
+      }
+    });
+  }
+
+  // --- TradingView Bottom Bar Scale Controls & Clock ---
+  function setupBottomScaleControls() {
+    const btnAuto = $('btn-scale-auto');
+    const btnLog = $('btn-scale-log');
+    const btnPct = $('btn-scale-percent');
+    const btnSettings = $('btn-chart-scale-settings');
+
+    if (btnAuto) {
+      btnAuto.addEventListener('click', () => {
+        const pane = getActivePane();
+        if (!pane || !pane.chart) return;
+        pane.chart.priceScale('right').applyOptions({ autoScale: true });
+        const totalBars = (pane.candles || []).length;
+        if (totalBars > 0) {
+          pane.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
+        }
+        btnAuto.classList.add('active');
+        if (btnLog) btnLog.classList.remove('active');
+        if (btnPct) btnPct.classList.remove('active');
+        toast('Price scale reset to Auto (60 bars fitted)');
+      });
+    }
+
+    if (btnLog) {
+      btnLog.addEventListener('click', () => {
+        const pane = getActivePane();
+        if (!pane || !pane.chart) return;
+        const isLog = btnLog.classList.contains('active');
+        pane.chart.priceScale('right').applyOptions({ mode: isLog ? 0 : 1 });
+        btnLog.classList.toggle('active', !isLog);
+        if (!isLog && btnPct) btnPct.classList.remove('active');
+        toast(!isLog ? 'Scale mode: Logarithmic' : 'Scale mode: Regular');
+      });
+    }
+
+    if (btnPct) {
+      btnPct.addEventListener('click', () => {
+        const pane = getActivePane();
+        if (!pane || !pane.chart) return;
+        const isPct = btnPct.classList.contains('active');
+        pane.chart.priceScale('right').applyOptions({ mode: isPct ? 0 : 2 });
+        btnPct.classList.toggle('active', !isPct);
+        if (!isPct && btnLog) btnLog.classList.remove('active');
+        toast(!isPct ? 'Scale mode: Percentage (%)' : 'Scale mode: Regular');
+      });
+    }
+
+    if (btnSettings) {
+      btnSettings.addEventListener('click', () => {
+        if (typeof window.openTvSettingsModal === 'function') {
+          window.openTvSettingsModal('scales');
+        }
+      });
+    }
+  }
+
+  function startLiveBottomClock() {
+    const clockEl = $('chart-clock-live');
+    if (!clockEl) return;
+    const update = () => {
+      const now = new Date();
+      const istTime = new Date(now.getTime() + (5.5 * 3600 * 1000));
+      const pad = n => (n < 10 ? `0${n}` : `${n}`);
+      const h = pad(istTime.getUTCHours());
+      const m = pad(istTime.getUTCMinutes());
+      const s = pad(istTime.getUTCSeconds());
+      clockEl.textContent = `${h}:${m}:${s} UTC+5:30`;
+    };
+    update();
+    setInterval(update, 1000);
+  }
+
+  function setupChartEngineToggle() {
+    const btn = $('btn-chart-engine');
+    if (!btn) return;
+    btn.title = 'TradingView Lightweight Charts rendered with Upstox market data';
+    btn.setAttribute('aria-label', 'TradingView chart with Upstox live feed');
   }
 
   // --- Bootloader ---
@@ -8554,6 +9349,10 @@
     setupOptQuickButtons();
     setupMobileFlow();
     setupFloatingOrderDocks();
+    setupTradingViewSymbolSearch();
+    setupTradingViewSettingsAndContextMenu();
+    setupBottomScaleControls();
+    startLiveBottomClock();
     setupAlgoBotModal();
     setupChartEngineToggle();
     syncTradeButtonsForActivePane();

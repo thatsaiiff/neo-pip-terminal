@@ -516,8 +516,29 @@
           <span id="connection-footer">Backend connecting…</span>
         </div>
       </footer>
+      <section id="mobile-more-panel" class="mobile-more-panel" aria-label="More options">
+        <h2>More</h2>
+        <a href="/chart">Open chart terminal <span>↗</span></a>
+        <a href="/research">Strategy research <span>↗</span></a>
+        <button type="button" id="mobile-more-connect">Connect Kotak Neo <span>→</span></button>
+        <button type="button" id="mobile-more-signin">Account and sign in <span>→</span></button>
+      </section>
+      <section id="mobile-watchlist-panel" class="mobile-watchlist-panel" aria-label="Watchlist">
+        <h2>Watchlist</h2>
+        <button type="button" data-symbol="NIFTY"><span><b>NIFTY 50</b><small>NSE Index</small></span><strong id="mobile-watch-nifty">—</strong><i>Open →</i></button>
+        <button type="button" data-symbol="BANKNIFTY"><span><b>BANK NIFTY</b><small>NSE Index</small></span><strong id="mobile-watch-banknifty">—</strong><i>Open →</i></button>
+        <button type="button" data-symbol="SENSEX"><span><b>SENSEX</b><small>BSE Index</small></span><strong id="mobile-watch-sensex">—</strong><i>Open →</i></button>
+      </section>
     </main>
   </div>
+
+  <nav class="main-mobile-nav" aria-label="Mobile navigation">
+    <button type="button" class="main-mobile-nav-item active" data-view="home" aria-label="Home"><span>⌂</span><small>Home</small></button>
+    <button type="button" class="main-mobile-nav-item" data-view="watchlist" aria-label="Watchlist"><span>☷</span><small>Watchlist</small></button>
+    <button type="button" class="main-mobile-nav-item" data-view="orders" aria-label="Orders"><span>▤</span><small>Orders</small></button>
+    <button type="button" class="main-mobile-nav-item" data-view="positions" aria-label="Positions"><span>↗</span><small>Positions</small></button>
+    <button type="button" class="main-mobile-nav-item" data-view="more" aria-label="More"><span>•••</span><small>More</small></button>
+  </nav>
 
   <!-- Toast Notification -->
   <div id="toast" class="toast" role="status" aria-live="polite">

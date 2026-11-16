@@ -7891,6 +7891,8 @@ def chart_candles(
             "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]),
             "volume": int(float(c[5]))
         } for c in candles_1m]
+    elif interval_clean in {"2m", "2min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=2)
     elif interval_clean in {"3m", "3min"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=3)
     elif interval_clean in {"5m", "5min"}:
@@ -7899,6 +7901,10 @@ def chart_candles(
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=15)
     elif interval_clean in {"30m", "30min"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=30)
+    elif interval_clean in {"75m", "75min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=75)
+    elif interval_clean in {"125m", "125min"}:
+        res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=125)
     elif interval_clean in {"1h", "60m"}:
         res_candles = _aggregate_1m_to_higher(candles_1m, interval_minutes=60)
     elif interval_clean in {"4h", "240m"}:
@@ -8741,6 +8747,7 @@ def _get_live_quote_data(symbol: str, token: str | None = None) -> dict[str, Any
     return fallback
 
 
+@app.get("/api/quotes")
 @app.get("/api/chart/live-quote")
 def live_quote(symbol: str = "NIFTY", token: str | None = None):
     q = _get_live_quote_data(symbol, token)
@@ -8904,13 +8911,17 @@ async def ws_quotes_stream(websocket: WebSocket):
                     for it in fx_items:
                         sym = str(it.get("symbol") or "XAUUSD")
                         tok = str(it.get("token") or "")
-                        fq = _get_live_quote_data(sym, tok)
+                        fq = await asyncio.to_thread(_get_live_quote_data, sym, tok)
                         if fq and fq.get("ltp"):
                             ticks.append(fq)
 
                 if ind_items and up_token:
                     pairs = [(str(it.get("symbol") or "NIFTY"), str(it.get("token") or "")) for it in ind_items]
-                    ticks.extend(_get_upstox_ws_or_v3_batch(pairs, up_token).values())
+                    # The batch helper may make a synchronous REST fallback request.
+                    # Keep it off the ASGI event loop so the receiver can process a
+                    # subscription promptly and the socket can flush each tick.
+                    batch = await asyncio.to_thread(_get_upstox_ws_or_v3_batch, pairs, up_token)
+                    ticks.extend(batch.values())
 
                 if ticks:
                     await websocket.send_json({"type": "ticks", "quotes": ticks, "timestamp": now_t})

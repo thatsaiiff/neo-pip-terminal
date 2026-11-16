@@ -2957,6 +2957,65 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   }
 }
 
+.main-mobile-nav { display: none; }
+@media (max-width: 640px) {
+  .main-mobile-nav {
+    position: fixed;
+    z-index: 800;
+    inset: auto 0 0;
+    min-height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding: 5px 4px env(safe-area-inset-bottom, 0px);
+    display: flex;
+    align-items: center;
+    background: rgba(14, 17, 23, .97);
+    border-top: 1px solid #273043;
+    backdrop-filter: blur(14px);
+  }
+  .main-mobile-nav-item {
+    flex: 1;
+    min-width: 0;
+    height: 50px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2px;
+    border: 0;
+    background: transparent;
+    color: #8490a3;
+    cursor: pointer;
+  }
+  .main-mobile-nav-item > span { font-size: 20px; line-height: 1; }
+  .main-mobile-nav-item small { font-size: 10px; font-weight: 650; }
+  .main-mobile-nav-item.active { color: #f1c232; }
+  .main-content { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  body.main-mobile-section-watchlist .main-content > :not(#mobile-watchlist-panel):not(.footer),
+  body.main-mobile-section-orders .main-content > :not(.recent-card):not(.footer),
+  body.main-mobile-section-positions .main-content > :not(.recent-card):not(.footer),
+  body.main-mobile-section-more .main-content > :not(#mobile-more-panel):not(.footer) { display: none !important; }
+  body.main-mobile-section-watchlist .main-content,
+  body.main-mobile-section-orders .main-content,
+  body.main-mobile-section-positions .main-content,
+  body.main-mobile-section-more .main-content { display: block; height: auto; min-height: calc(100vh - 110px); overflow: visible; }
+  body.main-mobile-section-orders .recent-card,
+  body.main-mobile-section-positions .recent-card { display: block !important; min-height: 60vh; }
+  body.main-mobile-section-orders .activity-tab,
+  body.main-mobile-section-positions .activity-tab { display: none; }
+  body.main-mobile-section-orders #orders-panel,
+  body.main-mobile-section-positions #positions-panel { display: block !important; }
+  .mobile-more-panel { display: none; }
+  body.main-mobile-section-more #mobile-more-panel { display: flex !important; flex-direction: column; gap: 10px; padding: 20px 16px; }
+  .mobile-more-panel h2 { margin: 4px 0 8px; color: #f1c232; }
+  .mobile-more-panel a, .mobile-more-panel button { display: flex; justify-content: space-between; align-items: center; min-height: 48px; padding: 0 14px; border: 1px solid #293247; border-radius: 10px; background: #141a24; color: #eef2f8; text-decoration: none; font: inherit; }
+  .mobile-watchlist-panel { display: none; }
+  body.main-mobile-section-watchlist #mobile-watchlist-panel { display: flex !important; flex-direction: column; gap: 10px; padding: 20px 16px; }
+  .mobile-watchlist-panel h2 { margin: 4px 0 8px; color: #f1c232; }
+  .mobile-watchlist-panel button { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; min-height: 64px; padding: 8px 12px; border: 1px solid #293247; border-radius: 10px; background: #141a24; color: #eef2f8; text-align: left; }
+  .mobile-watchlist-panel button span { display: grid; gap: 3px; }
+  .mobile-watchlist-panel small, .mobile-watchlist-panel i { color: #8490a3; font-size: 10px; font-style: normal; }
+  .mobile-watchlist-panel strong { font-family: var(--font-mono); font-size: 13px; }
+}
+
 /* ==========================================================================
    Picture-in-Picture (PiP) Window Mode
    ========================================================================== */

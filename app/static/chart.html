@@ -65,10 +65,10 @@
         <span id="algo-pill-status">ALGO: OFF</span>
       </button>
 
-      <!-- Chart Engine Switcher: Pro PIP Canvas vs Official TradingView Advanced Widget -->
-      <button type="button" id="btn-chart-engine" class="ex-tv-pill" title="Toggle Chart Engine: Pro Terminal vs Official TradingView">
+      <!-- Chart Engine: TradingView Lightweight Charts rendering Upstox feed -->
+      <button type="button" id="btn-chart-engine" class="ex-tv-pill" title="Chart rendered with TradingView Lightweight Charts using Upstox prices">
         <span class="tv-pill-icon">📈</span>
-        <span id="engine-pill-status">PRO PIP</span>
+        <span id="engine-pill-status">UPSTOX LIVE</span>
       </button>
 
       <!-- Account Badge -->
@@ -240,10 +240,16 @@
       <!-- Top Chart Toolbar -->
       <div class="ex-chart-topbar">
         <div class="tb-left">
-          <!-- Active Symbol Header & OHLC -->
+          <!-- TradingView Symbol Search Button / Pill (Opens Upstox Symbol Search) -->
+          <button type="button" id="btn-tv-symbol-search" class="tv-symbol-search-pill" title="Search symbol from Upstox API (Press / or Ctrl+K)">
+            <svg class="tv-pill-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <span class="active-sym-name" id="chart-active-sym">NIFTY</span>
+            <span class="active-sym-seg" id="chart-active-seg">NSE</span>
+            <kbd class="tv-pill-shortcut">/</kbd>
+          </button>
+
+          <!-- Active Symbol OHLC Legend (TradingView Style) -->
           <div class="chart-active-sym-wrap">
-            <span class="active-sym-name" id="chart-active-sym">NIFTY 25000 CE</span>
-            <span class="active-sym-seg" id="chart-active-seg">NSE F&O</span>
             <span class="active-ohlc" id="chart-active-ohlc">
               O: <b id="c-open">—</b> H: <b id="c-high">—</b> L: <b id="c-low">—</b> C: <b id="c-close">—</b>
             </span>
@@ -256,10 +262,12 @@
             <button type="button" class="ex-tf-btn" data-tf="5s">5s</button>
             <button type="button" class="ex-tf-btn" data-tf="15s">15s</button>
             <button type="button" class="ex-tf-btn active" data-tf="1m">1m</button>
+            <button type="button" class="ex-tf-btn" data-tf="2m">2m</button>
             <button type="button" class="ex-tf-btn" data-tf="3m">3m</button>
             <button type="button" class="ex-tf-btn" data-tf="5m">5m</button>
             <button type="button" class="ex-tf-btn" data-tf="15m">15m</button>
-            <button type="button" class="ex-tf-btn" data-tf="30m">30m</button>
+            <button type="button" class="ex-tf-btn" data-tf="75m">75m</button>
+            <button type="button" class="ex-tf-btn" data-tf="125m">125m</button>
             <button type="button" class="ex-tf-btn" data-tf="1h">1h</button>
             <button type="button" class="ex-tf-btn" data-tf="4h">4h</button>
             <button type="button" class="ex-tf-btn" data-tf="1d">1D</button>
@@ -273,10 +281,13 @@
               <button type="button" class="tf-opt" data-tf="5s">5s</button>
               <button type="button" class="tf-opt" data-tf="15s">15s</button>
               <button type="button" class="tf-opt active" data-tf="1m">1m</button>
+              <button type="button" class="tf-opt" data-tf="2m">2m</button>
               <button type="button" class="tf-opt" data-tf="3m">3m</button>
               <button type="button" class="tf-opt" data-tf="5m">5m</button>
               <button type="button" class="tf-opt" data-tf="15m">15m</button>
               <button type="button" class="tf-opt" data-tf="30m">30m</button>
+              <button type="button" class="tf-opt" data-tf="75m">75m</button>
+              <button type="button" class="tf-opt" data-tf="125m">125m</button>
               <button type="button" class="tf-opt" data-tf="1h">1h</button>
               <button type="button" class="tf-opt" data-tf="4h">4h</button>
               <button type="button" class="tf-opt" data-tf="1d">1D</button>
@@ -466,10 +477,6 @@
                 <span class="tv-dock-lbl">BUY</span>
               </button>
             </div>
-            <!-- Embedded TradingView Advanced Chart Container -->
-            <div id="p1-tv-widget-wrap" class="tradingview-widget-wrap hidden">
-              <div id="p1-tv-widget-container" class="tradingview-widget-container"></div>
-            </div>
             <div id="p1-chart-container" class="chart-canvas-view"></div>
             <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p1-trade-overlay" class="pane-trade-overlay"></div>
@@ -521,10 +528,6 @@
                 <span class="tv-dock-lbl">BUY</span>
               </button>
             </div>
-            <!-- Embedded TradingView Advanced Chart Container -->
-            <div id="p2-tv-widget-wrap" class="tradingview-widget-wrap hidden">
-              <div id="p2-tv-widget-container" class="tradingview-widget-container"></div>
-            </div>
             <div id="p2-chart-container" class="chart-canvas-view"></div>
             <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
             <div id="p2-trade-overlay" class="pane-trade-overlay"></div>
@@ -575,10 +578,6 @@
                 <span class="tv-dock-price" id="p3-tv-buy-price">—</span>
                 <span class="tv-dock-lbl">BUY</span>
               </button>
-            </div>
-            <!-- Embedded TradingView Advanced Chart Container -->
-            <div id="p3-tv-widget-wrap" class="tradingview-widget-wrap hidden">
-              <div id="p3-tv-widget-container" class="tradingview-widget-container"></div>
             </div>
             <div id="p3-chart-container" class="chart-canvas-view"></div>
             <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
@@ -1060,7 +1059,7 @@
       <button type="button" id="btn-legal-disclaimer" class="footer-legal-btn" title="Educational Purpose Only · Personal Self-Hosted Use · Applicable Financial Laws">
         ⚖️ Educational Only · Personal Use · Legal &amp; Laws Disclaimer
       </button>
-      <span class="latency-stat">Latency: <b id="stat-latency">24ms</b></span>
+      <span class="latency-stat">Feed: <b id="chart-feed-status">Connecting</b></span>
     </div>
   </footer>
 
@@ -1092,9 +1091,7 @@
       <div class="m-dock-lots">
         <span class="m-lots-label">Lots</span>
         <div class="m-lots-ctrl">
-          <button type="button" id="m-lots-minus" class="m-lots-btn" title="Decrease Lot">−</button>
-          <span id="m-lots-val" class="m-lots-val">1</span>
-          <button type="button" id="m-lots-plus" class="m-lots-btn" title="Increase Lot">+</button>
+          <input type="number" id="m-lots-val" class="m-lots-val" value="1" min="1" step="1" inputmode="numeric" aria-label="Lots">
         </div>
       </div>
 
@@ -1434,31 +1431,31 @@
       <span class="mnav-icon">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-4 4 4 5-6"/></svg>
       </span>
-      <span class="mnav-label">Chart</span>
-    </button>
-    <button type="button" class="mobile-nav-item" data-tab="accounts" id="mnav-accounts">
-      <span class="mnav-icon">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
-      </span>
-      <span class="mnav-label">Accounts</span>
+      <span class="mnav-label">Home</span>
     </button>
     <button type="button" class="mobile-nav-item" data-tab="trade" id="mnav-trade">
       <span class="mnav-icon">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v18M18 3v18M3 8h6M15 14h6"/></svg>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h18M3 12h18M3 19h18"/><circle cx="7" cy="5" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="7" cy="19" r="1"/></svg>
       </span>
-      <span class="mnav-label">Trade</span>
+      <span class="mnav-label">Watchlist</span>
     </button>
-    <button type="button" class="mobile-nav-item" data-tab="performance" id="mnav-perf">
+    <button type="button" class="mobile-nav-item" data-tab="accounts" data-activity="orders" id="mnav-orders">
       <span class="mnav-icon">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h14v18H5zM8 8h8M8 12h8M8 16h5"/></svg>
       </span>
-      <span class="mnav-label">Performance</span>
+      <span class="mnav-label">Orders</span>
+    </button>
+    <button type="button" class="mobile-nav-item" data-tab="accounts" data-activity="positions" id="mnav-positions">
+      <span class="mnav-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5m0 14h16M7 15l4-5 3 3 5-7"/></svg>
+      </span>
+      <span class="mnav-label">Positions</span>
     </button>
     <button type="button" class="mobile-nav-item" data-tab="profile" id="mnav-profile">
       <span class="mnav-icon">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/></svg>
       </span>
-      <span class="mnav-label">Profile</span>
+      <span class="mnav-label">More</span>
     </button>
   </nav>
 
@@ -2016,6 +2013,40 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
     </div>
   </div>
 
+  <!-- TRADINGVIEW ADVANCED CHARTS SYMBOL SEARCH MODAL (Upstox Live Driven) -->
+  <div id="tv-symbol-search-modal" class="tv-symbol-search-backdrop hidden" role="dialog" aria-modal="true" aria-label="Symbol Search">
+    <div class="tv-symbol-search-card">
+      <div class="tv-ss-header">
+        <div class="tv-ss-input-wrap">
+          <svg class="tv-ss-search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" id="tv-ss-input" class="tv-ss-input" placeholder="Search symbol (e.g. NIFTY, SENSEX, RELIANCE, 25000 CE)..." autocomplete="off" spellcheck="false">
+          <button type="button" id="tv-ss-clear-btn" class="tv-ss-clear-btn hidden" aria-label="Clear search">✕</button>
+        </div>
+        <button type="button" id="tv-ss-close-btn" class="tv-ss-close-btn" aria-label="Close">✕</button>
+      </div>
+
+      <!-- Category Filter Tabs -->
+      <div class="tv-ss-tabs" role="tablist">
+        <button type="button" class="tv-ss-tab active" data-filter="all">All</button>
+        <button type="button" class="tv-ss-tab" data-filter="stocks">Stocks</button>
+        <button type="button" class="tv-ss-tab" data-filter="options">Options</button>
+        <button type="button" class="tv-ss-tab" data-filter="futures">Futures</button>
+        <button type="button" class="tv-ss-tab" data-filter="indices">Indices</button>
+        <button type="button" class="tv-ss-tab" data-filter="forex">Forex</button>
+      </div>
+
+      <!-- Results List -->
+      <div class="tv-ss-results" id="tv-ss-results">
+        <div class="tv-ss-hint">Type 2+ characters to search Upstox NSE, BSE, F&amp;O and MCX instruments…</div>
+      </div>
+
+      <div class="tv-ss-footer">
+        <span class="tv-ss-footer-hint">Use <kbd>↑</kbd> <kbd>↓</kbd> to navigate, <kbd>Enter</kbd> to select, <kbd>Esc</kbd> to close</span>
+        <span class="tv-ss-feed-badge">● Upstox Live Feed</span>
+      </div>
+    </div>
+  </div>
+
   <!-- TRADINGVIEW / DHAN STYLE CHART & TRADING SETTINGS MODAL (Screenshot 1, 2, 3) -->
   <div id="chart-tv-settings-modal" class="tv-settings-modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Chart Settings">
     <div class="tv-settings-modal-card">
@@ -2518,8 +2549,6 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
   </div>
 
   <script src="/static/lightweight-charts.js?v=0.2.1"></script>
-  <script src="https://s3.tradingview.com/tv.js"></script>
-  <script src="/static/tradingview-datafeed.js"></script>
   <script src="/static/trade-sounds.js?v=0.2.1"></script>
   <script src="/static/chart-indicators.js?v=0.2.1"></script>
   <script src="/static/chart-drawings.js?v=0.2.1"></script>

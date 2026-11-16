@@ -1708,7 +1708,10 @@
       const priceEl = $(`index-${key}`);
       const changeEl = $(`index-${key}-change`);
       if (priceEl && item.ltp != null) {
-        priceEl.textContent = Number(item.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const formatted = Number(item.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        priceEl.textContent = formatted;
+        const mobilePrice = $(`mobile-watch-${key}`);
+        if (mobilePrice) mobilePrice.textContent = formatted;
       }
       if (changeEl) {
         const change = Number(item.change);
@@ -2851,6 +2854,29 @@
   if ($('validity-select')) $('validity-select').value = 'DAY';
   renderSymbol('NIFTY', 'nse_fo', 'manual', null);
   updateTradingViewSymbol('NIFTY');
+
+  document.querySelectorAll('.main-mobile-nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const view = item.dataset.view || 'home';
+      document.querySelectorAll('.main-mobile-nav-item').forEach(nav => nav.classList.toggle('active', nav === item));
+      document.body.classList.remove('main-mobile-section-watchlist', 'main-mobile-section-orders', 'main-mobile-section-positions', 'main-mobile-section-more');
+      if (view === 'watchlist') document.body.classList.add('main-mobile-section-watchlist');
+      else if (view === 'orders') { document.body.classList.add('main-mobile-section-orders'); setActivityTab('orders'); }
+      else if (view === 'positions') { document.body.classList.add('main-mobile-section-positions'); setActivityTab('positions'); }
+      else if (view === 'more') document.body.classList.add('main-mobile-section-more');
+      else window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+  document.querySelectorAll('#mobile-watchlist-panel [data-symbol]').forEach(item => {
+    item.addEventListener('click', () => {
+      const symbol = item.dataset.symbol || 'NIFTY';
+      if ($('symbol-input')) $('symbol-input').value = symbol;
+      $('apply-symbol')?.click();
+      document.querySelector('.main-mobile-nav-item[data-view="home"]')?.click();
+    });
+  });
+  $('mobile-more-connect')?.addEventListener('click', () => $('connect-btn')?.click());
+  $('mobile-more-signin')?.addEventListener('click', () => $('main-signin-trigger')?.click());
 
   function setupMainLegalModal() {
     const legalModal = $('main-legal-modal');
