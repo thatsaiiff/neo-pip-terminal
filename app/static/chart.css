@@ -5568,16 +5568,7 @@ tr.closed-row-clickable:hover td.col-frozen-pnl {
 /* ==========================================================================
    Kotak Auth Badges, Auth Lock & Tactile Micro-Animations
    ========================================================================== */
-body.auth-locked .ex-header,
-body.auth-locked .ex-workspace,
-body.auth-locked .ex-footer,
-body.auth-locked .mobile-trade-dock,
-body.auth-locked .mobile-views-wrapper,
-body.auth-locked .mobile-nav-bar {
-  pointer-events: none !important;
-  user-select: none;
-  filter: blur(5px);
-}
+/* Guest & Unauthenticated terminal is clear and interactive without blurring */
 
 .kotak-auth-pill {
   margin-top: 6px;

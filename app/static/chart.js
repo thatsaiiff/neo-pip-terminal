@@ -5322,7 +5322,7 @@
     const modalKotakTxt = $('kotak-modal-status-text');
     const btnKotakDisc = $('btn-kotak-disconnect');
 
-    document.body.classList.toggle('auth-locked', !(adminActive || isAuthenticated));
+    document.body.classList.remove('auth-locked');
 
     // Strictly hide API token & Kotak Admin controls from non-admin users
     document.querySelectorAll('.admin-only-ctrl').forEach(el => {

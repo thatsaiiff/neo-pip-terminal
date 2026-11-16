@@ -3206,11 +3206,9 @@ body.pip-mode .footer {
 /* ==========================================================================
    Site Gatekeeper Auth, User Pill & Tactile Press Animations
    ========================================================================== */
+/* Clean interactive shell */
 body.site-locked #app-shell {
-  filter: blur(5px);
-  pointer-events: none;
-  user-select: none;
-  transition: filter 0.2s ease;
+  transition: opacity 0.2s ease;
 }
 
 .auth-gate-backdrop {
