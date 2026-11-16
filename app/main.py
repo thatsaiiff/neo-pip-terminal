@@ -2904,14 +2904,16 @@ def auth_signin(payload: SigninPayload, response: Response, request: Request):
         ind_b = float(row["indian_balance"] if row["indian_balance"] is not None else _GUEST_DEMO_BALANCE)
         fx_b = float(row["forex_balance"] if row["forex_balance"] is not None else _FOREX_DEMO_BALANCE)
 
-    token = _issue_user_session(response, user_id, row["email"], row["username"], False, mmode, ind_b, fx_b)
-    audit("user_signin", {"user_id": user_id, "username": row["username"]})
+    is_user_admin = bool(row["is_admin"]) or (ident_lower in admin_idents)
+    token = _issue_user_session(response, user_id, row["email"], row["username"], is_user_admin, mmode, ind_b, fx_b)
+    audit("user_signin", {"user_id": user_id, "username": row["username"], "is_admin": is_user_admin})
     return {
         "ok": True,
         "token": token,
+        "owner_token": token if is_user_admin else None,
         "username": row["username"],
         "name": row["name"] or row["username"],
-        "is_admin": False,
+        "is_admin": is_user_admin,
         "market_mode": mmode,
         "indian_balance": ind_b,
         "forex_balance": fx_b,
