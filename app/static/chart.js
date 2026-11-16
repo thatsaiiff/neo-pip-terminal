@@ -20,7 +20,7 @@
     emaLongPeriod: 200,
     showVwap: false,
     showSupertrend: false,
-    showVpvr: false,
+    showVpvr: true,
     vpvrMode: 'visible',
     vpvrVaPct: 70,
     vpvrBins: 36,
@@ -7821,6 +7821,37 @@
       timeEl.textContent = formatCountdownClock(rem);
       fillEl.style.width = `${pct.toFixed(1)}%`;
       box.classList.toggle('urgent', span <= 3600 && rem <= 5);
+
+      // Price Scale Countdown Badge (Screenshot 4, 5)
+      if (window._showCountdown !== false && p.candleSeries && p.candles && p.candles.length) {
+        const lastBar = p.candles[p.candles.length - 1];
+        const ltp = Number(p.lastLtp || lastBar.close || 0);
+        const isUp = ltp >= Number(lastBar.open || ltp);
+        const countdownTitle = formatCountdownClock(rem);
+        if (!p.countdownPriceLine) {
+          try {
+            p.countdownPriceLine = p.candleSeries.createPriceLine({
+              price: ltp,
+              color: isUp ? '#00b074' : '#ef4444',
+              lineWidth: 1,
+              lineStyle: 0,
+              axisLabelVisible: true,
+              title: countdownTitle,
+            });
+          } catch (_) {}
+        } else {
+          try {
+            p.countdownPriceLine.applyOptions({
+              price: ltp,
+              color: isUp ? '#00b074' : '#ef4444',
+              title: countdownTitle,
+            });
+          } catch (_) {}
+        }
+      } else if (p.countdownPriceLine && window._showCountdown === false) {
+        try { p.candleSeries.removePriceLine(p.countdownPriceLine); } catch (_) {}
+        p.countdownPriceLine = null;
+      }
     });
   }
   window._updateCountdownsFn = updatePaneCountdowns;
@@ -8576,6 +8607,61 @@
       try { pane.candleSeries.removePriceLine(pane.avgPriceLine); } catch (_) {}
       pane.avgPriceLine = null;
     }
+
+    // Previous Day Close line (Screenshot 2)
+    if (pane.prevClose && Number(pane.prevClose) > 0 && window._showPrevCloseLine) {
+      if (!pane.prevCloseLine) {
+        try {
+          pane.prevCloseLine = pane.candleSeries.createPriceLine({
+            price: Number(pane.prevClose),
+            color: '#64748b',
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: 'Prev Cl',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.prevCloseLine.applyOptions({ price: Number(pane.prevClose) }); } catch (_) {}
+      }
+    } else if (pane.prevCloseLine && !window._showPrevCloseLine) {
+      try { pane.candleSeries.removePriceLine(pane.prevCloseLine); } catch (_) {}
+      pane.prevCloseLine = null;
+    }
+
+    // Best Bid & Ask Price Lines (Screenshot 4, 5)
+    if (pane.bestBid && pane.bestBid > 0 && window._showBidAskLines !== false) {
+      if (!pane.bidPriceLine) {
+        try {
+          pane.bidPriceLine = pane.candleSeries.createPriceLine({
+            price: pane.bestBid,
+            color: '#2962ff',
+            lineWidth: 1,
+            lineStyle: 1,
+            axisLabelVisible: true,
+            title: '',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.bidPriceLine.applyOptions({ price: pane.bestBid }); } catch (_) {}
+      }
+    }
+    if (pane.bestAsk && pane.bestAsk > 0 && window._showBidAskLines !== false) {
+      if (!pane.askPriceLine) {
+        try {
+          pane.askPriceLine = pane.candleSeries.createPriceLine({
+            price: pane.bestAsk,
+            color: '#ef4444',
+            lineWidth: 1,
+            lineStyle: 1,
+            axisLabelVisible: true,
+            title: '',
+          });
+        } catch (_) {}
+      } else {
+        try { pane.askPriceLine.applyOptions({ price: pane.bestAsk }); } catch (_) {}
+      }
+    }
   }
 
   // --- Floating TradingView / Dhan Style 1-Tap Trading Dock ---
@@ -8973,6 +9059,9 @@
   // --- TradingView / Dhan Style Settings Modal & Price Scale Context Menu ---
   function setupTradingViewSettingsAndContextMenu() {
     const modal = $('chart-tv-settings-modal');
+    const modalHeaderTitle = $('tv-settings-header-title');
+    const backBtn = $('btn-back-tv-settings');
+    const expandBtn = $('btn-expand-tv-settings');
     const closeBtn = $('btn-close-tv-settings');
     const cancelBtn = $('btn-cancel-tv-settings');
     const okBtn = $('btn-ok-tv-settings');
@@ -8985,42 +9074,84 @@
     const cm = $('tv-scale-context-menu');
     const cmReset = $('cm-scale-reset');
     const cmAuto = $('cm-scale-auto');
+    const cmLockRatio = $('cm-scale-lock-ratio');
+    const cmPriceOnly = $('cm-scale-price-only');
+    const cmInvert = $('cm-scale-invert');
     const cmRegular = $('cm-scale-regular');
     const cmPercent = $('cm-scale-percent');
+    const cmIndexed = $('cm-scale-indexed');
     const cmLog = $('cm-scale-log');
-    const cmCountdown = $('cm-scale-countdown');
-    const cmHighLow = $('cm-scale-highlow');
+    const cmMovePlacement = $('cm-scale-move-placement');
+    const cmPlacementText = $('cm-scale-placement-text');
+    const cmLabels = $('cm-scale-labels');
+    const cmLines = $('cm-scale-lines');
+    const cmPlusBtn = $('cm-scale-plus-btn');
     const cmMore = $('cm-scale-more');
+    const cmAddAlert = $('cm-scale-add-alert');
+    const cmAlertText = $('cm-scale-alert-text');
 
     const chkBuySell = $('chk-tv-buysell-buttons');
     const chkCountdown = $('chk-tv-countdown');
     const chkHighLow = $('chk-tv-high-low');
-    const chkAvgLine = $('chk-tv-avg-line');
-    const selScaleMode = $('sel-tv-scale-mode');
+    const chkPlusBtn = $('chk-tv-plus-button');
+    const selScalePlacement = $('sel-tv-scales-placement');
 
-    function openSettingsModal(initialTab = 'trading') {
+    let currentScalePlacement = 'right';
+    let isScaleInverted = false;
+    let isRatioLocked = false;
+    let isPriceOnly = false;
+    let isPlusBtnVisible = true;
+
+    function openSettingsModal(initialTab = 'scales') {
       if (!modal) return;
-      tabBtns.forEach(btn => {
-        const isTarget = btn.dataset.tab === initialTab;
-        btn.classList.toggle('active', isTarget);
-      });
-      Object.keys(tabBodies).forEach(k => {
-        if (tabBodies[k]) tabBodies[k].classList.toggle('hidden', k !== initialTab);
-        if (tabBodies[k]) tabBodies[k].classList.toggle('active', k === initialTab);
-      });
+      switchTab(initialTab);
       modal.classList.remove('hidden');
       if (cm) cm.classList.add('hidden');
     }
     window.openTvSettingsModal = openSettingsModal;
+
+    function switchTab(t) {
+      if (modalHeaderTitle) {
+        modalHeaderTitle.textContent = t === 'trading' ? 'Trading' : 'Scales and lines';
+      }
+      tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+      Object.keys(tabBodies).forEach(k => {
+        if (tabBodies[k]) {
+          tabBodies[k].classList.toggle('hidden', k !== t);
+          tabBodies[k].classList.toggle('active', k === t);
+        }
+      });
+    }
 
     function closeSettingsModal() {
       if (!modal) return;
       modal.classList.add('hidden');
     }
 
+    if (backBtn) {
+      backBtn.addEventListener('click', () => {
+        const isTrading = tabBodies.trading && !tabBodies.trading.classList.contains('hidden');
+        switchTab(isTrading ? 'scales' : 'trading');
+      });
+    }
+
+    if (expandBtn) {
+      expandBtn.addEventListener('click', () => {
+        const card = modal.querySelector('.tv-settings-modal-card');
+        if (card) {
+          card.classList.toggle('fullscreen');
+        }
+      });
+    }
+
     if (closeBtn) closeBtn.addEventListener('click', closeSettingsModal);
     if (cancelBtn) cancelBtn.addEventListener('click', closeSettingsModal);
-    if (okBtn) okBtn.addEventListener('click', closeSettingsModal);
+    if (okBtn) {
+      okBtn.addEventListener('click', () => {
+        closeSettingsModal();
+        toast('Chart settings saved');
+      });
+    }
 
     if (modal) {
       modal.addEventListener('click', (e) => {
@@ -9030,12 +9161,7 @@
 
     tabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
-        const t = btn.dataset.tab;
-        tabBtns.forEach(b => b.classList.toggle('active', b === btn));
-        Object.keys(tabBodies).forEach(k => {
-          if (tabBodies[k]) tabBodies[k].classList.toggle('hidden', k !== t);
-          if (tabBodies[k]) tabBodies[k].classList.toggle('active', k === t);
-        });
+        switchTab(btn.dataset.tab);
       });
     });
 
@@ -9050,65 +9176,96 @@
       });
     }
 
-    // Toggle Day High / Low Lines
-    if (chkHighLow) {
-      chkHighLow.addEventListener('change', () => {
-        window._showHighLowLines = chkHighLow.checked;
-        panes.forEach(p => updatePaneHighLowAvgLines(p));
-      });
-    }
-
-    // Toggle Day Average Line
-    if (chkAvgLine) {
-      chkAvgLine.addEventListener('change', () => {
-        window._showAvgLine = chkAvgLine.checked;
-        panes.forEach(p => updatePaneHighLowAvgLines(p));
-      });
-    }
-
     // Toggle Countdown
     if (chkCountdown) {
       chkCountdown.addEventListener('change', () => {
-        const visible = chkCountdown.checked;
-        [1, 2, 3].forEach(idx => {
-          const box = $(`p${idx}-cd-box`);
-          if (box) box.style.display = visible ? 'block' : 'none';
+        window._showCountdown = chkCountdown.checked;
+        updatePaneCountdowns();
+        const chk = $('cm-chk-countdown');
+        if (chk) chk.textContent = window._showCountdown ? '✓' : '';
+      });
+    }
+
+    // Toggle Plus button
+    function togglePlusButtons(vis) {
+      isPlusBtnVisible = vis;
+      if (chkPlusBtn) chkPlusBtn.checked = vis;
+      const chk = $('cm-chk-plus-btn');
+      if (chk) chk.textContent = vis ? '✓' : '';
+      [1, 2, 3].forEach(idx => {
+        const btn = $(`p${idx}-yaxis-plus`);
+        if (btn) btn.classList.toggle('hidden', !vis);
+      });
+    }
+    if (chkPlusBtn) {
+      chkPlusBtn.addEventListener('change', () => togglePlusButtons(chkPlusBtn.checked));
+    }
+
+    // Scale placement selector (Auto / Right / Left)
+    if (selScalePlacement) {
+      selScalePlacement.addEventListener('change', () => {
+        const val = selScalePlacement.value;
+        currentScalePlacement = val === 'left' ? 'left' : 'right';
+        if (cmPlacementText) {
+          cmPlacementText.textContent = currentScalePlacement === 'right' ? 'Move scale to left' : 'Move scale to right';
+        }
+        panes.forEach(p => {
+          if (p.chart) {
+            try {
+              p.chart.applyOptions({
+                rightPriceScale: { visible: currentScalePlacement === 'right' },
+                leftPriceScale: { visible: currentScalePlacement === 'left' },
+              });
+            } catch (_) {}
+          }
         });
       });
     }
 
-    // Scale Mode selector in modal
-    if (selScaleMode) {
-      selScaleMode.addEventListener('change', () => {
-        const mode = selScaleMode.value;
-        const p = getActivePane();
-        if (!p || !p.chart) return;
-        if (mode === 'auto') {
-          p.chart.priceScale('right').applyOptions({ autoScale: true, mode: 0 });
-        } else if (mode === 'log') {
-          p.chart.priceScale('right').applyOptions({ mode: 1 });
-        } else if (mode === 'percent') {
-          p.chart.priceScale('right').applyOptions({ mode: 2 });
-        } else {
-          p.chart.priceScale('right').applyOptions({ mode: 0 });
-        }
-      });
+    // --- Context Menu Handlers (Screenshot 1) ---
+    function updateContextMenuDynamicValues() {
+      const p = getActivePane();
+      if (!p) return;
+      const lastBar = (p.candles && p.candles.length) ? p.candles[p.candles.length - 1] : null;
+      const ltp = Number(p.lastLtp || (lastBar ? lastBar.close : 0));
+      if (cmAlertText) {
+        cmAlertText.textContent = `Add Alert on ${p.sym} @ ${ltp.toFixed(2)} limit`;
+      }
+      if (cmPlacementText) {
+        cmPlacementText.textContent = currentScalePlacement === 'right' ? 'Move scale to left' : 'Move scale to right';
+      }
     }
 
-    // Context Menu Handlers
+    function updateCmScaleCheck(activeType) {
+      const chkAuto = $('cm-chk-auto');
+      const chkReg = $('cm-chk-regular');
+      const chkPct = $('cm-chk-percent');
+      const chkIdx = $('cm-chk-indexed');
+      const chkLog = $('cm-chk-log');
+      if (chkAuto) chkAuto.textContent = activeType === 'auto' ? '✓' : '';
+      if (chkReg) chkReg.textContent = activeType === 'regular' ? '✓' : '';
+      if (chkPct) chkPct.textContent = activeType === 'percent' ? '✓' : '';
+      if (chkIdx) chkIdx.textContent = activeType === 'indexed' ? '✓' : '';
+      if (chkLog) chkLog.textContent = activeType === 'log' ? '✓' : '';
+    }
+
     if (cmReset) {
       cmReset.addEventListener('click', () => {
         const p = getActivePane();
         if (p && p.chart) {
-          p.chart.priceScale('right').applyOptions({ autoScale: true });
+          p.chart.priceScale('right').applyOptions({ autoScale: true, mode: 0, invertScale: false });
+          isScaleInverted = false;
+          const chkInv = $('cm-chk-invert');
+          if (chkInv) chkInv.textContent = '';
           p.chart.timeScale().resetTimeScale();
           const totalBars = (p.candles || []).length;
           if (totalBars > 0) {
             p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
           }
         }
+        updateCmScaleCheck('auto');
         if (cm) cm.classList.add('hidden');
-        toast('Price scale reset');
+        toast('Price scale reset (60 bars fitted)');
       });
     }
 
@@ -9122,8 +9279,53 @@
             p.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, totalBars - 60), to: totalBars + 4 });
           }
         }
+        updateCmScaleCheck('auto');
         if (cm) cm.classList.add('hidden');
         toast('Scale: Auto (fits data to screen)');
+      });
+    }
+
+    if (cmLockRatio) {
+      cmLockRatio.addEventListener('click', () => {
+        isRatioLocked = !isRatioLocked;
+        const chk = $('cm-chk-lock-ratio');
+        if (chk) chk.textContent = isRatioLocked ? '✓' : '';
+        const chkModal = $('chk-tv-lock-ratio');
+        if (chkModal) chkModal.checked = isRatioLocked;
+        if (cm) cm.classList.add('hidden');
+        toast(isRatioLocked ? 'Price to bar ratio locked' : 'Price to bar ratio unlocked');
+      });
+    }
+
+    if (cmPriceOnly) {
+      cmPriceOnly.addEventListener('click', () => {
+        isPriceOnly = !isPriceOnly;
+        const chk = $('cm-chk-price-only');
+        if (chk) chk.textContent = isPriceOnly ? '✓' : '';
+        const p = getActivePane();
+        if (p && p.chart) {
+          try {
+            p.chart.priceScale('right').applyOptions({
+              scaleMargins: isPriceOnly ? { top: 0.1, bottom: 0.25 } : { top: 0.05, bottom: 0.05 },
+            });
+          } catch (_) {}
+        }
+        if (cm) cm.classList.add('hidden');
+        toast(isPriceOnly ? 'Scale price chart only' : 'Scale entire pane');
+      });
+    }
+
+    if (cmInvert) {
+      cmInvert.addEventListener('click', () => {
+        isScaleInverted = !isScaleInverted;
+        const chk = $('cm-chk-invert');
+        if (chk) chk.textContent = isScaleInverted ? '✓' : '';
+        const p = getActivePane();
+        if (p && p.chart) {
+          p.chart.priceScale('right').applyOptions({ invertScale: isScaleInverted });
+        }
+        if (cm) cm.classList.add('hidden');
+        toast(isScaleInverted ? 'Scale inverted' : 'Scale normal');
       });
     }
 
@@ -9147,6 +9349,16 @@
       });
     }
 
+    if (cmIndexed) {
+      cmIndexed.addEventListener('click', () => {
+        const p = getActivePane();
+        if (p && p.chart) p.chart.priceScale('right').applyOptions({ mode: 3 });
+        updateCmScaleCheck('indexed');
+        if (cm) cm.classList.add('hidden');
+        toast('Scale: Indexed to 100');
+      });
+    }
+
     if (cmLog) {
       cmLog.addEventListener('click', () => {
         const p = getActivePane();
@@ -9157,40 +9369,42 @@
       });
     }
 
-    function updateCmScaleCheck(activeType) {
-      const chkReg = $('cm-chk-regular');
-      const chkPct = $('cm-chk-percent');
-      const chkLog = $('cm-chk-log');
-      if (chkReg) chkReg.textContent = activeType === 'regular' ? '✓' : '';
-      if (chkPct) chkPct.textContent = activeType === 'percent' ? '✓' : '';
-      if (chkLog) chkLog.textContent = activeType === 'log' ? '✓' : '';
-    }
-
-    if (cmCountdown) {
-      cmCountdown.addEventListener('click', () => {
-        const chk = $('cm-chk-countdown');
-        const isChecked = chk && chk.textContent.includes('✓');
-        const nextVal = !isChecked;
-        if (chk) chk.textContent = nextVal ? '✓' : '';
-        if (chkCountdown) chkCountdown.checked = nextVal;
-        [1, 2, 3].forEach(idx => {
-          const box = $(`p${idx}-cd-box`);
-          if (box) box.style.display = nextVal ? 'block' : 'none';
+    if (cmMovePlacement) {
+      cmMovePlacement.addEventListener('click', () => {
+        currentScalePlacement = currentScalePlacement === 'right' ? 'left' : 'right';
+        if (selScalePlacement) selScalePlacement.value = currentScalePlacement;
+        if (cmPlacementText) {
+          cmPlacementText.textContent = currentScalePlacement === 'right' ? 'Move scale to left' : 'Move scale to right';
+        }
+        panes.forEach(p => {
+          if (p.chart) {
+            try {
+              p.chart.applyOptions({
+                rightPriceScale: { visible: currentScalePlacement === 'right' },
+                leftPriceScale: { visible: currentScalePlacement === 'left' },
+              });
+            } catch (_) {}
+          }
         });
         if (cm) cm.classList.add('hidden');
+        toast(`Price scale moved to ${currentScalePlacement}`);
       });
     }
 
-    if (cmHighLow) {
-      cmHighLow.addEventListener('click', () => {
-        const chk = $('cm-chk-highlow');
-        const isChecked = chk && chk.textContent.includes('✓');
-        const nextVal = !isChecked;
-        if (chk) chk.textContent = nextVal ? '✓' : '';
-        if (chkHighLow) chkHighLow.checked = nextVal;
-        window._showHighLowLines = nextVal;
-        panes.forEach(p => updatePaneHighLowAvgLines(p));
+    if (cmLabels || cmLines) {
+      const openScalesTab = () => {
+        openSettingsModal('scales');
         if (cm) cm.classList.add('hidden');
+      };
+      if (cmLabels) cmLabels.addEventListener('click', openScalesTab);
+      if (cmLines) cmLines.addEventListener('click', openScalesTab);
+    }
+
+    if (cmPlusBtn) {
+      cmPlusBtn.addEventListener('click', () => {
+        togglePlusButtons(!isPlusBtnVisible);
+        if (cm) cm.classList.add('hidden');
+        toast(isPlusBtnVisible ? 'Plus button enabled' : 'Plus button hidden');
       });
     }
 
@@ -9200,18 +9414,33 @@
       });
     }
 
-    // Right click on price scales to show context menu
+    if (cmAddAlert) {
+      cmAddAlert.addEventListener('click', () => {
+        const p = getActivePane();
+        const lastBar = (p && p.candles && p.candles.length) ? p.candles[p.candles.length - 1] : null;
+        const ltp = p ? Number(p.lastLtp || (lastBar ? lastBar.close : 0)) : 0;
+        if (cm) cm.classList.add('hidden');
+        toast(`Alert created for ${p ? p.sym : 'Symbol'} @ ${ltp.toFixed(2)}`);
+      });
+    }
+
+    // Right click on price scale to show context menu
     panes.forEach(pane => {
       const container = $(`p${pane.idx + 1}-chart-container`);
       if (container) {
         container.addEventListener('contextmenu', (e) => {
           const rect = container.getBoundingClientRect();
           const fromRight = rect.right - e.clientX;
-          if (fromRight <= 75) {
+          if (fromRight <= 85 || e.clientX - rect.left <= 85) {
             e.preventDefault();
             if (cm) {
-              cm.style.left = `${Math.min(window.innerWidth - 240, e.clientX - 180)}px`;
-              cm.style.top = `${Math.min(window.innerHeight - 320, e.clientY)}px`;
+              updateContextMenuDynamicValues();
+              const cmW = 240;
+              const cmH = 420;
+              const posX = Math.max(8, Math.min(window.innerWidth - cmW - 8, e.clientX - 160));
+              const posY = Math.max(8, Math.min(window.innerHeight - cmH - 8, e.clientY - 20));
+              cm.style.left = `${posX}px`;
+              cm.style.top = `${posY}px`;
               cm.classList.remove('hidden');
             }
           }
@@ -9219,9 +9448,28 @@
       }
     });
 
+    // Also connect the cog icon on bottom right to open this context menu or settings modal
+    const scaleCogBtn = $('btn-chart-scale-settings');
+    if (scaleCogBtn) {
+      scaleCogBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (cm) {
+          updateContextMenuDynamicValues();
+          const rect = scaleCogBtn.getBoundingClientRect();
+          const cmW = 240;
+          const cmH = 420;
+          const posX = Math.max(8, Math.min(window.innerWidth - cmW - 8, rect.left - 200));
+          const posY = Math.max(8, Math.min(window.innerHeight - cmH - 8, rect.top - cmH + 20));
+          cm.style.left = `${posX}px`;
+          cm.style.top = `${posY}px`;
+          cm.classList.toggle('hidden');
+        }
+      });
+    }
+
     // Dismiss context menu on click outside
     document.addEventListener('click', (e) => {
-      if (cm && !cm.contains(e.target)) {
+      if (cm && !cm.contains(e.target) && e.target !== scaleCogBtn) {
         cm.classList.add('hidden');
       }
     });

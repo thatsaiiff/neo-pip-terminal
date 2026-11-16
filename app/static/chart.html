@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400..800;1,9..40,400..800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/chart.css?v=0.2.1">
 </head>
-<body class="ex-theme-dark auth-locked">
+<body class="ex-theme-dark">
   <!-- Top Navigation Header (Exness WebTrading Style) -->
   <header class="ex-header">
     <div class="ex-header-left">
@@ -459,23 +459,27 @@
             </div>
           </div>
           <div class="pane-chart-wrap" id="p1-canvas-wrap">
-            <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
+            <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock (Screenshot 4, 5) -->
             <div class="tv-floating-order-dock" id="p1-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
-              <button type="button" class="tv-dock-btn tv-dock-sell" id="p1-tv-sell-btn" title="1-Tap Instant Market Sell">
-                <span class="tv-dock-price" id="p1-tv-sell-price">—</span>
-                <span class="tv-dock-lbl">SELL</span>
-              </button>
-              <div class="tv-dock-middle">
-                <span class="tv-dock-spread" id="p1-tv-spread" title="Spread">0.00</span>
-                <div class="tv-dock-qty-pill">
+              <div class="tv-dock-action-row">
+                <button type="button" class="tv-dock-btn tv-dock-sell" id="p1-tv-sell-btn" title="1-Tap Instant Market Sell">
+                  <span class="tv-dock-price" id="p1-tv-sell-price">—</span>
+                  <span class="tv-dock-lbl">SELL</span>
+                </button>
+                <div class="tv-dock-spread-wrap">
+                  <span class="tv-dock-spread" id="p1-tv-spread" title="Spread">0.00</span>
+                </div>
+                <button type="button" class="tv-dock-btn tv-dock-buy" id="p1-tv-buy-btn" title="1-Tap Instant Market Buy">
+                  <span class="tv-dock-price" id="p1-tv-buy-price">—</span>
+                  <span class="tv-dock-lbl">BUY</span>
+                </button>
+              </div>
+              <div class="tv-dock-sub-row">
+                <div class="tv-dock-qty-pill" id="p1-tv-qty-pill" title="Lots / Quantity">
                   <span class="tv-qty-caret">▾</span>
-                  <input type="number" class="tv-qty-input" id="p1-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                  <input type="number" class="tv-qty-input" id="p1-tv-qty-input" value="6" min="1" step="1" title="Lots / Quantity">
                 </div>
               </div>
-              <button type="button" class="tv-dock-btn tv-dock-buy" id="p1-tv-buy-btn" title="1-Tap Instant Market Buy">
-                <span class="tv-dock-price" id="p1-tv-buy-price">—</span>
-                <span class="tv-dock-lbl">BUY</span>
-              </button>
             </div>
             <div id="p1-chart-container" class="chart-canvas-view"></div>
             <canvas id="p1-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
@@ -512,21 +516,25 @@
           <div class="pane-chart-wrap" id="p2-canvas-wrap">
             <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
             <div class="tv-floating-order-dock" id="p2-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
-              <button type="button" class="tv-dock-btn tv-dock-sell" id="p2-tv-sell-btn" title="1-Tap Instant Market Sell">
-                <span class="tv-dock-price" id="p2-tv-sell-price">—</span>
-                <span class="tv-dock-lbl">SELL</span>
-              </button>
-              <div class="tv-dock-middle">
-                <span class="tv-dock-spread" id="p2-tv-spread" title="Spread">0.00</span>
-                <div class="tv-dock-qty-pill">
+              <div class="tv-dock-action-row">
+                <button type="button" class="tv-dock-btn tv-dock-sell" id="p2-tv-sell-btn" title="1-Tap Instant Market Sell">
+                  <span class="tv-dock-price" id="p2-tv-sell-price">—</span>
+                  <span class="tv-dock-lbl">SELL</span>
+                </button>
+                <div class="tv-dock-spread-wrap">
+                  <span class="tv-dock-spread" id="p2-tv-spread" title="Spread">0.00</span>
+                </div>
+                <button type="button" class="tv-dock-btn tv-dock-buy" id="p2-tv-buy-btn" title="1-Tap Instant Market Buy">
+                  <span class="tv-dock-price" id="p2-tv-buy-price">—</span>
+                  <span class="tv-dock-lbl">BUY</span>
+                </button>
+              </div>
+              <div class="tv-dock-sub-row">
+                <div class="tv-dock-qty-pill" id="p2-tv-qty-pill" title="Lots / Quantity">
                   <span class="tv-qty-caret">▾</span>
-                  <input type="number" class="tv-qty-input" id="p2-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                  <input type="number" class="tv-qty-input" id="p2-tv-qty-input" value="6" min="1" step="1" title="Lots / Quantity">
                 </div>
               </div>
-              <button type="button" class="tv-dock-btn tv-dock-buy" id="p2-tv-buy-btn" title="1-Tap Instant Market Buy">
-                <span class="tv-dock-price" id="p2-tv-buy-price">—</span>
-                <span class="tv-dock-lbl">BUY</span>
-              </button>
             </div>
             <div id="p2-chart-container" class="chart-canvas-view"></div>
             <canvas id="p2-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
@@ -563,21 +571,25 @@
           <div class="pane-chart-wrap" id="p3-canvas-wrap">
             <!-- Floating TradingView / Dhan Style 1-Tap Trading Dock -->
             <div class="tv-floating-order-dock" id="p3-tv-dock" role="region" aria-label="Chart Instant Trading Dock">
-              <button type="button" class="tv-dock-btn tv-dock-sell" id="p3-tv-sell-btn" title="1-Tap Instant Market Sell">
-                <span class="tv-dock-price" id="p3-tv-sell-price">—</span>
-                <span class="tv-dock-lbl">SELL</span>
-              </button>
-              <div class="tv-dock-middle">
-                <span class="tv-dock-spread" id="p3-tv-spread" title="Spread">0.00</span>
-                <div class="tv-dock-qty-pill">
+              <div class="tv-dock-action-row">
+                <button type="button" class="tv-dock-btn tv-dock-sell" id="p3-tv-sell-btn" title="1-Tap Instant Market Sell">
+                  <span class="tv-dock-price" id="p3-tv-sell-price">—</span>
+                  <span class="tv-dock-lbl">SELL</span>
+                </button>
+                <div class="tv-dock-spread-wrap">
+                  <span class="tv-dock-spread" id="p3-tv-spread" title="Spread">0.00</span>
+                </div>
+                <button type="button" class="tv-dock-btn tv-dock-buy" id="p3-tv-buy-btn" title="1-Tap Instant Market Buy">
+                  <span class="tv-dock-price" id="p3-tv-buy-price">—</span>
+                  <span class="tv-dock-lbl">BUY</span>
+                </button>
+              </div>
+              <div class="tv-dock-sub-row">
+                <div class="tv-dock-qty-pill" id="p3-tv-qty-pill" title="Lots / Quantity">
                   <span class="tv-qty-caret">▾</span>
-                  <input type="number" class="tv-qty-input" id="p3-tv-qty-input" value="1" min="1" step="1" title="Lots / Quantity">
+                  <input type="number" class="tv-qty-input" id="p3-tv-qty-input" value="6" min="1" step="1" title="Lots / Quantity">
                 </div>
               </div>
-              <button type="button" class="tv-dock-btn tv-dock-buy" id="p3-tv-buy-btn" title="1-Tap Instant Market Buy">
-                <span class="tv-dock-price" id="p3-tv-buy-price">—</span>
-                <span class="tv-dock-lbl">BUY</span>
-              </button>
             </div>
             <div id="p3-chart-container" class="chart-canvas-view"></div>
             <canvas id="p3-vpvr-canvas" class="vpvr-overlay-canvas"></canvas>
@@ -2051,128 +2063,207 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
   <div id="chart-tv-settings-modal" class="tv-settings-modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Chart Settings">
     <div class="tv-settings-modal-card">
       <div class="tv-settings-modal-header">
-        <div class="tv-settings-tabs">
-          <button type="button" class="tv-settings-tab active" data-tab="trading" id="tab-tv-trading">Trading</button>
-          <button type="button" class="tv-settings-tab" data-tab="scales" id="tab-tv-scales">Scales and lines</button>
+        <button type="button" class="tv-settings-back-btn" id="btn-back-tv-settings" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <h3 class="tv-settings-title" id="tv-settings-header-title">Scales and lines</h3>
+        <div class="tv-settings-tabs-inline">
+          <button type="button" class="tv-settings-tab" data-tab="trading" id="tab-tv-trading">Trading</button>
+          <button type="button" class="tv-settings-tab active" data-tab="scales" id="tab-tv-scales">Scales &amp; lines</button>
         </div>
-        <button type="button" class="tv-settings-close-btn" id="btn-close-tv-settings" aria-label="Close">✕</button>
-      </div>
-
-      <!-- Trading Tab Content (Screenshot 3) -->
-      <div class="tv-settings-body active" id="tv-settings-tab-trading">
-        <div class="tv-settings-group">
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-buysell-buttons" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">Buy/sell buttons</span>
-              <span class="tv-cb-desc">Displays buy and sell buttons directly on the chart</span>
-            </div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-onetap-trading" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">One-tap trading</span>
-              <span class="tv-cb-desc">Instantly place, edit, cancel orders or close positions without confirmation</span>
-            </div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-sound-fx" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">Play sound for executions</span>
-            </div>
-          </label>
-        </div>
-
-        <div class="tv-settings-section-lbl">APPEARANCE</div>
-        <div class="tv-settings-group">
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-positions-orders" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">Positions and orders</span>
-            </div>
-          </label>
-          <div class="tv-sub-group">
-            <label class="tv-checkbox-row">
-              <input type="checkbox" id="chk-tv-reverse-pos" checked>
-              <div class="tv-checkbox-text">
-                <span class="tv-cb-title">Reverse position button</span>
-                <span class="tv-cb-desc">Adds the reverse button next to the open position on the chart</span>
-              </div>
-            </label>
-          </div>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-pnl-val" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">Profit and loss value</span>
-            </div>
-          </label>
-          <div class="tv-sub-group">
-            <div class="tv-sub-row">
-              <label class="tv-checkbox-label"><input type="checkbox" id="chk-tv-pnl-positions" checked> Positions</label>
-              <select id="sel-tv-pnl-positions-unit" class="tv-select-mini">
-                <option value="money">Money</option>
-                <option value="percent">Percentage</option>
-                <option value="pips">Ticks / Pips</option>
-              </select>
-            </div>
-            <div class="tv-sub-row">
-              <label class="tv-checkbox-label"><input type="checkbox" id="chk-tv-pnl-brackets" checked> Brackets</label>
-              <select id="sel-tv-pnl-brackets-unit" class="tv-select-mini">
-                <option value="money">Money</option>
-                <option value="percent">Percentage</option>
-                <option value="pips">Ticks / Pips</option>
-              </select>
-            </div>
-          </div>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-extend-lines" checked>
-            <div class="tv-checkbox-text">
-              <span class="tv-cb-title">Extended price lines across the entire chart width</span>
-            </div>
-          </label>
+        <div class="tv-header-actions">
+          <button type="button" class="tv-settings-expand-btn" id="btn-expand-tv-settings" title="Expand / Popout">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </button>
+          <button type="button" class="tv-settings-close-btn" id="btn-close-tv-settings" aria-label="Close">✕</button>
         </div>
       </div>
 
-      <!-- Scales & Lines Tab Content (Screenshot 2) -->
-      <div class="tv-settings-body hidden" id="tv-settings-tab-scales">
+      <!-- 1. Scales & Lines Tab Content (Screenshot 2) -->
+      <div class="tv-settings-body active" id="tv-settings-tab-scales">
         <div class="tv-settings-section-lbl">PRICE SCALE</div>
-        <div class="tv-settings-row">
-          <span>Scale mode</span>
-          <select id="sel-tv-scale-mode" class="tv-select-mini">
-            <option value="auto">Auto (fits data to screen)</option>
-            <option value="regular">Regular</option>
-            <option value="log">Logarithmic</option>
-            <option value="percent">Percent</option>
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Scale modes (A and L)</span>
+          <select id="sel-tv-scale-mode-al" class="tv-select-dropdown">
+            <option value="visible_on_tap" selected>Visible on tap</option>
+            <option value="always_visible">Always visible</option>
+            <option value="always_hidden">Always hidden</option>
           </select>
         </div>
+        <div class="tv-setting-line-item">
+          <label class="tv-checkbox-inline">
+            <input type="checkbox" id="chk-tv-lock-ratio">
+            <span>Lock price to bar ratio</span>
+          </label>
+          <input type="text" id="inp-tv-lock-ratio" class="tv-input-box" placeholder="">
+        </div>
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Scales placement</span>
+          <select id="sel-tv-scales-placement" class="tv-select-dropdown">
+            <option value="auto" selected>Auto</option>
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+          </select>
+        </div>
+
         <div class="tv-settings-section-lbl">PRICE LABELS &amp; LINES</div>
-        <div class="tv-settings-group">
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-no-overlap" checked>
+          <span class="tv-cb-title">No overlapping labels</span>
+        </label>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-plus-button" checked>
+          <span class="tv-cb-title">Plus button</span>
+        </label>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-countdown" checked>
+          <span class="tv-cb-title">Countdown to bar close</span>
+        </label>
+
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Symbol</span>
+          <div class="tv-item-controls">
+            <select id="sel-tv-sym-label" class="tv-select-dropdown">
+              <option value="value_line" selected>Value, line</option>
+              <option value="value">Value</option>
+              <option value="hidden">Hidden</option>
+            </select>
+            <span class="tv-color-swatch-split" title="Label Color"></span>
+          </div>
+        </div>
+
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Average close</span>
+          <div class="tv-item-controls">
+            <select id="sel-tv-avg-close" class="tv-select-dropdown">
+              <option value="value" selected>Value</option>
+              <option value="value_line">Value, line</option>
+              <option value="hidden">Hidden</option>
+            </select>
+            <span class="tv-color-swatch-split" title="Average Line Color"></span>
+          </div>
+        </div>
+
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Previous day close</span>
+          <div class="tv-item-controls">
+            <select id="sel-tv-prev-close" class="tv-select-dropdown">
+              <option value="hidden" selected>Hidden</option>
+              <option value="value">Value</option>
+              <option value="value_line">Value, line</option>
+            </select>
+            <span class="tv-color-swatch-gray" title="Prev Close Color"></span>
+          </div>
+        </div>
+
+        <div class="tv-setting-line-item">
+          <span class="tv-item-label">Indicators and financials</span>
+          <div class="tv-item-controls">
+            <select id="sel-tv-ind-fin" class="tv-select-dropdown">
+              <option value="value" selected>Value</option>
+              <option value="hidden">Hidden</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Trading Tab Content (Screenshot 3) -->
+      <div class="tv-settings-body hidden" id="tv-settings-tab-trading">
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-buysell-buttons" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Buy/sell buttons</span>
+            <span class="tv-cb-desc">Displays buy and sell buttons directly on the chart</span>
+          </div>
+        </label>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-onetap-trading" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">One-tap trading</span>
+            <span class="tv-cb-desc">Instantly place, edit, cancel orders or close positions without confirmation</span>
+          </div>
+        </label>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-sound-fx" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Play sound for executions</span>
+          </div>
+        </label>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-rejections-only">
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Show only rejection notifications</span>
+          </div>
+        </label>
+
+        <div class="tv-settings-section-lbl">APPEARANCE</div>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-positions-orders" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Positions and orders</span>
+          </div>
+        </label>
+        <div class="tv-sub-group">
           <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-no-overlap" checked>
-            <div class="tv-checkbox-text"><span class="tv-cb-title">No overlapping labels</span></div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-plus-button" checked>
-            <div class="tv-checkbox-text"><span class="tv-cb-title">Plus button</span></div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-countdown" checked>
-            <div class="tv-checkbox-text"><span class="tv-cb-title">Countdown to bar close</span></div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-high-low" checked>
-            <div class="tv-checkbox-text"><span class="tv-cb-title">Day High / Low lines</span></div>
-          </label>
-          <label class="tv-checkbox-row">
-            <input type="checkbox" id="chk-tv-avg-line" checked>
-            <div class="tv-checkbox-text"><span class="tv-cb-title">Day Average line</span></div>
+            <input type="checkbox" id="chk-tv-reverse-pos" checked>
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Reverse position button</span>
+              <span class="tv-cb-desc">Adds the reverse button next to the open position on the chart</span>
+            </div>
           </label>
         </div>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-pnl-val" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Profit and loss value</span>
+          </div>
+        </label>
+        <div class="tv-sub-group">
+          <div class="tv-setting-line-item">
+            <label class="tv-checkbox-inline"><input type="checkbox" id="chk-tv-pnl-pos" checked><span>Positions</span></label>
+            <select id="sel-tv-pnl-positions-unit" class="tv-select-dropdown">
+              <option value="money" selected>Money</option>
+              <option value="percent">Percentage</option>
+              <option value="ticks">Ticks</option>
+            </select>
+          </div>
+          <div class="tv-setting-line-item">
+            <label class="tv-checkbox-inline"><input type="checkbox" id="chk-tv-pnl-brk" checked><span>Brackets</span></label>
+            <select id="sel-tv-pnl-brackets-unit" class="tv-select-dropdown">
+              <option value="money" selected>Money</option>
+              <option value="percent">Percentage</option>
+              <option value="ticks">Ticks</option>
+            </select>
+          </div>
+        </div>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-execution-marks">
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Execution marks</span>
+          </div>
+        </label>
+        <div class="tv-sub-group">
+          <label class="tv-checkbox-row">
+            <input type="checkbox" id="chk-tv-execution-labels">
+            <div class="tv-checkbox-text">
+              <span class="tv-cb-title">Execution labels</span>
+            </div>
+          </label>
+        </div>
+        <label class="tv-checkbox-row">
+          <input type="checkbox" id="chk-tv-extend-lines" checked>
+          <div class="tv-checkbox-text">
+            <span class="tv-cb-title">Extended price lines across the entire chart width</span>
+          </div>
+        </label>
       </div>
 
       <div class="tv-settings-footer">
-        <button type="button" class="tv-btn-cancel" id="btn-cancel-tv-settings">Cancel</button>
-        <button type="button" class="tv-btn-ok" id="btn-ok-tv-settings">Ok</button>
+        <button type="button" class="tv-btn-more-dots" id="btn-tv-settings-dots" title="Templates &amp; Defaults">···</button>
+        <div class="tv-footer-right-btns">
+          <button type="button" class="tv-btn-cancel" id="btn-cancel-tv-settings">Cancel</button>
+          <button type="button" class="tv-btn-ok" id="btn-ok-tv-settings">Ok</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2183,7 +2274,16 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
       <span class="cm-icon">↺</span> Reset price scale
     </div>
     <div class="tv-cm-item" id="cm-scale-auto">
-      <span class="cm-icon">✓</span> Auto (fits data to screen)
+      <span class="cm-check" id="cm-chk-auto">✓</span> Auto (fits data to screen)
+    </div>
+    <div class="tv-cm-item" id="cm-scale-lock-ratio">
+      <span class="cm-check" id="cm-chk-lock-ratio"></span> Lock price to bar ratio
+    </div>
+    <div class="tv-cm-item" id="cm-scale-price-only">
+      <span class="cm-check" id="cm-chk-price-only"></span> Scale price chart only
+    </div>
+    <div class="tv-cm-item" id="cm-scale-invert">
+      <span class="cm-check" id="cm-chk-invert"></span> Invert scale
     </div>
     <div class="tv-cm-divider"></div>
     <div class="tv-cm-item" id="cm-scale-regular">
@@ -2192,19 +2292,33 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
     <div class="tv-cm-item" id="cm-scale-percent">
       <span class="cm-check" id="cm-chk-percent"></span> Percent
     </div>
+    <div class="tv-cm-item" id="cm-scale-indexed">
+      <span class="cm-check" id="cm-chk-indexed"></span> Indexed to 100
+    </div>
     <div class="tv-cm-item" id="cm-scale-log">
       <span class="cm-check" id="cm-chk-log"></span> Logarithmic
     </div>
     <div class="tv-cm-divider"></div>
-    <div class="tv-cm-item" id="cm-scale-countdown">
-      <span class="cm-check" id="cm-chk-countdown">✓</span> Countdown to bar close
+    <div class="tv-cm-item" id="cm-scale-move-placement">
+      <span class="cm-icon">↔</span> <span id="cm-scale-placement-text">Move scale to left</span>
     </div>
-    <div class="tv-cm-item" id="cm-scale-highlow">
-      <span class="cm-check" id="cm-chk-highlow">✓</span> Day High / Low lines
+    <div class="tv-cm-divider"></div>
+    <div class="tv-cm-item tv-cm-has-arrow" id="cm-scale-labels">
+      <span>Labels</span> <span class="cm-chevron">›</span>
+    </div>
+    <div class="tv-cm-item tv-cm-has-arrow" id="cm-scale-lines">
+      <span>Lines</span> <span class="cm-chevron">›</span>
+    </div>
+    <div class="tv-cm-divider"></div>
+    <div class="tv-cm-item" id="cm-scale-plus-btn">
+      <span class="cm-check" id="cm-chk-plus-btn">✓</span> Plus button
     </div>
     <div class="tv-cm-divider"></div>
     <div class="tv-cm-item" id="cm-scale-more">
       <span class="cm-icon">⚙</span> More settings...
+    </div>
+    <div class="tv-cm-item" id="cm-scale-add-alert">
+      <span class="cm-icon">⏰</span> <span id="cm-scale-alert-text">Add Alert on NIFTY 50 @ 0.00 limit</span>
     </div>
   </div>
 
